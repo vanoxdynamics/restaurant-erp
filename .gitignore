@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# React Native & Mobile Builds
+apps/*/android/app/build/
+apps/*/android/.gradle/
+apps/*/android/build/
+apps/*/ios/Pods/
+apps/*/ios/build/
+*.xcworkspace/
+*.xcodeproj/
+.expo/
+.metro-health-check*
+
+# IDE & OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+*.log
+
+# Docker
+.docker/

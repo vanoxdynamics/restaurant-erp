@@ -1,0 +1,26 @@
+{
+  "name": "@restaurant-erp/admin-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Admin and management client application for owner and manager smartphones",
+  "scripts": {
+    "start": "react-native start",
+    "android": "react-native run-android",
+    "ios": "react-native run-ios",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@restaurant-erp/api-client": "workspace:*",
+    "@tanstack/react-query": "^5.28.0",
+    "react": "18.2.0",
+    "react-native": "0.74.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.4",
+    "@babel/preset-env": "^7.24.4",
+    "@babel/runtime": "^7.24.4",
+    "@types/react": "^18.2.79",
+    "@types/react-native": "^0.73.0",
+    "typescript": "^5.4.5"
+  }
+}
