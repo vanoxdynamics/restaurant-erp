@@ -1,71 +1,147 @@
 import uuid
+from datetime import date
 from typing import Optional
-from fastapi import APIRouter, Depends, Header, status
-from sqlalchemy.ext.asyncio import AsyncSession
+
 import redis.asyncio as aioredis
+from fastapi import APIRouter, BackgroundTasks, Depends, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.auth import CurrentUser, get_current_user, require_roles
 from app.core.database import get_db
+from app.core.enums import BillStatus, Role
+from app.core.idempotency import IdempotencyGuard, idempotent
+from app.core.pagination import PageParams, page_params
 from app.core.redis import get_redis
-from app.core.idempotency import verify_idempotency_key
+from app.modules.billing import service
 from app.schemas.billing import (
     BillCreate,
     BillRead,
+    BillVoidRequest,
     PaymentCreate,
     PaymentRead,
+    PaymentResult,
     SplitPaymentRequest,
     UPIQRResponse,
 )
+from app.schemas.common import Page
 
-router = APIRouter(prefix="/billing", tags=["Billing & Payments"])
+router = APIRouter(
+    prefix="/billing",
+    tags=["Billing & Payments"],
+    dependencies=[Depends(get_current_user)],
+)
+
+cashier_roles = require_roles(Role.OWNER, Role.MANAGER, Role.CASHIER)
+qr_roles = require_roles(Role.OWNER, Role.MANAGER, Role.CASHIER, Role.CAPTAIN)
+void_roles = require_roles(Role.OWNER, Role.MANAGER, Role.CASHIER)
+
+
+@router.get("/bills", response_model=Page[BillRead])
+async def list_bills(
+    branch_id: Optional[uuid.UUID] = None,
+    status: Optional[BillStatus] = None,
+    business_date: Optional[date] = None,
+    params: PageParams = Depends(page_params),
+    user: CurrentUser = Depends(cashier_roles),
+    db: AsyncSession = Depends(get_db),
+):
+    """List bills for a branch."""
+    items, total = await service.list_bills(db, user, params, branch_id, status, business_date)
+    return Page(items=items, total=total, limit=params.limit, offset=params.offset)
 
 
 @router.post("/bills", response_model=BillRead, status_code=status.HTTP_201_CREATED)
 async def generate_bill(
     payload: BillCreate,
-    idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key"),
+    background: BackgroundTasks,
+    user: CurrentUser = Depends(cashier_roles),
+    guard: IdempotencyGuard = Depends(idempotent("bills")),
     db: AsyncSession = Depends(get_db),
     redis_client: aioredis.Redis = Depends(get_redis),
 ):
     """
-    Generate bill snapshot for an order with automated CGST (2.5%) and SGST (2.5%) breakdown
-    and manager authorized discount validation.
+    Generate the bill for an order with per-line GST split into CGST/SGST.
+    Discounts above the configured threshold need manager approval. Requires X-Idempotency-Key.
     """
-    await verify_idempotency_key(redis_client, idempotency_key, scope="bills")
-    raise NotImplementedError("Feature implementation pending")
+    cached = await guard.begin(payload)
+    if cached:
+        return cached.as_response()
+    try:
+        bill = await service.generate_bill(db, user, payload, background, redis_client)
+    except Exception:
+        await guard.release()
+        raise
+    return await guard.complete(status.HTTP_201_CREATED, BillRead.model_validate(bill))
 
 
 @router.get("/bills/{bill_id}", response_model=BillRead)
-async def get_bill(bill_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_bill(bill_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Retrieve bill details by ID."""
-    raise NotImplementedError("Feature implementation pending")
+    return await service.get_bill(db, user, bill_id)
 
 
-@router.post("/bills/{bill_id}/payments", response_model=PaymentRead)
+@router.post("/bills/{bill_id}/payments", response_model=PaymentResult)
 async def record_payment(
     bill_id: uuid.UUID,
     payload: PaymentCreate,
-    idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key"),
+    background: BackgroundTasks,
+    user: CurrentUser = Depends(cashier_roles),
+    guard: IdempotencyGuard = Depends(idempotent("payments")),
     db: AsyncSession = Depends(get_db),
-    redis_client: aioredis.Redis = Depends(get_redis),
 ):
-    """Record a tender payment (cash, card, UPI) towards bill settlement."""
-    await verify_idempotency_key(redis_client, idempotency_key, scope="payments")
-    raise NotImplementedError("Feature implementation pending")
+    """Record a tender payment (cash, card, UPI) towards bill settlement. Requires X-Idempotency-Key."""
+    cached = await guard.begin({"bill_id": str(bill_id), **payload.model_dump(mode="json")})
+    if cached:
+        return cached.as_response()
+    try:
+        payment, bill, change = await service.record_payment(db, user, bill_id, payload, guard.key, background)
+    except Exception:
+        await guard.release()
+        raise
+    result = PaymentResult(payment=PaymentRead.model_validate(payment), bill=BillRead.model_validate(bill),
+                           change_due=change)
+    return await guard.complete(status.HTTP_200_OK, result)
 
 
 @router.post("/bills/{bill_id}/split-payments", response_model=BillRead)
 async def process_split_payment(
     bill_id: uuid.UUID,
     payload: SplitPaymentRequest,
-    idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key"),
+    background: BackgroundTasks,
+    user: CurrentUser = Depends(cashier_roles),
+    guard: IdempotencyGuard = Depends(idempotent("payments")),
     db: AsyncSession = Depends(get_db),
-    redis_client: aioredis.Redis = Depends(get_redis),
 ):
-    """Settle a bill across multiple split tenders simultaneously."""
-    await verify_idempotency_key(redis_client, idempotency_key, scope="payments")
-    raise NotImplementedError("Feature implementation pending")
+    """Settle a bill across multiple split tenders atomically. Requires X-Idempotency-Key."""
+    cached = await guard.begin({"bill_id": str(bill_id), **payload.model_dump(mode="json")})
+    if cached:
+        return cached.as_response()
+    try:
+        bill = await service.process_split_payment(db, user, bill_id, payload.payments, background)
+    except Exception:
+        await guard.release()
+        raise
+    return await guard.complete(status.HTTP_200_OK, BillRead.model_validate(bill))
 
 
 @router.get("/bills/{bill_id}/upi-qr", response_model=UPIQRResponse)
-async def generate_upi_qr(bill_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    """Generate dynamic UPI QR string for instant customer table payments."""
-    raise NotImplementedError("Feature implementation pending")
+async def generate_upi_qr(
+    bill_id: uuid.UUID,
+    user: CurrentUser = Depends(qr_roles),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a UPI intent string for the remaining balance (the client renders the QR)."""
+    return await service.upi_payment_request(db, user, bill_id)
+
+
+@router.post("/bills/{bill_id}/void", response_model=BillRead)
+async def void_bill(
+    bill_id: uuid.UUID,
+    payload: BillVoidRequest,
+    background: BackgroundTasks,
+    user: CurrentUser = Depends(void_roles),
+    db: AsyncSession = Depends(get_db),
+    redis_client: aioredis.Redis = Depends(get_redis),
+):
+    """Void an unpaid bill (manager approval required). The bill number stays in the series."""
+    return await service.void_bill(db, user, bill_id, payload, background, redis_client)

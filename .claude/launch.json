@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "admin-web",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd apps\\admin-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_API_URL=http://127.0.0.1:8000&& npx expo start --web --port 8090 --clear"],
+      "port": 8090
+    },
+    {
+      "name": "pos-web",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_API_URL=http://127.0.0.1:8000&& npx expo start --web --port 8091 --clear"],
+      "port": 8091
+    }
+  ]
+}

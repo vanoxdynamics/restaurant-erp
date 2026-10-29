@@ -1,4 +1,16 @@
 {
-  "name": "RestaurantAdmin",
-  "displayName": "Restaurant Admin"
+  "expo": {
+    "name": "Restaurant Admin",
+    "slug": "restaurant-admin",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "plugins": [
+      "expo-font",
+      "expo-secure-store"
+    ]
+  }
 }

@@ -1,45 +1,123 @@
+import asyncio
 import json
-from typing import Dict, List
-from fastapi import WebSocket
+import logging
+import uuid
+from collections import defaultdict
+from typing import Any, Dict, Optional, Set
+
 import redis.asyncio as aioredis
+from fastapi import WebSocket
+
+from app.core.enums import Topic
+from app.core.redis import redis_client as make_redis_client
+
+logger = logging.getLogger(__name__)
+
+REDIS_PREFIX = "rt:"
+SEND_TIMEOUT_SECONDS = 2.0
+
+
+def channel_name(branch_id: uuid.UUID, topic: Topic) -> str:
+    return f"branch:{branch_id}:{topic.value}"
 
 
 class RealtimeConnectionManager:
     """
-    Manages active ASGI WebSockets connections grouped by channel
-    (e.g., 'branch_{id}_kots', 'branch_{id}_tables', 'branch_{id}_billing').
-    Supports horizontal scaling via Redis Pub/Sub fan-out.
+    Tracks WebSockets per channel ('branch:{id}:{topic}') on this worker and fans out
+    events received from Redis Pub/Sub, so every worker's clients get every event.
+    Delivery is best-effort: clients refetch state over REST after reconnecting.
     """
 
     def __init__(self) -> None:
-        self.active_connections: Dict[str, List[WebSocket]] = {}
+        self._connections: Dict[str, Set[WebSocket]] = defaultdict(set)
+        self._subscriber: Optional[asyncio.Task] = None
 
-    async def connect(self, channel_id: str, websocket: WebSocket) -> None:
-        await websocket.accept()
-        if channel_id not in self.active_connections:
-            self.active_connections[channel_id] = []
-        self.active_connections[channel_id].append(websocket)
+    def register(self, channel: str, websocket: WebSocket) -> None:
+        self._connections[channel].add(websocket)
 
-    def disconnect(self, channel_id: str, websocket: WebSocket) -> None:
-        if channel_id in self.active_connections:
-            if websocket in self.active_connections[channel_id]:
-                self.active_connections[channel_id].remove(websocket)
-            if not self.active_connections[channel_id]:
-                del self.active_connections[channel_id]
+    def unregister(self, channel: str, websocket: WebSocket) -> None:
+        sockets = self._connections.get(channel)
+        if sockets is None:
+            return
+        sockets.discard(websocket)
+        if not sockets:
+            self._connections.pop(channel, None)
 
-    async def broadcast_local(self, channel_id: str, message: dict) -> None:
-        """Broadcast message to all sockets connected to this local worker instance."""
-        if channel_id in self.active_connections:
-            message_text = json.dumps(message)
-            for connection in self.active_connections[channel_id]:
+    def stats(self) -> Dict[str, int]:
+        return {"channels": len(self._connections), "sockets": sum(len(s) for s in self._connections.values())}
+
+    async def publish(self, branch_id: uuid.UUID, topic: Topic, event: Dict[str, Any]) -> None:
+        """Publish to Redis; the subscriber on every worker delivers it to local sockets."""
+        client = make_redis_client()
+        try:
+            await client.publish(REDIS_PREFIX + channel_name(branch_id, topic), json.dumps(event, default=str))
+        finally:
+            await client.aclose()
+
+    async def fan_out_local(self, channel: str, text: str) -> None:
+        sockets = list(self._connections.get(channel, ()))
+        if not sockets:
+            return
+        results = await asyncio.gather(*(self._send(ws, text) for ws in sockets), return_exceptions=True)
+        for ws, result in zip(sockets, results, strict=True):
+            if isinstance(result, BaseException):
+                self.unregister(channel, ws)
                 try:
-                    await connection.send_text(message_text)
+                    await ws.close(code=1011)
                 except Exception:
                     pass
 
-    async def publish_redis(self, redis_client: aioredis.Redis, channel_id: str, message: dict) -> None:
-        """Publish event to Redis pub/sub for fan-out to all backend cluster instances."""
-        await redis_client.publish(f"channel:{channel_id}", json.dumps(message))
+    @staticmethod
+    async def _send(ws: WebSocket, text: str) -> None:
+        await asyncio.wait_for(ws.send_text(text), timeout=SEND_TIMEOUT_SECONDS)
+
+    # --- Redis subscriber lifecycle ------------------------------------------------
+
+    def start(self) -> None:
+        if self._subscriber is None or self._subscriber.done():
+            self._subscriber = asyncio.create_task(self._subscribe_forever(), name="realtime-subscriber")
+
+    async def stop(self) -> None:
+        if self._subscriber is not None:
+            self._subscriber.cancel()
+            try:
+                await self._subscriber
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._subscriber = None
+        for sockets in list(self._connections.values()):
+            for ws in list(sockets):
+                try:
+                    await ws.close(code=1001)
+                except Exception:
+                    pass
+        self._connections.clear()
+
+    async def _subscribe_forever(self) -> None:
+        backoff = 0.5
+        while True:
+            client: aioredis.Redis = make_redis_client()
+            pubsub = client.pubsub()
+            try:
+                await pubsub.psubscribe(f"{REDIS_PREFIX}branch:*")
+                backoff = 0.5
+                async for message in pubsub.listen():
+                    if message.get("type") != "pmessage":
+                        continue
+                    channel = str(message["channel"])[len(REDIS_PREFIX):]
+                    await self.fan_out_local(channel, str(message["data"]))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Realtime subscriber lost Redis; reconnecting in %.1fs", backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 10.0)
+            finally:
+                try:
+                    await pubsub.aclose()
+                    await client.aclose()
+                except Exception:
+                    pass
 
 
 realtime_manager = RealtimeConnectionManager()

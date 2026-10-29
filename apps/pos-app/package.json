@@ -2,25 +2,35 @@
   "name": "@restaurant-erp/pos-app",
   "version": "0.1.0",
   "private": true,
-  "description": "POS client application for tablets and captain handhelds",
+  "main": "index.js",
+  "description": "POS app for waiters on tablets and handhelds",
   "scripts": {
-    "start": "react-native start",
-    "android": "react-native run-android",
-    "ios": "react-native run-ios",
+    "start": "expo start --lan",
+    "start:clear": "expo start --lan -c",
+    "web": "expo start --web",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@restaurant-erp/api-client": "workspace:*",
+    "@expo-google-fonts/inter": "^0.4.2",
+    "@expo/vector-icons": "^15.1.1",
+    "@repo/api-client": "workspace:*",
+    "@repo/shared-ui": "workspace:*",
+    "@repo/shared-utils": "workspace:*",
     "@tanstack/react-query": "^5.28.0",
-    "react": "18.2.0",
-    "react-native": "0.74.1"
+    "expo": "~57.0.0",
+    "expo-font": "~57.0.4",
+    "expo-secure-store": "~57.0.4",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.0",
+    "react-native-web": "^0.21.4",
+    "zustand": "^4.5.2"
   },
   "devDependencies": {
     "@babel/core": "^7.24.4",
-    "@babel/preset-env": "^7.24.4",
-    "@babel/runtime": "^7.24.4",
-    "@types/react": "^18.2.79",
-    "@types/react-native": "^0.73.0",
+    "@expo/metro-config": "~57.0.2",
+    "@types/react": "~19.2.0",
+    "babel-preset-expo": "~57.0.1",
     "typescript": "^5.4.5"
   }
 }

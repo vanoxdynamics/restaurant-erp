@@ -1,4 +1,13 @@
 {
-  "name": "RestaurantPOS",
-  "displayName": "Restaurant POS"
+  "expo": {
+    "name": "Restaurant POS",
+    "slug": "restaurant-pos",
+    "version": "1.0.0",
+    "orientation": "default",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "plugins": ["expo-font", "expo-secure-store"]
+  }
 }

@@ -49,7 +49,10 @@ services:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-restaurant_erp}
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-development_secret_key_change_in_production}
+      - PIN_PEPPER=${PIN_PEPPER:-development_pin_pepper_change_in_production}
       - ENVIRONMENT=${ENVIRONMENT:-development}
+    # Local dev: apply migrations, then run with autoreload (the image itself runs without --reload).
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     volumes:
       - ./services/api-fastapi:/app
 

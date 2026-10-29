@@ -1,18 +1,23 @@
 {
+  "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "target": "esnext",
-    "module": "commonjs",
-    "lib": ["es2022"],
-    "allowJs": true,
-    "jsx": "react-native",
-    "noEmit": true,
-    "isolatedModules": true,
     "strict": true,
-    "moduleResolution": "node",
-    "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true
+    "baseUrl": ".",
+    "paths": {
+      "@repo/shared-utils": [
+        "../../packages/shared-utils/src/index.ts"
+      ],
+      "@repo/shared-ui": [
+        "../../packages/shared-ui/src/index.ts"
+      ],
+      "@repo/api-client": [
+        "../../packages/api-client/src/index.ts"
+      ]
+    }
   },
-  "include": ["src/**/*", "index.js", "app.json"]
+  "include": [
+    "src/**/*",
+    "index.js",
+    "app.json"
+  ]
 }

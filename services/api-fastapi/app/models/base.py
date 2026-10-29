@@ -1,6 +1,9 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import DateTime, func
+from enum import StrEnum
+from typing import Type
+
+from sqlalchemy import CheckConstraint, DateTime, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -31,3 +34,9 @@ class UUIDPrimaryKeyMixin:
         primary_key=True,
         default=uuid.uuid4,
     )
+
+
+def enum_check(table: str, column: str, enum: Type[StrEnum]) -> CheckConstraint:
+    """CHECK constraint restricting a string column to the values of a StrEnum."""
+    values = ", ".join(f"'{member.value}'" for member in enum)
+    return CheckConstraint(f"{column} IN ({values})", name=f"ck_{table}_{column}")

@@ -1,0 +1,13 @@
+{
+  "name": "@repo/shared-utils",
+  "version": "0.1.0",
+  "description": "Shared currency formatters, GST math utilities, and state enums for Restaurant ERP",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}

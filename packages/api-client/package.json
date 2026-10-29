@@ -1,5 +1,5 @@
 {
-  "name": "@restaurant-erp/api-client",
+  "name": "@repo/api-client",
   "version": "0.1.0",
   "description": "Auto-generated TypeScript API client and TanStack Query hooks for Restaurant ERP",
   "main": "./src/index.ts",
@@ -8,12 +8,12 @@
     "generate": "openapi-ts",
     "typecheck": "tsc --noEmit"
   },
-  "peerDependencies": {
-    "@tanstack/react-query": "^5.0.0"
+  "dependencies": {
+    "@repo/shared-utils": "workspace:*",
+    "@tanstack/react-query": "^5.28.0"
   },
   "devDependencies": {
     "@hey-api/openapi-ts": "^0.53.0",
-    "@tanstack/react-query": "^5.28.0",
     "typescript": "^5.4.5"
   }
 }

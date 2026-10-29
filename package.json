@@ -3,7 +3,7 @@
   "private": true,
   "description": "Enterprise Restaurant ERP Monorepo",
   "scripts": {
-    "generate:api": "pnpm --filter @restaurant-erp/api-client generate",
+    "generate:api": "pnpm --filter @repo/api-client generate",
     "lint": "pnpm -r --parallel lint",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "typecheck": "pnpm -r --parallel typecheck"
