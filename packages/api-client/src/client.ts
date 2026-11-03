@@ -16,8 +16,13 @@ import {
   AuthSession,
   CartLine,
   KitchenTicket,
+  Bill,
+  BillPayment,
+  BoardTicket,
   OrderDetail,
   OrderLine,
+  PaymentInput,
+  PaymentOutcome,
   BranchSummary,
   Category,
   DiningTable,
@@ -28,6 +33,9 @@ import {
   MenuItemUpdate,
   PaymentBreakdown,
   ShiftClosureAudit,
+  RosterEntry,
+  DeviceLink,
+  DeviceSetupCode,
   StaffUser,
   TopSellingItem,
   VoidApprovalItem,
@@ -228,18 +236,38 @@ function adaptVoidRequest(raw: Raw): VoidApprovalItem {
     id: raw.id,
     kot_id: raw.kot_id,
     kot_number: raw.kot_number,
+    station: STATION_FROM_API[raw.station] ?? KitchenStation.MAIN_KITCHEN,
+    kot_status: raw.kot_status,
     order_id: raw.order_id,
     table_number: raw.table_number ?? 'Takeaway',
     requested_by_user_id: raw.requested_by_id,
     requested_by_user_name: raw.requested_by_name,
     item_name: items.map((i) => i.name).join(', '),
     quantity: items.reduce((sum, i) => sum + (i.quantity ?? 0), 0),
+    items: items.map((i) => ({ name: i.name, quantity: i.quantity })),
     amount_paise: toPaise(raw.amount),
     wastage_reason: raw.reason,
     status: String(raw.status).toUpperCase() as VoidApprovalStatus,
     requested_at: raw.created_at,
     reviewed_at: raw.reviewed_at ?? undefined,
     reviewed_by_user_id: raw.reviewed_by_name ?? undefined,
+    review_note: raw.review_note ?? undefined,
+  };
+}
+
+function adaptBoardTicket(raw: Raw): BoardTicket {
+  return {
+    id: raw.id,
+    kot_number: raw.kot_number,
+    station: STATION_FROM_API[raw.station] ?? KitchenStation.MAIN_KITCHEN,
+    status: raw.status,
+    table_label: raw.table_number ?? 'Takeaway',
+    order_id: raw.order_id,
+    order_number: raw.order_number ?? '',
+    items: (raw.items ?? [])
+      .filter((i: Raw) => i.status !== 'voided')
+      .map((i: Raw) => ({ name: i.item_name, quantity: i.quantity, notes: i.notes ?? undefined })),
+    created_at: raw.created_at,
   };
 }
 
@@ -338,6 +366,39 @@ function adaptTopItems(rows: Raw[] | undefined): TopSellingItem[] {
   }));
 }
 
+function adaptBill(raw: Raw): Bill {
+  return {
+    id: raw.id,
+    order_id: raw.order_id,
+    bill_number: raw.bill_number,
+    status: raw.status,
+    subtotal_paise: toPaise(raw.subtotal),
+    cgst_paise: toPaise(raw.tax_cgst),
+    sgst_paise: toPaise(raw.tax_sgst),
+    discount_paise: toPaise(raw.discount_amount),
+    grand_total_paise: toPaise(raw.grand_total),
+    paid_paise: toPaise(raw.paid_amount),
+    balance_due_paise: toPaise(raw.balance_due),
+    settled_at: raw.settled_at ?? undefined,
+    payments: (raw.payments ?? []).map(
+      (p: Raw): BillPayment => ({
+        id: p.id,
+        payment_mode: p.payment_mode,
+        amount_paise: toPaise(p.amount),
+        reference_id: p.reference_id ?? undefined,
+        provider: p.provider ?? 'manual',
+        status: p.status,
+        created_at: p.created_at,
+      }),
+    ),
+    created_at: raw.created_at,
+  };
+}
+
+function paymentBody(p: PaymentInput): Raw {
+  return { payment_mode: p.payment_mode, amount: toRupees(p.amount_paise), reference_id: p.reference_id || undefined };
+}
+
 // ---------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------
@@ -348,7 +409,7 @@ export interface ApiClientOptions {
   onUnauthorized?: () => void;
 }
 
-function newIdempotencyKey(): string {
+export function newIdempotencyKey(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
@@ -376,7 +437,10 @@ export class RestaurantApiClient {
   private async request<T>(
     method: string,
     path: string,
-    options: { body?: unknown; query?: Record<string, string | number | undefined>; idempotent?: boolean } = {},
+    options: { body?: unknown; query?: Record<string, string | number | undefined>;
+      idempotent?: boolean | string;
+      headers?: Record<string, string>;
+    } = {},
   ): Promise<T> {
     const query = Object.entries(options.query ?? {})
       .filter(([, v]) => v !== undefined && v !== '')
@@ -384,10 +448,12 @@ export class RestaurantApiClient {
       .join('&');
     const url = `${this.baseUrl}/api/v1${path}${query ? `?${query}` : ''}`;
 
-    const headers: Record<string, string> = { Accept: 'application/json' };
+    const headers: Record<string, string> = { Accept: 'application/json', ...options.headers };
     if (options.body !== undefined) headers['Content-Type'] = 'application/json';
     if (this.token) headers.Authorization = `Bearer ${this.token}`;
-    if (options.idempotent) headers['X-Idempotency-Key'] = newIdempotencyKey();
+    if (options.idempotent) {
+      headers['X-Idempotency-Key'] = typeof options.idempotent === 'string' ? options.idempotent : newIdempotencyKey();
+    }
 
     let response: Response;
     try {
@@ -419,13 +485,30 @@ export class RestaurantApiClient {
   // ---- Auth & branches --------------------------------------------------------
 
   /** Staff PIN sign-in on a branch device (POS). */
-  async pinLogin(branchId: string, pin: string, deviceId?: string): Promise<AuthSession> {
+  /** Staff PIN sign-in on a branch device. Pass `staffId` to check the PIN against the person chosen on screen. */
+  async pinLogin(branchId: string, pin: string, deviceId?: string, staffId?: string): Promise<AuthSession> {
     const raw = await this.request<Raw>('POST', '/staff/auth/pin', {
-      body: { branch_id: branchId, pin, device_id: deviceId },
+      body: { branch_id: branchId, pin, device_id: deviceId, staff_id: staffId },
     });
     this.token = raw.access_token;
     const me = await this.getMe();
     return { access_token: raw.access_token, expires_at: Date.now() + raw.expires_in * 1000, user: me };
+  }
+
+  /** A manager makes a one-time code (valid 15 minutes) for linking a new tablet. */
+  async createDeviceSetupCode(branchId?: string): Promise<DeviceSetupCode> {
+    return this.request<DeviceSetupCode>('POST', '/staff/devices/setup-codes', { body: { branch_id: branchId } });
+  }
+
+  /** A new tablet trades its setup code for a device token. No sign-in is involved. */
+  async linkDevice(code: string, deviceId: string): Promise<DeviceLink> {
+    return this.request<DeviceLink>('POST', '/staff/devices/link', { body: { code, device_id: deviceId } });
+  }
+
+  /** Staff who can sign in at this branch's tablets, before anyone is signed in. */
+  async getSignInRoster(deviceToken: string): Promise<RosterEntry[]> {
+    const rows = await this.request<Raw[]>('GET', '/staff/auth/roster', { headers: { 'X-Device-Token': deviceToken } });
+    return rows.map((r) => ({ id: r.id, full_name: r.full_name, role: roleFromApi(r.role) }));
   }
 
   async login(username: string, password: string): Promise<AuthSession> {
@@ -544,6 +627,12 @@ export class RestaurantApiClient {
     return page.items.map(adaptVoidRequest);
   }
 
+  /** Cancellation requests raised on one order, newest first, so floor staff can see the kitchen's answer. */
+  async getOrderVoidRequests(orderId: string): Promise<VoidApprovalItem[]> {
+    const rows = await this.request<Raw[]>('GET', `/orders/${orderId}/void-requests`);
+    return rows.map(adaptVoidRequest);
+  }
+
   async approveVoidRequest(requestId: string, note?: string): Promise<VoidApprovalItem> {
     return adaptVoidRequest(
       await this.request<Raw>('POST', `/approvals/void-requests/${requestId}/approve`, { body: { note } }),
@@ -624,6 +713,45 @@ export class RestaurantApiClient {
       query: { branch_id: branchId, status: 'active', limit: 100 },
     });
     return page.items.filter((o) => !o.table_id).map(adaptOrder);
+  }
+
+  // ---- Billing -----------------------------------------------------------------------
+
+  /** The live (non-voided) bill of an order, if one has been generated. */
+  async getBillForOrder(orderId: string): Promise<Bill | null> {
+    const page = await this.request<Page<Raw>>('GET', '/billing/bills', { query: { order_id: orderId, limit: 10 } });
+    const live = page.items.find((b) => b.status !== 'voided');
+    return live ? adaptBill(live) : null;
+  }
+
+  /** Bill an order. Safe to retry with the same key. */
+  async generateBill(orderId: string, idempotencyKey: string): Promise<Bill> {
+    return adaptBill(
+      await this.request<Raw>('POST', '/billing/bills', { idempotent: idempotencyKey, body: { order_id: orderId } }),
+    );
+  }
+
+  /**
+   * Record one tender. `idempotencyKey` must stay the same across retries of the same attempt so a
+   * dropped connection can never take the money twice.
+   */
+  async recordPayment(billId: string, payment: PaymentInput, idempotencyKey: string): Promise<PaymentOutcome> {
+    const raw = await this.request<Raw>('POST', `/billing/bills/${billId}/payments`, {
+      idempotent: idempotencyKey,
+      body: paymentBody(payment),
+    });
+    return { bill: adaptBill(raw.bill), change_due_paise: toPaise(raw.change_due) };
+  }
+
+  /** Open tickets (queued, preparing, ready) for the branch, oldest first. */
+  async getKitchenBoard(branchId: string): Promise<BoardTicket[]> {
+    const rows = await this.request<Raw[]>('GET', '/kots', { query: { branch_id: branchId } });
+    return rows.map(adaptBoardTicket);
+  }
+
+  /** The kitchen starts and finishes tickets; floor staff mark a ready ticket served. */
+  async advanceTicket(kotId: string, status: 'preparing' | 'ready' | 'served'): Promise<void> {
+    await this.request<Raw>('PATCH', `/kots/${kotId}/status`, { body: { status } });
   }
 
   async getOrderTickets(orderId: string): Promise<KitchenTicket[]> {

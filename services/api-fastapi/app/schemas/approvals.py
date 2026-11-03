@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from app.core.enums import VoidRequestStatus
+from app.core.enums import KOTStatus, Station, VoidRequestStatus
 from app.schemas.common import Reason
 
 
@@ -27,6 +27,8 @@ class VoidRequestRead(BaseModel):
     branch_id: uuid.UUID
     kot_id: uuid.UUID
     kot_number: str
+    station: Station
+    kot_status: KOTStatus
     order_id: uuid.UUID
     order_number: str
     table_number: Optional[str] = None

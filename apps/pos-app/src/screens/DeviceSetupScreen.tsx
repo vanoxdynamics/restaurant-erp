@@ -4,20 +4,21 @@ import { Button, colors, fonts, Input, radii, spacing, typography } from '@repo/
 import { ApiError } from '@repo/api-client';
 import { useDeviceStore } from '../stores/deviceStore';
 
-/** One-time setup: a manager links this tablet to their branch. */
+/** One-time setup: link this tablet to the branch with a code from a manager. */
 export const DeviceSetupScreen: React.FC = () => {
   const register = useDeviceStore((s) => s.register);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const ready = code.replace('-', '').length === 8;
+
   const submit = async () => {
-    if (!username.trim() || !password || busy) return;
+    if (!ready || busy) return;
     setBusy(true);
     setError(null);
     try {
-      await register(username, password);
+      await register(code);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Setup failed. Try again.');
     } finally {
@@ -32,13 +33,23 @@ export const DeviceSetupScreen: React.FC = () => {
           <Text style={styles.logoText}>R</Text>
         </View>
         <Text style={styles.title}>Set up this device</Text>
-        <Text style={styles.subtitle}>A manager signs in once to link this tablet to the branch.</Text>
+        <Text style={styles.subtitle}>
+          Ask a manager for a setup code. They can make one in the admin app under Staff, then Link a device.
+        </Text>
 
-        <Input label="Manager username" value={username} onChangeText={setUsername} autoCapitalize="none" autoCorrect={false} />
-        <Input label="Password" value={password} onChangeText={setPassword} secureTextEntry onSubmitEditing={submit} />
+        <Input
+          label="Setup code"
+          value={code}
+          onChangeText={(text) => setCode(text.toUpperCase())}
+          placeholder="K7M2-9QXP"
+          autoCapitalize="characters"
+          autoCorrect={false}
+          maxLength={9}
+          onSubmitEditing={submit}
+        />
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
-        <Button title="Link device" size="lg" onPress={submit} loading={busy} disabled={!username.trim() || !password} />
+        <Button title="Link device" size="lg" onPress={submit} loading={busy} disabled={!ready} />
       </View>
     </KeyboardAvoidingView>
   );

@@ -9,10 +9,13 @@ import {
   Inter_700Bold,
 } from '@expo-google-fonts/inter';
 import { colors } from '@repo/shared-ui';
+import { StaffRole } from '@repo/shared-utils';
 import { DeviceSetupScreen } from './screens/DeviceSetupScreen';
-import { PinScreen } from './screens/PinScreen';
+import { SignInScreen } from './screens/SignInScreen';
 import { FloorScreen } from './screens/FloorScreen';
 import { OrderScreen } from './screens/OrderScreen';
+import { BillScreen } from './screens/BillScreen';
+import { KitchenScreen } from './screens/KitchenScreen';
 import { useDeviceStore } from './stores/deviceStore';
 import { IDLE_LOCK_MS, useSessionStore } from './stores/sessionStore';
 import { useCartStore } from './stores/cartStore';
@@ -21,13 +24,37 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 5000, retry: 1 } },
 });
 
-export type Route = { name: 'floor' } | { name: 'order'; orderId: string; title: string };
+export type Route =
+  | { name: 'floor' }
+  | { name: 'order'; orderId: string; title: string }
+  | { name: 'bill'; orderId: string; title: string };
 
 function Main(): React.JSX.Element {
   const [route, setRoute] = useState<Route>({ name: 'floor' });
+  const role = useSessionStore((s) => s.user?.role);
 
+  // Kitchen staff only handle the kitchen's own queue; they never see the floor.
+  if (role === StaffRole.KITCHEN) return <KitchenScreen />;
+
+  if (route.name === 'bill') {
+    return (
+      <BillScreen
+        orderId={route.orderId}
+        title={route.title}
+        onBack={() => setRoute({ name: 'order', orderId: route.orderId, title: route.title })}
+        onDone={() => setRoute({ name: 'floor' })}
+      />
+    );
+  }
   if (route.name === 'order') {
-    return <OrderScreen orderId={route.orderId} title={route.title} onBack={() => setRoute({ name: 'floor' })} />;
+    return (
+      <OrderScreen
+        orderId={route.orderId}
+        title={route.title}
+        onBack={() => setRoute({ name: 'floor' })}
+        onBill={() => setRoute({ name: 'bill', orderId: route.orderId, title: route.title })}
+      />
+    );
   }
   return <FloorScreen onOpenOrder={(orderId, title) => setRoute({ name: 'order', orderId, title })} />;
 }
@@ -46,6 +73,8 @@ export default function App(): React.JSX.Element {
   // Lock after a period without touches; clear unsent carts and cached data with it.
   useEffect(() => {
     if (!user) return;
+    // A kitchen device is left running on the pass, so it must not lock out between requests.
+    if (user.role === StaffRole.KITCHEN) return;
     const timer = setInterval(() => {
       if (Date.now() - useSessionStore.getState().lastActivity > IDLE_LOCK_MS) useSessionStore.getState().lock();
     }, 15000);
@@ -74,7 +103,7 @@ export default function App(): React.JSX.Element {
         }}
       >
         <StatusBar barStyle="dark-content" backgroundColor={colors.surface} />
-        {deviceStatus === 'unregistered' ? <DeviceSetupScreen /> : user ? <Main /> : <PinScreen />}
+        {deviceStatus === 'unregistered' ? <DeviceSetupScreen /> : user ? <Main /> : <SignInScreen />}
       </SafeAreaView>
     </QueryClientProvider>
   );

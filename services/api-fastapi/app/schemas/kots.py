@@ -49,6 +49,9 @@ class KOTRead(BaseModel):
     station: Station
     status: KOTStatus
     void_reason: Optional[str] = None
+    # Filled in for listings so a kitchen card can say which table it is for.
+    order_number: Optional[str] = None
+    table_number: Optional[str] = None
     items: List[KOTItemRead] = []
     created_at: datetime
     updated_at: datetime

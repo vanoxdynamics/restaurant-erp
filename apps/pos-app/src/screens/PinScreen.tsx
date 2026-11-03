@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
-import { colors, fonts, radii, spacing, typography } from '@repo/shared-ui';
-import { ApiError } from '@repo/api-client';
+import { colors, fonts, humanizeLabel, radii, spacing, typography } from '@repo/shared-ui';
+import { ApiError, RosterEntry } from '@repo/api-client';
 import { Icon } from '../components/Icon';
 import { useDeviceStore } from '../stores/deviceStore';
 import { useSessionStore } from '../stores/sessionStore';
@@ -9,8 +9,13 @@ import { useSessionStore } from '../stores/sessionStore';
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'clear', '0', 'back'] as const;
 const MAX_PIN = 6;
 
-/** Shared-tablet sign-in: each staff member enters their own 4–6 digit PIN. */
-export const PinScreen: React.FC = () => {
+export interface PinScreenProps {
+  staff: RosterEntry;
+  onBack: () => void;
+}
+
+/** Shared-tablet sign-in, step two: the chosen staff member enters their own 4–6 digit PIN. */
+export const PinScreen: React.FC<PinScreenProps> = ({ staff, onBack }) => {
   const device = useDeviceStore((s) => s.device)!;
   const signIn = useSessionStore((s) => s.signIn);
   const [pin, setPin] = useState('');
@@ -22,7 +27,7 @@ export const PinScreen: React.FC = () => {
     setBusy(true);
     setError(null);
     try {
-      await signIn(device.branchId, value, device.deviceId);
+      await signIn(device.branchId, value, device.deviceId, staff.id);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Sign-in failed. Try again.');
       setPin('');
@@ -35,15 +40,15 @@ export const PinScreen: React.FC = () => {
     setError(null);
     if (key === 'clear') return setPin('');
     if (key === 'back') return setPin((p) => p.slice(0, -1));
-    if (pin.length >= MAX_PIN) return;
-    setPin(pin + key);
+    setPin((p) => (p.length >= MAX_PIN ? p : p + key));
   };
 
   return (
     <View style={styles.container}>
       <View style={styles.panel}>
         <Text style={styles.branch}>{device.branchName}</Text>
-        <Text style={styles.title}>Enter your PIN</Text>
+        <Text style={styles.title}>{staff.full_name}</Text>
+        <Text style={styles.role}>{humanizeLabel(staff.role)} · enter your PIN</Text>
 
         <View style={styles.dots} accessibilityLabel={`${pin.length} digits entered`}>
           {Array.from({ length: Math.max(4, pin.length) }).map((_, i) => (
@@ -87,6 +92,10 @@ export const PinScreen: React.FC = () => {
         >
           <Text style={styles.enterText}>Sign in</Text>
         </Pressable>
+
+        <Pressable onPress={onBack} disabled={busy} accessibilityRole="button" hitSlop={8} style={styles.switch}>
+          <Text style={styles.switchText}>Not {staff.full_name.split(' ')[0]}? Choose another person</Text>
+        </Pressable>
       </View>
     </View>
   );
@@ -110,6 +119,20 @@ const styles = StyleSheet.create({
   branch: {
     ...typography.caption,
     color: colors.textMuted,
+  },
+  role: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: spacing.xs,
+  },
+  switch: {
+    marginTop: spacing.lg,
+    padding: spacing.sm,
+  },
+  switchText: {
+    ...typography.caption,
+    color: colors.primary,
+    fontFamily: fonts.semibold,
   },
   title: {
     ...typography.h1,

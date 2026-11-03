@@ -7,7 +7,7 @@ export const IDLE_LOCK_MS = 2 * 60 * 1000;
 interface SessionState {
   user: StaffUser | null;
   lastActivity: number;
-  signIn: (branchId: string, pin: string, deviceId: string) => Promise<void>;
+  signIn: (branchId: string, pin: string, deviceId: string, staffId: string) => Promise<void>;
   lock: () => void;
   touch: () => void;
 }
@@ -20,8 +20,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   user: null,
   lastActivity: Date.now(),
 
-  signIn: async (branchId, pin, deviceId) => {
-    const session = await apiClient.pinLogin(branchId, pin, deviceId);
+  signIn: async (branchId, pin, deviceId, staffId) => {
+    const session = await apiClient.pinLogin(branchId, pin, deviceId, staffId);
     set({ user: session.user, lastActivity: Date.now() });
   },
 

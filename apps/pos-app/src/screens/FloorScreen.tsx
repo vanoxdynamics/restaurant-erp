@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Button, colors, fonts, radii, spacing, TableStatusBadge, typography } from '@repo/shared-ui';
 import { formatPaiseToRupees, getOccupancyTime, TableStatus } from '@repo/shared-utils';
-import { ApiError, DiningTable, useCreateOrder, useFloorLayout, useOpenTakeaways } from '@repo/api-client';
+import { ApiError, DiningTable, useCreateOrder, useFloorLayout, useKitchenBoard, useOpenTakeaways } from '@repo/api-client';
 import { GuestCountSheet } from '../components/GuestCountSheet';
 import { Icon } from '../components/Icon';
 import { QueryState } from '../components/QueryState';
@@ -16,6 +16,13 @@ const STATUS_TINT: Record<string, string> = {
   [TableStatus.RESERVED]: colors.dirty,
 };
 
+const ReadyChip: React.FC<{ count: number }> = ({ count }) => (
+  <View style={styles.readyChip} accessibilityLabel={`${count} ready to serve`}>
+    <Icon name="check-circle" size={14} color={colors.textInverse} />
+    <Text style={styles.readyChipText}>{count} ready</Text>
+  </View>
+);
+
 export interface FloorScreenProps {
   onOpenOrder: (orderId: string, title: string) => void;
 }
@@ -25,6 +32,17 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder }) => {
   const floorQuery = useFloorLayout(device.branchId);
   const takeawayQuery = useOpenTakeaways(device.branchId);
   const createOrder = useCreateOrder();
+
+  // Tickets the kitchen has finished, counted per order, so a waiter can see food waiting to be
+  // picked up without opening each table.
+  const board = useKitchenBoard(device.branchId);
+  const readyByOrder = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const ticket of board.data ?? []) {
+      if (ticket.status === 'ready') counts.set(ticket.order_id, (counts.get(ticket.order_id) ?? 0) + 1);
+    }
+    return counts;
+  }, [board.data]);
 
   const floors = floorQuery.data ?? [];
   const [area, setArea] = useState<string>('ALL');
@@ -105,6 +123,7 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder }) => {
             {tables.map((table) => {
               const busy = !!table.running_order_id;
               const merged = !!table.merged_into_table_id;
+              const ready = table.running_order_id ? readyByOrder.get(table.running_order_id) ?? 0 : 0;
               return (
                 <Pressable
                   key={table.id}
@@ -134,6 +153,7 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder }) => {
                       </Text>
                     </View>
                   ) : null}
+                  {ready > 0 ? <ReadyChip count={ready} /> : null}
                 </Pressable>
               );
             })}
@@ -147,6 +167,7 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder }) => {
               {(takeawayQuery.data ?? []).map((order) => {
                 const label = 'Takeaway';
                 const items = order.lines.filter((l) => l.status !== 'cancelled').reduce((n, l) => n + l.quantity, 0);
+                const ready = readyByOrder.get(order.id) ?? 0;
                 return (
                   <Pressable
                     key={order.id}
@@ -162,6 +183,7 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder }) => {
                         {getOccupancyTime(order.created_at)} · {items} items
                       </Text>
                     </View>
+                    {ready > 0 ? <ReadyChip count={ready} /> : null}
                   </Pressable>
                 );
               })}
@@ -184,6 +206,22 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder }) => {
 };
 
 const styles = StyleSheet.create({
+  readyChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radii.full,
+    backgroundColor: colors.success,
+  },
+  readyChipText: {
+    ...typography.caption,
+    color: colors.textInverse,
+    fontFamily: fonts.bold,
+  },
   container: {
     flex: 1,
     backgroundColor: colors.background,

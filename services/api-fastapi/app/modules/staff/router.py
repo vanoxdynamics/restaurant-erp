@@ -1,11 +1,11 @@
 import uuid
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser, get_current_user, require_roles, resolve_branch_id
+from app.core.auth import CurrentUser, get_current_user, require_device_branch, require_roles, resolve_branch_id
 from app.core.database import get_db
 from app.core.enums import Role, ShiftStatus
 from app.core.errors import NotFound
@@ -15,9 +15,14 @@ from app.models.staff import Shift, StaffUser
 from app.modules.staff import service
 from app.schemas.common import Page
 from app.schemas.staff import (
+    DeviceLinkRequest,
+    DeviceSetupCode,
+    DeviceSetupCodeCreate,
+    DeviceTokenResponse,
     PINAuthRequest,
     PasswordLoginRequest,
     PinResetRequest,
+    RosterEntry,
     ShiftCloseRequest,
     ShiftHistoryRead,
     ShiftOpenRequest,
@@ -55,6 +60,37 @@ async def login_with_pin(
 ):
     """Fast PIN-based authentication for captain handhelds and POS terminals."""
     return await service.login_with_pin(db, redis_client, payload, _client_ip(request))
+
+
+@router.get("/auth/roster", response_model=List[RosterEntry])
+async def sign_in_roster(
+    branch_id: uuid.UUID = Depends(require_device_branch),
+    db: AsyncSession = Depends(get_db),
+):
+    """Names and roles for the POS 'who is working' screen. Needs the X-Device-Token a manager issued."""
+    return await service.staff_roster(db, branch_id)
+
+
+@router.post("/devices/setup-codes", response_model=DeviceSetupCode, status_code=status.HTTP_201_CREATED)
+async def create_device_setup_code(
+    payload: DeviceSetupCodeCreate,
+    user: CurrentUser = Depends(managers),
+    db: AsyncSession = Depends(get_db),
+    redis_client: aioredis.Redis = Depends(get_redis),
+):
+    """Make a one-time code (valid 15 minutes) that links a new tablet to a branch."""
+    return await service.create_device_setup_code(db, redis_client, user, payload)
+
+
+@router.post("/devices/link", response_model=DeviceTokenResponse)
+async def link_device(
+    payload: DeviceLinkRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    redis_client: aioredis.Redis = Depends(get_redis),
+):
+    """A new tablet trades its setup code for a device token. No sign-in: the code is the proof."""
+    return await service.link_device(db, redis_client, payload, _client_ip(request))
 
 
 @router.post("/auth/login", response_model=TokenResponse)

@@ -3,13 +3,17 @@ import { Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 
 import { colors, fonts, Input, radii, spacing, typography } from '@repo/shared-ui';
 import { formatPaiseToRupees } from '@repo/shared-utils';
 import { MenuItem, useCatalog } from '@repo/api-client';
+import { StepButton } from './ItemOptionsSheet';
 import { QueryState } from './QueryState';
 
 export interface MenuPanelProps {
   onPick: (item: MenuItem) => void;
+  /** How many of each item (by id) are already in the order being built, so tiles can show it. */
+  quantities?: Record<string, number>;
+  onDecrement?: (item: MenuItem) => void;
 }
 
-export const MenuPanel: React.FC<MenuPanelProps> = ({ onPick }) => {
+export const MenuPanel: React.FC<MenuPanelProps> = ({ onPick, quantities = {}, onDecrement }) => {
   const catalogQuery = useCatalog();
   const categories = catalogQuery.data ?? [];
   const [categoryId, setCategoryId] = useState<string | null>(null);
@@ -49,6 +53,7 @@ export const MenuPanel: React.FC<MenuPanelProps> = ({ onPick }) => {
         <ScrollView contentContainerStyle={styles.grid} keyboardShouldPersistTaps="handled">
           {items.map((item) => {
             const soldOut = !item.is_available_86;
+            const picked = quantities[item.id] ?? 0;
             const fromPrice = item.variants.length
               ? Math.min(...item.variants.map((v) => v.price_paise))
               : item.base_price_paise;
@@ -59,7 +64,12 @@ export const MenuPanel: React.FC<MenuPanelProps> = ({ onPick }) => {
                 disabled={soldOut}
                 accessibilityRole="button"
                 accessibilityLabel={soldOut ? `${item.name}, sold out` : `Add ${item.name}`}
-                style={({ pressed }) => [styles.item, soldOut ? styles.itemSoldOut : null, pressed ? styles.itemPressed : null]}
+                style={({ pressed }) => [
+                  styles.item,
+                  soldOut ? styles.itemSoldOut : null,
+                  picked > 0 ? styles.itemPicked : null,
+                  pressed ? styles.itemPressed : null,
+                ]}
               >
                 <Text style={[styles.itemName, soldOut ? { color: colors.textMuted } : null]} numberOfLines={2}>
                   {item.name}
@@ -67,6 +77,15 @@ export const MenuPanel: React.FC<MenuPanelProps> = ({ onPick }) => {
                 <Text style={styles.itemPrice}>
                   {soldOut ? 'Sold out' : `${item.variants.length ? 'from ' : ''}${formatPaiseToRupees(fromPrice, { decimals: 0 })}`}
                 </Text>
+                {picked > 0 ? (
+                  <View style={styles.stepper}>
+                    <StepButton icon="minus" label={`One less ${item.name}`} size={36} onPress={() => onDecrement?.(item)} />
+                    <Text style={styles.stepperQty} accessibilityLabel={`${picked} ${item.name} added`}>
+                      {picked}
+                    </Text>
+                    <StepButton icon="plus" label={`One more ${item.name}`} size={36} onPress={() => onPick(item)} />
+                  </View>
+                ) : null}
               </Pressable>
             );
           })}
@@ -116,7 +135,9 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
   },
   item: {
-    width: 150,
+    flexBasis: 148,
+    flexGrow: 1,
+    maxWidth: 200,
     minHeight: 92,
     padding: spacing.md,
     borderRadius: radii.lg,
@@ -127,6 +148,22 @@ const styles = StyleSheet.create({
   },
   itemSoldOut: {
     backgroundColor: colors.surfaceLight,
+  },
+  itemPicked: {
+    borderColor: colors.primary,
+    borderWidth: 2,
+    backgroundColor: colors.primaryGlow,
+  },
+  stepper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.sm,
+  },
+  stepperQty: {
+    ...typography.bodyBold,
+    color: colors.primary,
+    fontFamily: fonts.bold,
   },
   itemPressed: {
     borderColor: colors.primary,

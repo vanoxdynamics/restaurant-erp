@@ -13,9 +13,6 @@ interface CartState {
   remove: (orderId: string, key: string) => void;
   clear: (orderId: string) => void;
   clearAll: () => void;
-  /** Tickets this device has asked a manager to void (the waiter cannot read the approval queue). */
-  voidRequested: Record<string, true>;
-  markVoidRequested: (kotId: string) => void;
 }
 
 const sameChoice = (a: Omit<CartLine, 'key'>, b: CartLine) =>
@@ -69,8 +66,5 @@ export const useCartStore = create<CartState>((set) => ({
       return { carts: next };
     }),
 
-  clearAll: () => set({ carts: {}, voidRequested: {} }),
-
-  voidRequested: {},
-  markVoidRequested: (kotId) => set((state) => ({ voidRequested: { ...state.voidRequested, [kotId]: true } })),
+  clearAll: () => set({ carts: {} }),
 }));

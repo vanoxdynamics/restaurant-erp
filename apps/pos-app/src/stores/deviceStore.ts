@@ -1,6 +1,5 @@
 import { create } from 'zustand';
-import { ApiError, apiClient } from '@repo/api-client';
-import { StaffRole } from '@repo/shared-utils';
+import { apiClient } from '@repo/api-client';
 import { storage } from './storage';
 
 const DEVICE_KEY = 'restaurant_pos_device';
@@ -9,14 +8,16 @@ export interface DeviceConfig {
   deviceId: string;
   branchId: string;
   branchName: string;
+  /** Issued when a manager linked this tablet; unlocks the 'who is working' list. */
+  deviceToken: string;
 }
 
 interface DeviceState {
   status: 'loading' | 'unregistered' | 'registered';
   device: DeviceConfig | null;
   load: () => Promise<void>;
-  /** A manager signs in once to link this tablet to a branch; their session is not kept. */
-  register: (username: string, password: string) => Promise<void>;
+  /** Link this tablet to a branch with the one-time code a manager made in the admin app. */
+  register: (code: string) => Promise<void>;
   unregister: () => Promise<void>;
 }
 
@@ -27,26 +28,23 @@ export const useDeviceStore = create<DeviceState>((set) => ({
   device: null,
 
   load: async () => {
-    const device = await storage.get<DeviceConfig>(DEVICE_KEY);
+    const stored = await storage.get<DeviceConfig>(DEVICE_KEY);
+    // A tablet linked before device tokens existed has to be linked once more.
+    const device = stored?.deviceToken ? stored : null;
     set({ status: device ? 'registered' : 'unregistered', device });
   },
 
-  register: async (username, password) => {
-    try {
-      const session = await apiClient.login(username.trim(), password);
-      if (session.user.role !== StaffRole.OWNER && session.user.role !== StaffRole.MANAGER) {
-        throw new ApiError(403, 'forbidden', 'Only a manager or owner can set up this device.');
-      }
-      const branches = (await apiClient.getBranches()).filter((b) => b.is_active);
-      const branch = branches.find((b) => b.id === session.user.branch_id) ?? branches[0];
-      if (!branch) throw new ApiError(403, 'no_branch', 'This account is not linked to an active branch.');
-
-      const device: DeviceConfig = { deviceId: newDeviceId(), branchId: branch.id, branchName: branch.name };
-      await storage.set(DEVICE_KEY, device);
-      set({ status: 'registered', device });
-    } finally {
-      apiClient.setToken(undefined);
-    }
+  register: async (code) => {
+    const deviceId = newDeviceId();
+    const link = await apiClient.linkDevice(code, deviceId);
+    const device: DeviceConfig = {
+      deviceId,
+      branchId: link.branch_id,
+      branchName: link.branch_name,
+      deviceToken: link.device_token,
+    };
+    await storage.set(DEVICE_KEY, device);
+    set({ status: 'registered', device });
   },
 
   unregister: async () => {

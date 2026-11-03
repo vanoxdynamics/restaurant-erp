@@ -1,10 +1,10 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import BillStatus, PaymentMode, PaymentStatus
@@ -74,5 +74,9 @@ class Payment(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     received_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.id"), nullable=True)
     shift_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("shifts.id"), nullable=True, index=True)
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Who captured the tender: "manual" (cashier keyed it in) today; a card-terminal integration
+    # (e.g. "pinelabs") later records its transaction details in provider_meta.
+    provider: Mapped[str] = mapped_column(String(30), default="manual", server_default="manual", nullable=False)
+    provider_meta: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
 
     bill: Mapped["Bill"] = relationship("Bill", back_populates="payments", lazy="raise")

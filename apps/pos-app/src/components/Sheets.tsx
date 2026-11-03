@@ -36,12 +36,12 @@ export const VoidRequestSheet: React.FC<VoidRequestSheetProps> = ({ ticket, load
     <Modal
       visible={ticket !== null}
       onClose={onClose}
-      title="Request void"
+      title="Request cancel"
       subtitle={ticket ? `KOT ${ticket.kot_number.split('-').pop()} · ${ticket.items.map((i) => `${i.quantity} × ${i.name}`).join(', ')}` : ''}
       footer={
         <>
           <Button title="Cancel" variant="secondary" onPress={onClose} />
-          <Button title="Send to manager" onPress={() => reason && onSubmit(reason)} disabled={!reason} loading={loading} />
+          <Button title="Send to kitchen" onPress={() => reason && onSubmit(reason)} disabled={!reason} loading={loading} />
         </>
       }
     >

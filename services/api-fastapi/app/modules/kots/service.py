@@ -17,15 +17,16 @@ from app.core.enums import (
     KOTStatus,
     OrderItemStatus,
     OrderStatus,
+    Role,
     Station,
     Topic,
 )
-from app.core.errors import Conflict, InvalidTransition
+from app.core.errors import Conflict, Forbidden, InvalidTransition
 from app.core.events import commit, queue_event
 from app.core.lookups import get_or_404
 from app.core.money import ZERO
 from app.core.numbering import next_document_number
-from app.models.floor import Branch
+from app.models.floor import Branch, DiningTable
 from app.models.kots import KOT, KOTItem
 from app.models.orders import Order, OrderItem
 from app.modules.orders.service import load_order, recompute_totals
@@ -33,6 +34,24 @@ from app.schemas.kots import KOTFireRequest, VoidKOTRequest
 from app.worker.tasks import send_manager_push_alert
 
 KOT_LOADERS = (selectinload(KOT.items),)
+# Only these roles run the kitchen's stages; floor staff may only mark a ready ticket served.
+KITCHEN_STAGE_ROLES = {Role.OWNER, Role.MANAGER, Role.KITCHEN}
+
+
+async def annotate_kots(db: AsyncSession, kots: Sequence[KOT]) -> Sequence[KOT]:
+    """Attach order and table numbers (not columns on KOT) so listings can show them."""
+    order_ids = {k.order_id for k in kots}
+    if not order_ids:
+        return kots
+    rows = await db.execute(
+        select(Order.id, Order.order_number, DiningTable.table_number)
+        .outerjoin(DiningTable, DiningTable.id == Order.table_id)
+        .where(Order.id.in_(order_ids))
+    )
+    labels = {order_id: (number, table) for order_id, number, table in rows}
+    for kot in kots:
+        kot.order_number, kot.table_number = labels.get(kot.order_id, (None, None))
+    return kots
 OPEN_KOT_STATUSES = [KOTStatus.QUEUED.value, KOTStatus.PREPARING.value, KOTStatus.READY.value]
 
 
@@ -58,7 +77,7 @@ async def list_kots(
         stmt = stmt.where(KOT.status.in_(OPEN_KOT_STATUSES))
     if order_id is not None:
         stmt = stmt.where(KOT.order_id == order_id)
-    return (await db.scalars(stmt)).all()
+    return await annotate_kots(db, (await db.scalars(stmt)).all())
 
 
 def _kot_line_name(item: OrderItem) -> str:
@@ -148,6 +167,8 @@ async def _sync_order_items(db: AsyncSession, kot: KOT, status: OrderItemStatus)
 async def update_kot_status(db: AsyncSession, user: CurrentUser, kot_id: uuid.UUID, new_status: KOTStatus) -> KOT:
     kot = await load_kot(db, kot_id, for_update=True)
     require_branch_access(user, kot.branch_id)
+    if user.role not in KITCHEN_STAGE_ROLES and new_status != KOTStatus.SERVED:
+        raise Forbidden("Only the kitchen can start or finish a ticket; floor staff can mark it served")
     current = KOTStatus(kot.status)
     if new_status not in KOT_TRANSITIONS[current]:
         raise InvalidTransition(f"Cannot move KOT from {current} to {new_status}",
@@ -160,11 +181,16 @@ async def update_kot_status(db: AsyncSession, user: CurrentUser, kot_id: uuid.UU
     queue_event(db, kot.branch_id, Topic.KOTS, "kot.status_changed", kot.id,
                 {"status": kot.status, "station": kot.station, "order_id": str(kot.order_id)})
     await commit(db)
-    return await load_kot(db, kot.id)
+    return (await annotate_kots(db, [await load_kot(db, kot.id)]))[0]
+
+
+# A ready ticket can still be cancelled: whether the cooked food is wasted or goes to another
+# table is the kitchen's call. Once it is served the guest has it, so it can only be comped.
+VOIDABLE_STATUSES = {KOTStatus.QUEUED, KOTStatus.PREPARING, KOTStatus.READY}
 
 
 def ensure_voidable(kot: KOT) -> None:
-    if KOTStatus.VOIDED not in KOT_TRANSITIONS[KOTStatus(kot.status)]:
+    if KOTStatus(kot.status) not in VOIDABLE_STATUSES:
         raise InvalidTransition(
             f"A {kot.status} KOT cannot be voided; comp it with a bill discount instead",
             details={"status": kot.status},
@@ -194,6 +220,7 @@ async def apply_void(
     Shared by on-the-spot voids and approved remote requests. Does not commit.
     """
     order = await load_order(db, kot.order_id, for_update=True)
+    stage_when_voided = kot.status
     live_ids = {i.order_item_id for i in kot.items if i.status != KOTStatus.VOIDED.value}
     voided_amount = ZERO
     for line in order.items:
@@ -212,7 +239,7 @@ async def apply_void(
     record_audit(
         db, branch_id=kot.branch_id, action=AuditAction.KOT_VOID, actor_id=requested_by_id,
         approver_id=approver_id, entity_type="kot", entity_id=kot.id, amount=voided_amount,
-        details={"kot_number": kot.kot_number, "reason": reason,
+        details={"kot_number": kot.kot_number, "reason": reason, "stage": stage_when_voided,
                  "items": [{"name": i.item_name, "quantity": i.quantity} for i in kot.items]},
     )
     queue_event(db, kot.branch_id, Topic.KOTS, "kot.voided", kot.id, {"station": kot.station})

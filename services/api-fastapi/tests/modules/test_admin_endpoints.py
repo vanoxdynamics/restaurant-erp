@@ -80,6 +80,72 @@ async def test_void_request_permissions(client, db, waiter, manager, other_branc
                               headers=auth_headers(other_manager))).status_code == 404
 
 
+async def test_kitchen_reviews_cancellation_requests(client, db, waiter, kitchen, manager, events):
+    order, kot = await _fired_order(client, db, waiter)
+    kitchen_pin = auth_headers(kitchen, auth_method="pin")  # signed in on a station device, no password
+    request = (await client.post(f"{API}/kots/{kot['id']}/void-requests", json={"reason": "Customer left"},
+                                 headers=auth_headers(waiter))).json()
+
+    pending = await client.get(f"{API}/approvals/void-requests", params={"status": "pending"}, headers=kitchen_pin)
+    assert pending.status_code == 200 and [r["id"] for r in pending.json()["items"]] == [request["id"]]
+
+    # The waiter sees it waiting, then sees the kitchen's answer with its note.
+    mine = await client.get(f"{API}/orders/{order['id']}/void-requests", headers=auth_headers(waiter))
+    assert [(r["status"], r["kot_id"]) for r in mine.json()] == [("pending", kot["id"])]
+    declined = await client.post(f"{API}/approvals/void-requests/{request['id']}/reject",
+                                 json={"note": "Already plated"}, headers=kitchen_pin)
+    assert declined.status_code == 200 and declined.json()["status"] == "rejected"
+    mine = await client.get(f"{API}/orders/{order['id']}/void-requests", headers=auth_headers(waiter))
+    assert mine.json()[0]["status"] == "rejected" and mine.json()[0]["review_note"] == "Already plated"
+
+    again = (await client.post(f"{API}/kots/{kot['id']}/void-requests", json={"reason": "Customer left"},
+                               headers=auth_headers(waiter))).json()
+    ok = await client.post(f"{API}/approvals/void-requests/{again['id']}/approve", json={}, headers=kitchen_pin)
+    assert ok.status_code == 200 and ok.json()["status"] == "approved"
+    kots = await client.get(f"{API}/kots", params={"order_id": order["id"]}, headers=auth_headers(waiter))
+    assert kots.json()[0]["status"] == "voided"
+    audit = (await db.scalars(select(AuditLog).where(AuditLog.action_type == "kot_void"))).all()
+    assert audit and audit[-1].approver_id == kitchen.id
+    assert "void_request.approved" in {e["type"] for e in events}
+
+
+async def test_cancellation_review_rules(client, db, waiter, kitchen, other_branch):
+    _, kot = await _fired_order(client, db, waiter)
+    request = (await client.post(f"{API}/kots/{kot['id']}/void-requests", json={"reason": "Wrong table"},
+                                 headers=auth_headers(waiter))).json()
+    # Floor staff can't review, and kitchen at another branch can't see it.
+    assert (await client.post(f"{API}/approvals/void-requests/{request['id']}/approve", json={},
+                              headers=auth_headers(waiter))).status_code == 403
+    other_kitchen = await factories.make_staff(db, other_branch, role="kitchen", pin="7071")
+    assert (await client.post(f"{API}/approvals/void-requests/{request['id']}/approve", json={},
+                              headers=auth_headers(other_kitchen, auth_method="pin"))).status_code == 404
+
+    # Nobody reviews their own request, even kitchen.
+    _, second_kot = await _fired_order(client, db, waiter, name="Roti")
+    kitchen_pin = auth_headers(kitchen, auth_method="pin")
+    own = (await client.post(f"{API}/kots/{second_kot['id']}/void-requests", json={"reason": "Spilled"},
+                             headers=kitchen_pin)).json()
+    r = await client.post(f"{API}/approvals/void-requests/{own['id']}/approve", json={}, headers=kitchen_pin)
+    assert r.status_code == 403 and r.json()["error"]["code"] == "self_review"
+
+
+async def test_ready_ticket_can_be_cancelled_by_kitchen(client, db, waiter, kitchen):
+    order, kot = await _fired_order(client, db, waiter)
+    for status in ("preparing", "ready"):
+        await client.patch(f"{API}/kots/{kot['id']}/status", json={"status": status}, headers=auth_headers(kitchen))
+    request = await client.post(f"{API}/kots/{kot['id']}/void-requests", json={"reason": "Guest left"},
+                                headers=auth_headers(waiter))
+    assert request.status_code == 201 and request.json()["kot_status"] == "ready"
+
+    ok = await client.post(f"{API}/approvals/void-requests/{request.json()['id']}/approve", json={},
+                           headers=auth_headers(kitchen, auth_method="pin"))
+    assert ok.status_code == 200
+    o = await client.get(f"{API}/orders/{order['id']}", headers=auth_headers(waiter))
+    assert o.json()["subtotal"] == "0.00"
+    audit = (await db.scalars(select(AuditLog).where(AuditLog.action_type == "kot_void"))).all()
+    assert audit[-1].details["stage"] == "ready"
+
+
 async def test_served_ticket_cannot_be_requested(client, db, waiter, kitchen):
     _, kot = await _fired_order(client, db, waiter)
     for status in ("preparing", "ready", "served"):

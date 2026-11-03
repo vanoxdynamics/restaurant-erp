@@ -1,22 +1,21 @@
 """
 Remote void approvals.
 
-Floor staff raise a request against a KOT; a manager approves (the KOT is voided exactly as an
-on-the-spot void would be) or rejects it. One open request per KOT.
+Floor staff raise a request against a KOT; the kitchen (or a manager from a password session) approves
+(the KOT is voided exactly as an on-the-spot void would be) or rejects it. One open request per KOT.
 """
 
 import uuid
 from typing import List, Optional, Tuple
 
-from fastapi import BackgroundTasks
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, require_branch_access
 from app.core.clock import utcnow
-from app.core.enums import OrderStatus, Topic, VoidRequestStatus
-from app.core.errors import Conflict, InvalidTransition
+from app.core.enums import KOTStatus, OrderStatus, Station, Topic, VoidRequestStatus
+from app.core.errors import Conflict, Forbidden, InvalidTransition
 from app.core.events import commit, queue_event
 from app.core.lookups import get_or_404
 from app.core.pagination import PageParams, paginate
@@ -27,7 +26,6 @@ from app.models.staff import StaffUser
 from app.modules.kots.service import apply_void, ensure_voidable, live_line_total, load_kot
 from app.modules.orders.service import load_order
 from app.schemas.approvals import VoidRequestItem, VoidRequestRead
-from app.worker.tasks import send_manager_push_alert
 
 
 async def _to_read(db: AsyncSession, request: VoidRequest) -> VoidRequestRead:
@@ -41,6 +39,8 @@ async def _to_read(db: AsyncSession, request: VoidRequest) -> VoidRequestRead:
         branch_id=request.branch_id,
         kot_id=kot.id,
         kot_number=kot.kot_number,
+        station=Station(kot.station),
+        kot_status=KOTStatus(kot.status),
         order_id=request.order_id,
         order_number=order.order_number if order else "",
         table_number=table.table_number if table else None,
@@ -62,7 +62,6 @@ async def create_void_request(
     user: CurrentUser,
     kot_id: uuid.UUID,
     reason: str,
-    background: Optional[BackgroundTasks] = None,
 ) -> VoidRequestRead:
     kot = await load_kot(db, kot_id, for_update=True)
     require_branch_access(user, kot.branch_id)
@@ -91,12 +90,6 @@ async def create_void_request(
                 {"kot_number": kot.kot_number, "amount": str(request.amount)})
     await commit(db)
 
-    if background is not None:
-        background.add_task(
-            send_manager_push_alert, kot.branch_id, "Void request",
-            f"{kot.kot_number}: {reason} ({user.full_name})",
-            {"void_request_id": str(request.id), "amount": str(request.amount)},
-        )
     return await _to_read(db, request)
 
 
@@ -115,9 +108,20 @@ async def list_void_requests(
     return [await _to_read(db, r) for r in rows], total
 
 
+async def list_order_void_requests(db: AsyncSession, user: CurrentUser, order_id: uuid.UUID) -> List[VoidRequestRead]:
+    order = await load_order(db, order_id)
+    require_branch_access(user, order.branch_id)
+    rows = await db.scalars(
+        select(VoidRequest).where(VoidRequest.order_id == order_id).order_by(VoidRequest.created_at.desc())
+    )
+    return [await _to_read(db, r) for r in rows]
+
+
 async def _load_pending(db: AsyncSession, user: CurrentUser, request_id: uuid.UUID) -> VoidRequest:
     request = await get_or_404(db, VoidRequest, request_id, for_update=True)
     require_branch_access(user, request.branch_id)
+    if request.requested_by_id == user.id:
+        raise Forbidden("You can't review your own request", code="self_review")
     if request.status != VoidRequestStatus.PENDING.value:
         raise InvalidTransition(f"Request is already {request.status}", details={"status": request.status})
     return request

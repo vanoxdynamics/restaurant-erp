@@ -5,6 +5,7 @@ import { formatPaiseToRupees, formatVariancePaise, formatDateTime, StaffRole } f
 import {
   ApiError,
   StaffUser,
+  useCreateDeviceSetupCode,
   useCreateStaffUser,
   useSetStaffActive,
   useShiftAudits,
@@ -33,6 +34,20 @@ export const StaffPINsScreen: React.FC = () => {
   const resetPin = useUpdateStaffPIN();
   const createStaff = useCreateStaffUser();
   const setActive = useSetStaffActive();
+  const createCode = useCreateDeviceSetupCode();
+
+  // Link a new tablet: a one-time code the tablet's setup screen asks for.
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const openLink = async () => {
+    setLinkOpen(true);
+    setLinkError(null);
+    try {
+      await createCode.mutateAsync(activeBranchId);
+    } catch (e) {
+      setLinkError(errorText(e));
+    }
+  };
 
   const staffList = staffQuery.data ?? [];
   const shiftAudits = shiftQuery.data ?? [];
@@ -132,7 +147,10 @@ export const StaffPINsScreen: React.FC = () => {
     >
       <View style={styles.topHeader}>
         <Text style={[typography.h1, { color: colors.text }]}>Staff</Text>
-        <Button title="Add staff" size="sm" variant="primary" onPress={() => setAddOpen(true)} />
+        <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+          <Button title="Link a device" size="sm" variant="secondary" onPress={openLink} />
+          <Button title="Add staff" size="sm" variant="primary" onPress={() => setAddOpen(true)} />
+        </View>
       </View>
 
       <View style={styles.tabRow}>
@@ -302,6 +320,33 @@ export const StaffPINsScreen: React.FC = () => {
         {activeError ? <Text style={styles.modalError}>{activeError}</Text> : null}
       </Modal>
 
+      {/* Link a device */}
+      <Modal
+        visible={linkOpen}
+        onClose={() => setLinkOpen(false)}
+        title="Link a device"
+        subtitle="Enter this code on the new tablet's setup screen."
+        footer={
+          <>
+            <Button title="Done" variant="secondary" onPress={() => setLinkOpen(false)} />
+            <Button title="New code" onPress={openLink} loading={createCode.isPending} />
+          </>
+        }
+      >
+        {createCode.data && !linkError ? (
+          <>
+            <Text style={styles.setupCode} selectable>
+              {createCode.data.code}
+            </Text>
+            <Text style={styles.modalBody}>
+              For {createCode.data.branch_name}. Works once and expires in {Math.round(createCode.data.expires_in / 60)}{' '}
+              minutes.
+            </Text>
+          </>
+        ) : null}
+        {linkError ? <Text style={styles.modalError}>{linkError}</Text> : null}
+      </Modal>
+
       {/* Add staff */}
       <Modal
         visible={addOpen}
@@ -359,6 +404,13 @@ export const StaffPINsScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
+  setupCode: {
+    ...typography.h1,
+    color: colors.primary,
+    letterSpacing: 4,
+    textAlign: 'center',
+    paddingVertical: spacing.lg,
+  },
   staffInactive: {
     opacity: 0.6,
   },

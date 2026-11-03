@@ -2,7 +2,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { StaffRole, KitchenStation } from '@repo/shared-utils';
 import { apiClient } from './client';
 import {
+  Bill,
+  BoardTicket,
   BranchSummary,
+  PaymentInput,
+  PaymentOutcome,
   CartLine,
   KitchenTicket,
   OrderDetail,
@@ -12,6 +16,7 @@ import {
   LiveKPIs,
   MenuItemUpdate,
   PaymentBreakdown,
+  RosterEntry,
   ShiftClosureAudit,
   StaffUser,
   VoidApprovalItem,
@@ -30,6 +35,22 @@ export const QUERY_KEYS = {
   todayPayments: (branchId: string) => ['todayPayments', branchId] as const,
   zReport: (branchId: string, date?: string) => ['zReport', branchId, date ?? 'today'] as const,
 };
+
+// ---- Sign-in -----------------------------------------------------------------------
+
+/** Who can sign in on this tablet. Re-fetched each time the picker is shown so new hires appear. */
+export function useSignInRoster(deviceToken: string | undefined) {
+  return useQuery<RosterEntry[]>({
+    queryKey: ['signInRoster', deviceToken ?? ''],
+    queryFn: () => apiClient.getSignInRoster(deviceToken!),
+    enabled: !!deviceToken,
+    staleTime: 0,
+  });
+}
+
+export function useCreateDeviceSetupCode() {
+  return useMutation({ mutationFn: (branchId?: string) => apiClient.createDeviceSetupCode(branchId) });
+}
 
 // ---- Branches --------------------------------------------------------------------
 
@@ -112,6 +133,16 @@ export function useVoidApprovals(branchId: string, status?: 'pending' | 'approve
   });
 }
 
+/** The kitchen's answers to cancellation requests on an order; polls while one is still waiting. */
+export function useOrderVoidRequests(orderId: string | undefined) {
+  return useQuery<VoidApprovalItem[]>({
+    queryKey: ['orderVoidRequests', orderId ?? ''],
+    queryFn: () => apiClient.getOrderVoidRequests(orderId!),
+    enabled: !!orderId,
+    refetchInterval: (query) => (query.state.data?.some((r) => r.status === 'PENDING') ? 5000 : false),
+  });
+}
+
 function useReviewMutation(action: 'approve' | 'reject') {
   const queryClient = useQueryClient();
   return useMutation({
@@ -119,6 +150,7 @@ function useReviewMutation(action: 'approve' | 'reject') {
       action === 'approve' ? apiClient.approveVoidRequest(requestId, note) : apiClient.rejectVoidRequest(requestId, note),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['voidRequests'] });
+      queryClient.invalidateQueries({ queryKey: ['orderVoidRequests'] });
       queryClient.invalidateQueries({ queryKey: ['auditLog'] });
       queryClient.invalidateQueries({ queryKey: ['floorLayout'] });
       queryClient.invalidateQueries({ queryKey: ['livePulse'] });
@@ -221,6 +253,8 @@ export function useZReport(branchId: string, date?: string) {
 
 // ---- Waiter: orders & kitchen tickets ---------------------------------------------------
 
+export const BILL_KEYS = { forOrder: (orderId: string) => ['bill', orderId] as const };
+
 export const ORDER_KEYS = {
   order: (orderId: string) => ['order', orderId] as const,
   tickets: (orderId: string) => ['orderTickets', orderId] as const,
@@ -241,7 +275,7 @@ export function useOrderTickets(orderId?: string) {
     queryKey: ORDER_KEYS.tickets(orderId ?? ''),
     queryFn: () => apiClient.getOrderTickets(orderId!),
     enabled: !!orderId,
-    refetchInterval: 15000,
+    refetchInterval: 5000,
   });
 }
 
@@ -284,6 +318,28 @@ export function useSendToKitchen() {
   });
 }
 
+/** Open kitchen tickets for the branch, refreshed every few seconds for the board and the floor. */
+export function useKitchenBoard(branchId: string) {
+  return useQuery<BoardTicket[]>({
+    queryKey: ['kitchenBoard', branchId],
+    queryFn: () => apiClient.getKitchenBoard(branchId),
+    enabled: !!branchId,
+    refetchInterval: 5000,
+  });
+}
+
+export function useAdvanceTicket() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ kotId, status }: { kotId: string; status: 'preparing' | 'ready' | 'served' }) =>
+      apiClient.advanceTicket(kotId, status),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['kitchenBoard'] });
+      queryClient.invalidateQueries({ queryKey: ['orderTickets'] });
+    },
+  });
+}
+
 export function useCancelOrderLine() {
   const invalidate = useInvalidateOrder();
   return useMutation({
@@ -294,11 +350,15 @@ export function useCancelOrderLine() {
 }
 
 export function useRequestVoid() {
+  const queryClient = useQueryClient();
   const invalidate = useInvalidateOrder();
   return useMutation({
     mutationFn: ({ kotId, reason }: { kotId: string; reason: string; orderId: string }) =>
       apiClient.requestVoid(kotId, reason),
-    onSettled: (_data, _error, vars) => invalidate(vars.orderId),
+    onSettled: (_data, _error, vars) => {
+      invalidate(vars.orderId);
+      queryClient.invalidateQueries({ queryKey: ['orderVoidRequests', vars.orderId] });
+    },
   });
 }
 
@@ -307,6 +367,47 @@ export function useTransferTable() {
   return useMutation({
     mutationFn: ({ sourceTableId, targetTableId, reason }: { sourceTableId: string; targetTableId: string; reason?: string; orderId: string }) =>
       apiClient.transferTable(sourceTableId, targetTableId, reason),
+    onSettled: (_data, _error, vars) => invalidate(vars.orderId),
+  });
+}
+
+// ---- Billing -----------------------------------------------------------------------------
+
+export function useOrderBill(orderId: string | undefined, enabled = true) {
+  return useQuery<Bill | null>({
+    queryKey: BILL_KEYS.forOrder(orderId ?? ''),
+    queryFn: () => apiClient.getBillForOrder(orderId!),
+    enabled: !!orderId && enabled,
+  });
+}
+
+/** After any billing change the order status, bill and table colour all move together. */
+function useInvalidateBilling() {
+  const queryClient = useQueryClient();
+  const invalidateOrder = useInvalidateOrder();
+  return (orderId: string) => {
+    queryClient.invalidateQueries({ queryKey: BILL_KEYS.forOrder(orderId) });
+    invalidateOrder(orderId);
+  };
+}
+
+export function useGenerateBill() {
+  const invalidate = useInvalidateBilling();
+  return useMutation({
+    mutationFn: ({ orderId, idempotencyKey }: { orderId: string; idempotencyKey: string }) =>
+      apiClient.generateBill(orderId, idempotencyKey),
+    onSettled: (_data, _error, vars) => invalidate(vars.orderId),
+  });
+}
+
+export function useRecordPayment() {
+  const invalidate = useInvalidateBilling();
+  return useMutation<
+    PaymentOutcome,
+    Error,
+    { orderId: string; billId: string; payment: PaymentInput; idempotencyKey: string }
+  >({
+    mutationFn: ({ billId, payment, idempotencyKey }) => apiClient.recordPayment(billId, payment, idempotencyKey),
     onSettled: (_data, _error, vars) => invalidate(vars.orderId),
   });
 }

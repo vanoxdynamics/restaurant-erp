@@ -54,7 +54,7 @@ async def get_bill(db: AsyncSession, user: CurrentUser, bill_id: uuid.UUID) -> B
 
 async def list_bills(
     db: AsyncSession, user: CurrentUser, params: PageParams, branch_id: Optional[uuid.UUID],
-    status: Optional[BillStatus], on_date: Optional[date],
+    status: Optional[BillStatus], on_date: Optional[date], order_id: Optional[uuid.UUID] = None,
 ) -> Tuple[List[Bill], int]:
     branch_id = resolve_branch_id(user, branch_id)
     stmt = select(Bill).where(Bill.branch_id == branch_id).options(*BILL_LOADERS).order_by(Bill.created_at.desc())
@@ -62,6 +62,8 @@ async def list_bills(
         stmt = stmt.where(Bill.status == status.value)
     if on_date is not None:
         stmt = stmt.where(Bill.business_date == on_date)
+    if order_id is not None:
+        stmt = stmt.where(Bill.order_id == order_id)
     return await paginate(db, stmt, params)
 
 
@@ -164,9 +166,9 @@ async def _new_payment(
     db: AsyncSession, user: CurrentUser, bill: Bill, payment: PaymentCreate, amount: Decimal,
     idempotency_key: Optional[str],
 ) -> Payment:
+    # Cash is reconciled per business day (Z-report), so no open shift is required; one is
+    # attached when the user happens to have it, which keeps per-shift variance working.
     shift = await get_open_shift(db, user.id)
-    if payment.payment_mode == PaymentMode.CASH and shift is None:
-        raise Conflict("Open a shift before accepting cash", code="no_open_shift")
     record = Payment(
         bill_id=bill.id,
         payment_mode=payment.payment_mode.value,

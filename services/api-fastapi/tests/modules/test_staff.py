@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -119,3 +120,119 @@ async def test_manager_sees_reconciliation(client, manager):
     r = await client.post(f"{API}/staff/shifts/close", json={"blind_drop_cash": "100.00"}, headers=auth_headers(manager))
     assert r.status_code == 200
     assert r.json()["expected_cash"] == "100.00" and r.json()["cash_variance"] == "0.00"
+
+
+# --- Who's-working sign-in (device token, staff roster, per-person PIN) ----------------
+
+
+async def _make_code(client, manager, branch) -> str:
+    r = await client.post(f"{API}/staff/devices/setup-codes", json={"branch_id": str(branch.id)},
+                          headers=auth_headers(manager))
+    assert r.status_code == 201, r.text
+    return r.json()["code"]
+
+
+async def _link_device(client, manager, branch, device_id="pos-test-1"):
+    code = await _make_code(client, manager, branch)
+    r = await client.post(f"{API}/staff/devices/link", json={"code": code, "device_id": device_id})
+    assert r.status_code == 200, r.text
+    return r.json()["device_token"]
+
+
+async def test_only_a_manager_password_session_can_make_a_setup_code(client, branch, manager, waiter):
+    body = {"branch_id": str(branch.id)}
+    url = f"{API}/staff/devices/setup-codes"
+    assert (await client.post(url, json=body, headers=auth_headers(waiter))).status_code == 403
+    assert (await client.post(url, json=body, headers=auth_headers(manager, auth_method="pin"))).status_code == 403
+    assert (await client.post(url, json=body)).status_code == 401
+    ok = await client.post(url, json=body, headers=auth_headers(manager))
+    assert ok.status_code == 201
+    assert re.fullmatch(r"[A-Z2-9]{4}-[A-Z2-9]{4}", ok.json()["code"]) and ok.json()["expires_in"] == 900
+
+
+async def test_setup_code_links_one_device_once(client, branch, manager):
+    code = await _make_code(client, manager, branch)
+    # No sign-in needed, and the code is read case- and dash-insensitively.
+    first = await client.post(f"{API}/staff/devices/link",
+                              json={"code": code.lower().replace("-", ""), "device_id": "pos-a"})
+    assert first.status_code == 200
+    assert first.json()["branch_id"] == str(branch.id) and first.json()["branch_name"] == branch.name
+    claims = decode_access_token(first.json()["device_token"])
+    assert claims["typ"] == "device" and claims["branch_id"] == str(branch.id)
+
+    reuse = await client.post(f"{API}/staff/devices/link", json={"code": code, "device_id": "pos-b"})
+    assert reuse.status_code == 401 and reuse.json()["error"]["code"] == "invalid_setup_code"
+
+
+async def test_wrong_setup_codes_are_rate_limited(client, branch, manager):
+    for _ in range(5):
+        r = await client.post(f"{API}/staff/devices/link", json={"code": "AAAA-BBBB", "device_id": "pos-a"})
+        assert r.status_code == 401
+    code = await _make_code(client, manager, branch)
+    locked = await client.post(f"{API}/staff/devices/link", json={"code": code, "device_id": "pos-a"})
+    assert locked.status_code == 429  # even a real code is refused while this address is locked out
+
+
+async def test_roster_needs_a_device_token_and_shows_only_this_branch(
+    client, db, branch, other_branch, manager, waiter, kitchen
+):
+    outsider = await factories.make_staff(db, other_branch, role="waiter", pin="4444")
+    inactive = await factories.make_staff(db, branch, role="waiter", pin="5555", is_active=False)
+    token = await _link_device(client, manager, branch)
+
+    r = await client.get(f"{API}/staff/auth/roster", headers={"X-Device-Token": token})
+    assert r.status_code == 200
+    ids = {e["id"] for e in r.json()}
+    assert {str(waiter.id), str(kitchen.id), str(manager.id)} <= ids
+    assert str(outsider.id) not in ids and str(inactive.id) not in ids
+    assert set(r.json()[0]) == {"id", "full_name", "role"}  # no PIN, username or other details
+
+    assert (await client.get(f"{API}/staff/auth/roster")).status_code == 401
+    assert (await client.get(f"{API}/staff/auth/roster", headers={"X-Device-Token": "garbage"})).status_code == 401
+    # A user's own session token is not a device token.
+    user_token = auth_headers(manager)["Authorization"].split()[1]
+    assert (await client.get(f"{API}/staff/auth/roster", headers={"X-Device-Token": user_token})).status_code == 401
+
+
+async def test_device_token_is_not_a_user_session(client, branch, manager):
+    token = await _link_device(client, manager, branch)
+    r = await client.get(f"{API}/staff/me", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 401
+
+
+async def test_pin_login_for_a_chosen_person(client, db, branch, other_branch, waiter, kitchen):
+    ok = await client.post(f"{API}/staff/auth/pin",
+                           json={"pin": "9004", "branch_id": str(branch.id), "staff_id": str(waiter.id)})
+    assert ok.status_code == 200 and ok.json()["user_id"] == str(waiter.id)
+
+    # Someone else's PIN does not work for this person, even though that PIN is valid in the branch.
+    wrong = await client.post(f"{API}/staff/auth/pin",
+                              json={"pin": "9005", "branch_id": str(branch.id), "staff_id": str(waiter.id)})
+    assert wrong.status_code == 401
+
+    # A person from another branch, or an inactive one, cannot sign in here.
+    elsewhere = await factories.make_staff(db, other_branch, role="waiter", pin="4444")
+    r = await client.post(f"{API}/staff/auth/pin",
+                          json={"pin": "4444", "branch_id": str(branch.id), "staff_id": str(elsewhere.id)})
+    assert r.status_code == 401
+
+
+async def test_lockout_follows_the_person_not_the_device(client, db, branch, waiter, kitchen):
+    for attempt in range(5):  # a fresh device id each time does not reset the count
+        r = await client.post(
+            f"{API}/staff/auth/pin",
+            json={"pin": "0000", "branch_id": str(branch.id), "staff_id": str(waiter.id), "device_id": f"d{attempt}"},
+        )
+        assert r.status_code == 401
+    locked = await client.post(
+        f"{API}/staff/auth/pin",
+        json={"pin": "9004", "branch_id": str(branch.id), "staff_id": str(waiter.id), "device_id": "brand-new"},
+    )
+    assert locked.status_code == 429  # even the right PIN is refused while locked
+    assert await db.scalar(select(AuditLog).where(AuditLog.action_type == "login_lockout"))
+
+    # Everyone else is unaffected.
+    other = await client.post(f"{API}/staff/auth/pin",
+                              json={"pin": "9005", "branch_id": str(branch.id), "staff_id": str(kitchen.id),
+                                    "device_id": "brand-new"})
+    assert other.status_code == 200

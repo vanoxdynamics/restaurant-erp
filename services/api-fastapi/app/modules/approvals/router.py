@@ -1,10 +1,11 @@
 import uuid
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, get_current_user, require_roles, resolve_branch_id
+from app.core.errors import Forbidden
 from app.core.database import get_db
 from app.core.enums import Role, VoidRequestStatus
 from app.core.pagination import PageParams, page_params
@@ -15,19 +16,42 @@ from app.schemas.common import Page
 router = APIRouter(tags=["Approvals"], dependencies=[Depends(get_current_user)])
 
 requesters = require_roles(Role.OWNER, Role.MANAGER, Role.CAPTAIN, Role.WAITER, Role.CASHIER, Role.KITCHEN)
-reviewers = require_roles(Role.OWNER, Role.MANAGER, password_session=True)
+
+
+async def reviewers(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    """
+    Kitchen staff review cancellations from their PIN-signed-in device. Managers and owners can
+    still step in, but only from a password session (the admin app).
+    """
+    if user.role == Role.KITCHEN:
+        return user
+    if user.role in (Role.OWNER, Role.MANAGER):
+        if user.auth_method != "pwd":
+            raise Forbidden("This action requires a password login", code="password_login_required")
+        return user
+    raise Forbidden("Your role is not allowed to perform this action")
+
 
 
 @router.post("/kots/{kot_id}/void-requests", response_model=VoidRequestRead, status_code=status.HTTP_201_CREATED)
 async def create_void_request(
     kot_id: uuid.UUID,
     payload: VoidRequestCreate,
-    background: BackgroundTasks,
     user: CurrentUser = Depends(requesters),
     db: AsyncSession = Depends(get_db),
 ):
-    """Ask a manager to approve voiding this KOT remotely."""
-    return await service.create_void_request(db, user, kot_id, payload.reason, background)
+    """Ask the kitchen to approve cancelling this KOT."""
+    return await service.create_void_request(db, user, kot_id, payload.reason)
+
+
+@router.get("/orders/{order_id}/void-requests", response_model=List[VoidRequestRead])
+async def list_order_void_requests(
+    order_id: uuid.UUID,
+    user: CurrentUser = Depends(requesters),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancellation requests raised on an order, newest first, so floor staff can see the kitchen's answer."""
+    return await service.list_order_void_requests(db, user, order_id)
 
 
 @router.get("/approvals/void-requests", response_model=Page[VoidRequestRead])

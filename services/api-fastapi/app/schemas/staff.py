@@ -29,6 +29,38 @@ class PINAuthRequest(BaseModel):
     pin: Pin
     branch_id: uuid.UUID
     device_id: Optional[str] = Field(default=None, max_length=100)
+    # When set, the PIN is checked against this one person (and locks out per person), the way the
+    # POS "who's working" screen signs in. Without it the PIN alone identifies the user (legacy).
+    staff_id: Optional[uuid.UUID] = None
+
+
+class DeviceSetupCodeCreate(BaseModel):
+    branch_id: Optional[uuid.UUID] = None
+
+
+class DeviceSetupCode(BaseModel):
+    code: str
+    branch_id: uuid.UUID
+    branch_name: str
+    expires_in: int
+
+
+class DeviceLinkRequest(BaseModel):
+    code: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8, max_length=12)]
+    device_id: str = Field(min_length=3, max_length=100)
+
+
+class DeviceTokenResponse(BaseModel):
+    device_token: str
+    branch_id: uuid.UUID
+    branch_name: str
+
+
+class RosterEntry(BaseModel):
+    id: uuid.UUID
+    full_name: str
+    role: Role
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PasswordLoginRequest(BaseModel):

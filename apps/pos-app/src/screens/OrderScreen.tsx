@@ -1,22 +1,26 @@
 import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { Badge, BadgeProps, Button, colors, fonts, humanizeLabel, radii, spacing, typography } from '@repo/shared-ui';
-import { formatPaiseToRupees } from '@repo/shared-utils';
+import { formatPaiseToRupees, StaffRole } from '@repo/shared-utils';
 import {
   ApiError,
   CartLine,
   KitchenTicket,
   MenuItem,
   OrderLine,
+  VoidApprovalItem,
+  useAdvanceTicket,
   useCancelOrderLine,
   useFloorLayout,
   useOrder,
   useOrderTickets,
+  useOrderVoidRequests,
   useRequestVoid,
   useSendToKitchen,
   useTransferTable,
 } from '@repo/api-client';
 import { ItemOptionsSheet, StepButton } from '../components/ItemOptionsSheet';
+import { CartBar } from '../components/CartBar';
 import { MenuPanel } from '../components/MenuPanel';
 import { NoteSheet, TransferSheet, VoidRequestSheet } from '../components/Sheets';
 import { QueryState } from '../components/QueryState';
@@ -24,8 +28,10 @@ import { TopBar } from '../components/TopBar';
 import { Icon } from '../components/Icon';
 import { useCartStore } from '../stores/cartStore';
 import { useDeviceStore } from '../stores/deviceStore';
+import { useSessionStore } from '../stores/sessionStore';
 
 const EMPTY_CART: CartLine[] = [];
+const BILLING_ROLES: StaffRole[] = [StaffRole.OWNER, StaffRole.MANAGER, StaffRole.CASHIER];
 const errorText = (e: unknown) => (e instanceof ApiError ? e.message : 'Something went wrong. Try again.');
 const money = (paise: number) => formatPaiseToRupees(paise, { decimals: 0 });
 
@@ -41,12 +47,15 @@ export interface OrderScreenProps {
   orderId: string;
   title: string;
   onBack: () => void;
+  /** Opens the bill for this order; only offered to staff who may bill. */
+  onBill?: () => void;
 }
 
-export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack }) => {
+export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack, onBill }) => {
   const { width } = useWindowDimensions();
   const wide = width >= 900;
   const device = useDeviceStore((s) => s.device)!;
+  const role = useSessionStore((s) => s.user?.role);
 
   const orderQuery = useOrder(orderId);
   const ticketsQuery = useOrderTickets(orderId);
@@ -55,11 +64,21 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
   const tickets = ticketsQuery.data ?? [];
 
   const cart = useCartStore((s) => s.carts[orderId] ?? EMPTY_CART);
-  const { add, setQuantity, setNotes, clear, markVoidRequested } = useCartStore();
-  const voidRequested = useCartStore((s) => s.voidRequested);
+  const { add, setQuantity, setNotes, clear } = useCartStore();
+
+  // The kitchen's newest answer per ticket, so the waiter sees "waiting" or why it was declined.
+  const voidRequestsQuery = useOrderVoidRequests(orderId);
+  const latestRequest = useMemo(() => {
+    const byTicket = new Map<string, VoidApprovalItem>();
+    for (const request of voidRequestsQuery.data ?? []) {
+      if (!byTicket.has(request.kot_id)) byTicket.set(request.kot_id, request);
+    }
+    return byTicket;
+  }, [voidRequestsQuery.data]);
 
   const send = useSendToKitchen();
   const cancelLine = useCancelOrderLine();
+  const advanceTicket = useAdvanceTicket();
   const requestVoid = useRequestVoid();
   const transfer = useTransferTable();
 
@@ -76,12 +95,24 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
   const unsentLines = (order?.lines ?? []).filter((l) => l.status === 'ordered');
   const cartTotal = cart.reduce((n, c) => n + c.unit_price_paise * c.quantity, 0);
   const cartCount = cart.reduce((n, c) => n + c.quantity, 0) + unsentLines.reduce((n, l) => n + l.quantity, 0);
+  const pendingTotal = cartTotal + unsentLines.reduce((n, l) => n + l.line_total_paise, 0);
+  // Per item, how many are in the order being built, so the menu can show them and step them down.
+  const pickedQuantities = useMemo(() => {
+    const byItem: Record<string, number> = {};
+    for (const line of cart) byItem[line.item_id] = (byItem[line.item_id] ?? 0) + line.quantity;
+    return byItem;
+  }, [cart]);
   const sentTickets = useMemo(
     () => tickets.slice().sort((a, b) => b.created_at.localeCompare(a.created_at)),
     [tickets],
   );
   const lineById = useMemo(() => new Map((order?.lines ?? []).map((l) => [l.id, l])), [order]);
   const editable = order?.status === 'active';
+
+  const unpick = (item: MenuItem) => {
+    const line = [...cart].reverse().find((c) => c.item_id === item.id);
+    if (line) setQuantity(orderId, line.key, line.quantity - 1);
+  };
 
   const pick = (item: MenuItem) => {
     setNotice(null);
@@ -112,6 +143,15 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
     }
   };
 
+  const markServed = async (ticket: KitchenTicket) => {
+    setError(null);
+    try {
+      await advanceTicket.mutateAsync({ kotId: ticket.id, status: 'served' });
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+
   const removeUnsent = async (line: OrderLine) => {
     setError(null);
     try {
@@ -126,8 +166,7 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
     setSheetError(null);
     try {
       await requestVoid.mutateAsync({ kotId: voidTicket.id, reason, orderId });
-      markVoidRequested(voidTicket.id);
-      setNotice(`Void request sent for KOT ${voidTicket.kot_number.split('-').pop()}`);
+      setNotice(`Cancel request sent to the kitchen for KOT ${voidTicket.kot_number.split('-').pop()}`);
       setVoidTicket(null);
     } catch (e) {
       setSheetError(errorText(e));
@@ -205,14 +244,19 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
         <Text style={[styles.sectionTitle, { marginTop: spacing.xl }]}>Sent to kitchen</Text>
         <QueryState query={ticketsQuery} isEmpty={sentTickets.length === 0} emptyText="Nothing sent yet.">
           {sentTickets.map((ticket) => {
-            const voidable = editable && (ticket.status === 'queued' || ticket.status === 'preparing');
+            const voidable = editable && (ticket.status === 'queued' || ticket.status === 'preparing' || ticket.status === 'ready');
+            const request = latestRequest.get(ticket.id);
             return (
               <View key={ticket.id} style={[styles.ticket, ticket.status === 'voided' ? { opacity: 0.55 } : null]}>
                 <View style={styles.ticketHead}>
                   <Text style={styles.ticketTitle}>
                     KOT {ticket.kot_number.split('-').pop()} · {humanizeLabel(ticket.station)}
                   </Text>
-                  <Badge label={humanizeLabel(ticket.status.toUpperCase())} variant={TICKET_BADGE[ticket.status]} size="sm" />
+                  <Badge
+                    label={ticket.status === 'ready' ? 'Ready, pick up' : humanizeLabel(ticket.status.toUpperCase())}
+                    variant={TICKET_BADGE[ticket.status]}
+                    size="sm"
+                  />
                 </View>
                 {ticket.items.map((item) => {
                   const line = lineById.get(item.order_item_id);
@@ -228,20 +272,36 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
                     </View>
                   );
                 })}
-                {voidable && voidRequested[ticket.id] ? (
-                  <Text style={styles.voidRequested}>Void requested · waiting for manager</Text>
-                ) : voidable ? (
+                {ticket.status === 'ready' ? (
                   <Button
-                    title="Request void"
-                    variant="ghost"
-                    size="sm"
-                    onPress={() => {
-                      setSheetError(null);
-                      setVoidTicket(ticket);
-                    }}
-                    textStyle={{ color: colors.danger }}
-                    style={{ alignSelf: 'flex-start', marginTop: spacing.xs, paddingHorizontal: 0 }}
+                    title="Mark served"
+                    variant="success"
+                    onPress={() => markServed(ticket)}
+                    loading={advanceTicket.isPending && advanceTicket.variables?.kotId === ticket.id}
+                    style={{ marginTop: spacing.sm }}
                   />
+                ) : null}
+                {voidable && request?.status === 'PENDING' ? (
+                  <Text style={styles.voidRequested}>Cancel requested · waiting for kitchen</Text>
+                ) : voidable ? (
+                  <>
+                    {request?.status === 'REJECTED' ? (
+                      <Text style={styles.voidDeclined}>
+                        Kitchen declined{request.review_note ? `: ${request.review_note}` : ''}
+                      </Text>
+                    ) : null}
+                    <Button
+                      title="Request cancel"
+                      variant="ghost"
+                      size="sm"
+                      onPress={() => {
+                        setSheetError(null);
+                        setVoidTicket(ticket);
+                      }}
+                      textStyle={{ color: colors.danger }}
+                      style={{ alignSelf: 'flex-start', marginTop: spacing.xs, paddingHorizontal: 0 }}
+                    />
+                  </>
                 ) : null}
               </View>
             );
@@ -266,6 +326,14 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
               icon={<Icon name="shuffle" size={16} color={colors.text} />}
             />
           ) : null}
+          {onBill && role && BILLING_ROLES.includes(role) && order && ['active', 'billed'].includes(order.status) && order.lines.length > 0 ? (
+            <Button
+              title={order.status === 'billed' ? 'Payment' : 'Bill'}
+              variant="secondary"
+              onPress={onBill}
+              disabled={cartCount > 0}
+            />
+          ) : null}
           <Button
             title={cartCount ? `Send to kitchen · ${cartCount}` : 'Send to kitchen'}
             onPress={sendToKitchen}
@@ -288,7 +356,7 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
         {wide ? (
           <View style={styles.split}>
             <View style={styles.menuSide}>
-              <MenuPanel onPick={pick} />
+              <MenuPanel onPick={pick} quantities={pickedQuantities} onDecrement={unpick} />
             </View>
             {orderPanel}
           </View>
@@ -309,7 +377,18 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
                 </TouchableOpacity>
               ))}
             </View>
-            {tab === 'menu' ? <MenuPanel onPick={pick} /> : orderPanel}
+            {tab === 'menu' ? (
+              <>
+                <View style={{ flex: 1 }}>
+                  <MenuPanel onPick={pick} quantities={pickedQuantities} onDecrement={unpick} />
+                </View>
+                {editable && cartCount > 0 ? (
+                  <CartBar count={cartCount} totalPaise={pendingTotal} onPress={() => setTab('order')} />
+                ) : null}
+              </>
+            ) : (
+              orderPanel
+            )}
           </View>
         )}
       </QueryState>
@@ -498,6 +577,12 @@ const styles = StyleSheet.create({
   voidRequested: {
     ...typography.caption,
     color: colors.billed,
+    fontFamily: fonts.semibold,
+    marginTop: spacing.sm,
+  },
+  voidDeclined: {
+    ...typography.caption,
+    color: colors.danger,
     fontFamily: fonts.semibold,
     marginTop: spacing.sm,
   },

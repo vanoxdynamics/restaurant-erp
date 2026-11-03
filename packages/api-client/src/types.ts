@@ -157,18 +157,24 @@ export interface VoidApprovalItem {
   id: string;
   kot_id: string;
   kot_number: string;
+  station: KitchenStation;
+  /** Where the ticket is in the kitchen now: a 'ready' ticket is already cooked. */
+  kot_status: 'queued' | 'preparing' | 'ready' | 'served' | 'voided';
   order_id: string;
   table_number: string;
   requested_by_user_id: string;
   requested_by_user_name: string;
   item_name: string;
   quantity: number;
+  items: { name: string; quantity: number }[];
   amount_paise: number;
   wastage_reason: WastageReason | string;
   status: VoidApprovalStatus;
   requested_at: string;
   reviewed_at?: string;
   reviewed_by_user_id?: string;
+  /** Why the kitchen declined (or any note left on approval). */
+  review_note?: string;
 }
 
 // ==========================================
@@ -234,6 +240,28 @@ export interface StaffUser {
   is_active: boolean;
   phone?: string;
   last_login?: string;
+}
+
+/** One person on the pre-login 'who is working' screen: no PIN, username or contact details. */
+export interface RosterEntry {
+  id: string;
+  full_name: string;
+  role: StaffRole;
+}
+
+/** A one-time code a manager shows so a new tablet can be linked to the branch. */
+export interface DeviceSetupCode {
+  code: string;
+  branch_id: string;
+  branch_name: string;
+  expires_in: number;
+}
+
+/** What linking hands back; kept on the tablet to unlock the roster. */
+export interface DeviceLink {
+  device_token: string;
+  branch_id: string;
+  branch_name: string;
 }
 
 export interface ShiftClosureAudit {
@@ -424,6 +452,20 @@ export interface OrderDetail {
   lines: OrderLine[];
 }
 
+/** A ticket on the kitchen board: what to cook, for which table, and how long it has waited. */
+export interface BoardTicket {
+  id: string;
+  kot_number: string;
+  station: KitchenStation;
+  status: 'queued' | 'preparing' | 'ready' | 'served' | 'voided';
+  /** Table number, or 'Takeaway'. */
+  table_label: string;
+  order_id: string;
+  order_number: string;
+  items: { name: string; quantity: number; notes?: string }[];
+  created_at: string;
+}
+
 export interface KitchenTicket {
   id: string;
   kot_number: string;
@@ -445,4 +487,49 @@ export interface CartLine {
   unit_price_paise: number;
   quantity: number;
   notes?: string;
+}
+
+// ==========================================
+// BILLING
+// ==========================================
+
+export interface BillPayment {
+  id: string;
+  payment_mode: PaymentMode;
+  amount_paise: number;
+  reference_id?: string;
+  /** Who captured it: 'manual' (cashier keyed it in) today; a card-terminal provider later. */
+  provider: string;
+  status: 'pending' | 'success' | 'failed';
+  created_at: string;
+}
+
+export interface Bill {
+  id: string;
+  order_id: string;
+  bill_number: string;
+  status: 'unpaid' | 'partially_paid' | 'paid' | 'voided' | 'refunded';
+  subtotal_paise: number;
+  cgst_paise: number;
+  sgst_paise: number;
+  discount_paise: number;
+  grand_total_paise: number;
+  paid_paise: number;
+  balance_due_paise: number;
+  settled_at?: string;
+  payments: BillPayment[];
+  created_at: string;
+}
+
+/** A tender the cashier is recording. UPI and card need the UTR / approval code as reference. */
+export interface PaymentInput {
+  payment_mode: PaymentMode;
+  amount_paise: number;
+  reference_id?: string;
+}
+
+export interface PaymentOutcome {
+  bill: Bill;
+  /** Cash handed over beyond the balance, to be returned to the guest. */
+  change_due_paise: number;
 }

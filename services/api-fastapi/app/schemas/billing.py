@@ -28,6 +28,7 @@ class PaymentRead(BaseModel):
     amount: Decimal
     reference_id: Optional[str] = None
     status: PaymentStatus
+    provider: str = "manual"
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 

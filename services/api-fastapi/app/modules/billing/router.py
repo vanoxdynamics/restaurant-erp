@@ -41,12 +41,13 @@ async def list_bills(
     branch_id: Optional[uuid.UUID] = None,
     status: Optional[BillStatus] = None,
     business_date: Optional[date] = None,
+    order_id: Optional[uuid.UUID] = None,
     params: PageParams = Depends(page_params),
     user: CurrentUser = Depends(cashier_roles),
     db: AsyncSession = Depends(get_db),
 ):
     """List bills for a branch."""
-    items, total = await service.list_bills(db, user, params, branch_id, status, business_date)
+    items, total = await service.list_bills(db, user, params, branch_id, status, business_date, order_id)
     return Page(items=items, total=total, limit=params.limit, offset=params.offset)
 
 

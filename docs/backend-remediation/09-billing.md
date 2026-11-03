@@ -60,7 +60,8 @@ each line's `tax_rate_snapshot`, not a hard-coded 2.5%.
    then store `amount = balance_due` and return `change_due` in the response (add the field to a
    `PaymentResult` schema). Decide and document; **default: allow cash overpay with change, reject others**.
 3. Insert `Payment(status=success, received_by_id=user.id, shift_id=user's open shift, idempotency_key)`.
-   Cash payments **require** an open shift for the receiver (`Conflict("no_open_shift")`) so blind-drop math works.
+   Cash does **not** require an open shift: cash is reconciled per business day via the Z-report. If the receiver
+   happens to have an open shift, the payment is tagged with it so per-shift blind-drop variance still works.
 4. `paid_amount += amount`; `status = paid` when `paid_amount == grand_total` (set `settled_at=utcnow()`),
    else `partially_paid`.
 5. On `paid`: `order.status = completed`; table → `vacant` (and clear merges pointing at it); schedule
@@ -90,7 +91,7 @@ doesn't apply to splits — keep it simple), insert all payments, settle once. A
   10% discount OK without approval, 11% without approver → 403, with manager PIN → OK + audit row; order → billed.
 - Idempotent replay of generate/payment returns cached response and doesn't double-insert.
 - Payment: partial → `partially_paid`; final → `paid`, order completed, table vacant; card overpay → 422;
-  cash overpay returns change; cash without open shift → 409; paying a voided bill → 409.
+  cash overpay returns change; cash without an open shift succeeds untagged; paying a voided bill → 409.
 - Concurrency: two simultaneous payments for the full balance → exactly one succeeds.
 - Split: exact sum settles; off by ₹0.01 → 422 and nothing persisted.
 - UPI: URL contains `am=` balance, `tr=` bill number, URL-encoded payee name; no VPA → 422.

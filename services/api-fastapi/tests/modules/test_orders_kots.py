@@ -95,6 +95,28 @@ async def test_concurrent_fires_create_one_set(client, db, waiter):
     assert await db.scalar(select(func.count(KOT.id))) == 1
 
 
+async def test_board_labels_tickets_and_waiter_serves_ready_ones(client, db, waiter, kitchen, table):
+    item = await factories.make_menu_item(db)
+    order = await create_order(client, waiter, table, items=[line(item)])
+    kot = (await fire(client, waiter, order["id"]))[0]
+    url = f"{API}/kots/{kot['id']}/status"
+
+    board = await client.get(f"{API}/kots", headers=auth_headers(kitchen))
+    assert [(k["table_number"], k["order_number"], k["status"]) for k in board.json()] == [
+        (table.table_number, order["order_number"], "queued")
+    ]
+
+    # Floor staff can't run the kitchen's stages, and can't serve food that isn't ready.
+    assert (await client.patch(url, json={"status": "preparing"}, headers=auth_headers(waiter))).status_code == 403
+    assert (await client.patch(url, json={"status": "served"}, headers=auth_headers(waiter))).status_code == 409
+    for status in ("preparing", "ready"):
+        assert (await client.patch(url, json={"status": status}, headers=auth_headers(kitchen))).status_code == 200
+
+    served = await client.patch(url, json={"status": "served"}, headers=auth_headers(waiter))
+    assert served.status_code == 200 and served.json()["status"] == "served"
+    assert served.json()["table_number"] == table.table_number
+
+
 async def test_kot_status_flow(client, db, waiter, kitchen):
     item = await factories.make_menu_item(db)
     order = await create_order(client, waiter, items=[line(item)])

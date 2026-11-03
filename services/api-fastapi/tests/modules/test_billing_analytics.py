@@ -61,8 +61,11 @@ async def test_small_discount_needs_no_approval(client, db, waiter, cashier):
 async def test_partial_then_full_payment_settles(client, db, waiter, cashier, table, events):
     order = await _ready_order(client, db, waiter, table)
     b = await bill(client, cashier, order["id"])
+    # Cash needs no open shift; the payment just isn't tied to one.
     no_shift = await pay(client, cashier, b["id"], "100.00")
-    assert no_shift.status_code == 409 and no_shift.json()["error"]["code"] == "no_open_shift"
+    assert no_shift.status_code == 200 and no_shift.json()["bill"]["status"] == "partially_paid"
+    payment_row = await db.get(Payment, no_shift.json()["payment"]["id"])
+    assert payment_row.shift_id is None and payment_row.received_by_id == cashier.id
     await open_shift(client, cashier)
 
     r = await pay(client, cashier, b["id"], "200.00", "card", reference="AUTH9")
@@ -72,7 +75,7 @@ async def test_partial_then_full_payment_settles(client, db, waiter, cashier, ta
 
     r = await pay(client, cashier, b["id"], "400.00")  # cash: change returned
     assert r.status_code == 200, r.text
-    assert r.json()["change_due"] == "75.00"
+    assert r.json()["change_due"] == "175.00"
     assert r.json()["bill"]["status"] == "paid" and r.json()["bill"]["balance_due"] == "0.00"
     o = await client.get(f"{API}/orders/{order['id']}", headers=auth_headers(waiter))
     assert o.json()["status"] == "completed"
@@ -81,6 +84,21 @@ async def test_partial_then_full_payment_settles(client, db, waiter, cashier, ta
 
     closed = await pay(client, cashier, b["id"], "1.00")
     assert closed.status_code == 409
+
+
+async def test_find_bill_by_order_and_payment_provider(client, db, waiter, cashier):
+    order = await _ready_order(client, db, waiter)
+    other = await _ready_order(client, db, waiter)
+    b = await bill(client, cashier, order["id"])
+    await bill(client, cashier, other["id"])
+    await open_shift(client, cashier)
+    r = await pay(client, cashier, b["id"], "100.00")
+    assert r.json()["payment"]["provider"] == "manual"
+
+    found = await client.get(f"{API}/billing/bills", params={"order_id": order["id"]}, headers=auth_headers(cashier))
+    assert found.status_code == 200
+    assert [x["id"] for x in found.json()["items"]] == [b["id"]]
+    assert found.json()["items"][0]["payments"][0]["provider"] == "manual"
 
 
 async def test_payment_idempotent_replay(client, db, waiter, cashier):

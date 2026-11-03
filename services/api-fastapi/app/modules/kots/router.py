@@ -22,7 +22,6 @@ router = APIRouter(
 
 board_roles = require_roles(Role.OWNER, Role.MANAGER, Role.CAPTAIN, Role.KITCHEN, Role.WAITER, Role.CASHIER)
 fire_roles = require_roles(Role.OWNER, Role.MANAGER, Role.CAPTAIN, Role.WAITER, Role.CASHIER)
-kitchen_roles = require_roles(Role.OWNER, Role.MANAGER, Role.KITCHEN)
 void_roles = require_roles(Role.OWNER, Role.MANAGER, Role.CAPTAIN, Role.WAITER, Role.CASHIER, Role.KITCHEN)
 
 KOTList = RootModel[List[KOTRead]]
@@ -68,10 +67,13 @@ async def fire_kot_batch(
 async def update_kot_status(
     kot_id: uuid.UUID,
     payload: KOTStatusUpdate,
-    user: CurrentUser = Depends(kitchen_roles),
+    user: CurrentUser = Depends(board_roles),
     db: AsyncSession = Depends(get_db),
 ):
-    """Advance KOT status (queued -> preparing -> ready -> served)."""
+    """
+    Advance KOT status (queued -> preparing -> ready -> served). The kitchen runs the first
+    stages; floor staff may only mark a ready ticket served.
+    """
     return await service.update_kot_status(db, user, kot_id, payload.status)
 
 
