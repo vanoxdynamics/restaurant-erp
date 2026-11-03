@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,11 @@ class ValidationFailed(DomainError):
     code = "validation_failed"
 
 
+class PayloadTooLarge(DomainError):
+    status_code = 413
+    code = "payload_too_large"
+
+
 class Forbidden(DomainError):
     status_code = 403
     code = "forbidden"
@@ -92,6 +97,13 @@ def register_exception_handlers(app: FastAPI) -> None:
             error_body("stale_version", "The record was modified by another request; reload and retry."),
             status_code=409,
         )
+
+    @app.exception_handler(DBAPIError)
+    async def handle_db_error(request: Request, exc: DBAPIError) -> JSONResponse:
+        # Text the database cannot store (NUL bytes, invalid UTF-8) is the client's mistake, not a server fault.
+        if "invalid byte sequence" in str(exc.orig):
+            return JSONResponse(error_body("invalid_characters", "The request contains characters that cannot be stored."), status_code=422)
+        raise exc
 
     @app.exception_handler(IntegrityError)
     async def handle_integrity(request: Request, exc: IntegrityError) -> JSONResponse:

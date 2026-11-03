@@ -6,9 +6,10 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser, require_roles, resolve_branch_id
+from app.core.auth import CurrentUser, require_module, require_roles, resolve_branch_id
 from app.core.database import get_db
 from app.core.enums import AuditAction, Role
+from app.core.modules import ModuleKey
 from app.core.pagination import PageParams, page_params
 from app.core.redis import get_redis
 from app.modules.analytics import service
@@ -17,7 +18,11 @@ from app.schemas.common import Page
 
 analysts = require_roles(Role.OWNER, Role.MANAGER, password_session=True)
 
-router = APIRouter(prefix="/analytics", tags=["Analytics & Fraud Detection"])
+router = APIRouter(
+    prefix="/analytics",
+    tags=["Analytics & Fraud Detection"],
+    dependencies=[Depends(require_module(ModuleKey.ANALYTICS))],
+)
 
 
 @router.get("/kpis/live", response_model=LiveKPIsResponse)

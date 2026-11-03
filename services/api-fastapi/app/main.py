@@ -8,18 +8,25 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.core.database import dispose_engine, engine
+from app.core.database import AsyncSessionLocal, dispose_engine, engine, rls_status
 from app.core.errors import register_exception_handlers
 from app.core.events import set_publisher
 from app.core.logging import RequestIdMiddleware, configure_logging
+from app.core.platform_middleware import PlatformGuardMiddleware
 from app.core.redis import close_redis_pool, redis_client
 from app.modules.analytics import router as analytics_router
 from app.modules.approvals import router as approvals_router
 from app.modules.billing import router as billing_router
 from app.modules.catalog import router as catalog_router
+from app.modules.entitlements import router as entitlements_router
 from app.modules.floor import router as floor_router
 from app.modules.kots import router as kots_router
 from app.modules.orders import router as orders_router
+from app.modules.platform.billing_router import router as platform_billing_router
+from app.modules.platform.orgs_router import router as platform_orgs_router
+from app.modules.platform.router import auth_router as platform_auth_router
+from app.modules.platform.security_router import router as platform_security_router
+from app.modules.platform.router import router as platform_router
 from app.modules.staff import router as staff_router
 from app.realtime import realtime_manager
 from app.realtime import router as realtime_router
@@ -52,6 +59,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if any(v != "ok" for v in status.values()):
         logger.error("Startup dependency check failed: %s", status)
         raise RuntimeError(f"Dependencies unavailable: {status}")
+    async with AsyncSessionLocal() as db:
+        rls = await rls_status(db)
+    if rls != "enforced":
+        # Row-level security is a backstop, not the only defence; but in production it should be real.
+        (logger.error if settings.is_production else logger.warning)(
+            "Row-level security is NOT enforced (%s). Connect as a non-superuser role or set DB_SET_ROLE.", rls)
     set_publisher(realtime_manager.publish)
     realtime_manager.start()
     yield
@@ -74,6 +87,7 @@ app = FastAPI(
 )
 
 register_exception_handlers(app)
+app.add_middleware(PlatformGuardMiddleware)
 app.add_middleware(RequestIdMiddleware)
 
 # CORS Configuration
@@ -104,12 +118,15 @@ async def readiness_check():
     """Readiness probe: database and Redis reachable."""
     status = await check_dependencies()
     ready = all(v == "ok" for v in status.values())
-    body = {"status": "ready" if ready else "unavailable", **status, "realtime": realtime_manager.stats()}
+    async with AsyncSessionLocal() as db:
+        rls = await rls_status(db)
+    body = {"status": "ready" if ready else "unavailable", **status, "realtime": realtime_manager.stats(), "rls": rls}
     return JSONResponse(body, status_code=200 if ready else 503)
 
 
 # Mount API v1 Routers
 app.include_router(catalog_router, prefix=settings.API_V1_STR)
+app.include_router(entitlements_router, prefix=settings.API_V1_STR)
 app.include_router(floor_router, prefix=settings.API_V1_STR)
 app.include_router(orders_router, prefix=settings.API_V1_STR)
 app.include_router(kots_router, prefix=settings.API_V1_STR)
@@ -117,6 +134,11 @@ app.include_router(billing_router, prefix=settings.API_V1_STR)
 app.include_router(staff_router, prefix=settings.API_V1_STR)
 app.include_router(analytics_router, prefix=settings.API_V1_STR)
 app.include_router(approvals_router, prefix=settings.API_V1_STR)
+app.include_router(platform_auth_router, prefix=settings.API_V1_STR)
+app.include_router(platform_router, prefix=settings.API_V1_STR)
+app.include_router(platform_orgs_router, prefix=settings.API_V1_STR)
+app.include_router(platform_billing_router, prefix=settings.API_V1_STR)
+app.include_router(platform_security_router, prefix=settings.API_V1_STR)
 
 # Mount Realtime WebSocket Router
 app.include_router(realtime_router)

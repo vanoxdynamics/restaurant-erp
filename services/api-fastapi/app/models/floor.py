@@ -12,6 +12,7 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_chec
 class Branch(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "branches"
 
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     code: Mapped[str] = mapped_column(String(20), unique=True, index=True, nullable=False)
     address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

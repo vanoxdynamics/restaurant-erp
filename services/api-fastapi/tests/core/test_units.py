@@ -73,7 +73,11 @@ def test_pin_lookup_is_deterministic_and_branch_scoped():
 def test_production_rejects_default_secrets():
     with pytest.raises(ValidationError):
         Settings(ENVIRONMENT="production", _env_file=None)
-    ok = Settings(ENVIRONMENT="production", SECRET_KEY="s" * 40, PIN_PEPPER="p" * 40, _env_file=None)
+    with pytest.raises(ValidationError):  # tenant secrets alone are not enough: the console needs its own
+        Settings(ENVIRONMENT="production", SECRET_KEY="s" * 40, PIN_PEPPER="p" * 40, _env_file=None)
+    ok = Settings(ENVIRONMENT="production", SECRET_KEY="s" * 40, PIN_PEPPER="p" * 40,
+                  PLATFORM_SECRET_KEY="x" * 40, PLATFORM_ENCRYPTION_KEY="y" * 40, PLATFORM_COOKIE_SECURE=True,
+                  _env_file=None)
     assert ok.is_production
 
 

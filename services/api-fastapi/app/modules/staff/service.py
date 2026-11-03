@@ -1,3 +1,4 @@
+import secrets
 import uuid
 from datetime import timedelta
 from decimal import Decimal
@@ -9,11 +10,20 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import record_audit
-from app.core.auth import CurrentUser, find_staff_by_pin, outranks, require_branch_access, token_claims
+from app.core.auth import (
+    DEVICE_TOKEN_TYPE,
+    CurrentUser,
+    find_staff_by_pin,
+    outranks,
+    require_branch_access,
+    resolve_branch_id,
+    token_claims,
+)
 from app.core.clock import utcnow
 from app.core.config import settings
 from app.core.enums import AuditAction, PaymentMode, PaymentStatus, Role, ShiftStatus
 from app.core.errors import Conflict, Forbidden, NotFound, Unauthorized
+from app.core.entitlements import compute_entitlements, enforce_limit
 from app.core.events import commit
 from app.core.lookups import get_or_404
 from app.core.pagination import PageParams, paginate
@@ -26,11 +36,16 @@ from app.core.security import (
     get_pin_hash,
     verify_and_update_password,
     verify_password,
+    verify_pin,
 )
 from app.models.billing import Payment
 from app.models.floor import Branch
 from app.models.staff import Shift, StaffUser
 from app.schemas.staff import (
+    DeviceLinkRequest,
+    DeviceSetupCode,
+    DeviceSetupCodeCreate,
+    DeviceTokenResponse,
     PasswordLoginRequest,
     PINAuthRequest,
     StaffUserCreate,
@@ -72,6 +87,9 @@ async def login_with_pin(
     limiter = LoginRateLimiter(redis_client, scope="pin", key=f"{payload.branch_id}:{device}")
     await limiter.check()
 
+    if payload.staff_id is not None:
+        return await _login_staff_with_pin(db, redis_client, payload, limiter, device)
+
     user = await find_staff_by_pin(db, payload.branch_id, payload.pin)
     if user is None:
         await _record_failed_login(db, limiter, payload.branch_id, {"method": "pin", "device": device})
@@ -79,6 +97,91 @@ async def login_with_pin(
 
     await limiter.reset()
     return _issue_token(user, "pin")
+
+
+async def _login_staff_with_pin(
+    db: AsyncSession, redis_client: aioredis.Redis, payload: PINAuthRequest,
+    device_limiter: LoginRateLimiter, device: str,
+) -> TokenResponse:
+    """
+    Check the PIN against one chosen person. The lockout follows that person, not the tablet, so
+    switching device ids or tablets does not give an attacker a fresh set of guesses.
+    """
+    staff_limiter = LoginRateLimiter(redis_client, scope="pin-staff", key=str(payload.staff_id))
+    await staff_limiter.check()
+
+    user = await db.get(StaffUser, payload.staff_id)
+    usable = (
+        user is not None and user.is_active and user.branch_id == payload.branch_id and user.pin_lookup is not None
+    )
+    if not usable or not verify_pin(payload.pin, user.hashed_pin):
+        if not usable:
+            verify_pin(payload.pin, DUMMY_HASH)
+        await device_limiter.record_failure()
+        details = {"method": "pin", "device": device, "staff_id": str(payload.staff_id)}
+        await _record_failed_login(db, staff_limiter, payload.branch_id, details)
+        raise Unauthorized("Wrong PIN")
+
+    await device_limiter.reset()
+    await staff_limiter.reset()
+    return _issue_token(user, "pin")
+
+
+# Unambiguous characters only (no 0/O, 1/I/L) so a code can be read aloud or typed from a screen.
+SETUP_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+SETUP_CODE_TTL_SECONDS = 15 * 60
+
+
+def _setup_code_key(code: str) -> str:
+    return f"device-setup:{code.replace('-', '').upper()}"
+
+
+async def create_device_setup_code(
+    db: AsyncSession, redis_client: aioredis.Redis, actor: CurrentUser, payload: DeviceSetupCodeCreate
+) -> DeviceSetupCode:
+    """A manager makes a short-lived, single-use code that links one tablet to a branch."""
+    branch_id = resolve_branch_id(actor, payload.branch_id)
+    branch = await get_or_404(db, Branch, branch_id)
+    raw = "".join(secrets.choice(SETUP_CODE_ALPHABET) for _ in range(8))
+    await redis_client.set(_setup_code_key(raw), str(branch.id), ex=SETUP_CODE_TTL_SECONDS)
+    return DeviceSetupCode(
+        code=f"{raw[:4]}-{raw[4:]}", branch_id=branch.id, branch_name=branch.name, expires_in=SETUP_CODE_TTL_SECONDS
+    )
+
+
+async def link_device(
+    db: AsyncSession, redis_client: aioredis.Redis, payload: DeviceLinkRequest, client_ip: str
+) -> DeviceTokenResponse:
+    """Exchange a setup code for a device token. Codes work once and guessing is rate-limited per IP."""
+    limiter = LoginRateLimiter(redis_client, scope="device-setup", key=client_ip)
+    await limiter.check()
+
+    branch_id = await redis_client.getdel(_setup_code_key(payload.code))  # atomic: one use only
+    if branch_id is None:
+        await limiter.record_failure()
+        raise Unauthorized("That setup code is wrong or has expired", code="invalid_setup_code")
+
+    branch = await get_or_404(db, Branch, uuid.UUID(branch_id))
+    token = create_access_token(
+        payload.device_id,
+        claims={"typ": DEVICE_TOKEN_TYPE, "branch_id": str(branch.id)},
+        expires_delta=timedelta(days=365),
+    )
+    return DeviceTokenResponse(device_token=token, branch_id=branch.id, branch_name=branch.name)
+
+
+async def staff_roster(db: AsyncSession, branch_id: uuid.UUID) -> List[StaffUser]:
+    """Active staff who can sign in with a PIN at this branch, for the 'who is working' screen."""
+    stmt = (
+        select(StaffUser)
+        .where(
+            StaffUser.branch_id == branch_id,
+            StaffUser.is_active.is_(True),
+            StaffUser.pin_lookup.is_not(None),
+        )
+        .order_by(func.lower(StaffUser.full_name))
+    )
+    return list((await db.scalars(stmt)).all())
 
 
 async def login_with_password(
@@ -122,8 +225,11 @@ def _check_can_manage(actor: CurrentUser, role: Role, branch_id: Optional[uuid.U
             raise Forbidden("You cannot assign a role at or above your own")
 
 
-async def _ensure_branch(db: AsyncSession, branch_id: Optional[uuid.UUID]) -> None:
-    if branch_id is not None and await db.get(Branch, branch_id) is None:
+async def _ensure_branch(db: AsyncSession, actor: CurrentUser, branch_id: Optional[uuid.UUID]) -> None:
+    if branch_id is None:
+        return
+    branch = await db.get(Branch, branch_id)
+    if branch is None or branch.organization_id != actor.organization_id:
         raise NotFound("Branch not found")
 
 
@@ -141,9 +247,18 @@ async def create_staff(db: AsyncSession, actor: CurrentUser, payload: StaffUserC
     _check_can_manage(actor, payload.role, branch_id)
     if branch_id is None and payload.role != Role.OWNER:
         raise Forbidden("Only owners may exist without a branch", code="branch_required")
-    await _ensure_branch(db, branch_id)
+    await _ensure_branch(db, actor, branch_id)
+
+    ent = await compute_entitlements(db, actor.organization_id)
+    active_staff = await db.scalar(
+        select(func.count()).select_from(StaffUser).where(
+            StaffUser.organization_id == actor.organization_id, StaffUser.is_active.is_(True))
+    )
+    if payload.is_active:
+        enforce_limit(active_staff or 0, ent.max_staff, "staff accounts")
 
     user = StaffUser(
+        organization_id=actor.organization_id,
         branch_id=branch_id,
         username=payload.username,
         email=payload.email,
@@ -168,7 +283,7 @@ async def list_staff(
     db: AsyncSession, actor: CurrentUser, params: PageParams,
     role: Optional[Role] = None, is_active: Optional[bool] = None, branch_id: Optional[uuid.UUID] = None,
 ) -> Tuple[List[StaffUser], int]:
-    stmt = select(StaffUser).order_by(StaffUser.full_name)
+    stmt = select(StaffUser).where(StaffUser.organization_id == actor.organization_id).order_by(StaffUser.full_name)
     if not actor.is_owner:
         stmt = stmt.where(StaffUser.branch_id == actor.branch_id)
     elif branch_id is not None:
@@ -182,6 +297,8 @@ async def list_staff(
 
 async def _load_managed_staff(db: AsyncSession, actor: CurrentUser, staff_id: uuid.UUID) -> StaffUser:
     user = await get_or_404(db, StaffUser, staff_id)
+    if user.organization_id != actor.organization_id:
+        raise NotFound("StaffUser not found")
     if not actor.is_owner:
         if user.branch_id != actor.branch_id:
             raise NotFound("StaffUser not found")
@@ -198,7 +315,7 @@ async def update_staff(db: AsyncSession, actor: CurrentUser, staff_id: uuid.UUID
     new_branch = changes.get("branch_id", user.branch_id)
     _check_can_manage(actor, new_role, new_branch)
     if "branch_id" in changes and changes["branch_id"] != user.branch_id:
-        await _ensure_branch(db, new_branch)
+        await _ensure_branch(db, actor, new_branch)
         # PIN lookup is branch-scoped; the user must set a new PIN for the new branch.
         user.pin_lookup = None
 

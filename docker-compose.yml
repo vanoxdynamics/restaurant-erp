@@ -56,6 +56,26 @@ services:
     volumes:
       - ./services/api-fastapi:/app
 
+  # Subscription renewals: issues renewal invoices, sends reminders, handles past-due and grace. Safe to run several copies.
+  billing-worker:
+    build:
+      context: ./services/api-fastapi
+      dockerfile: Dockerfile
+    container_name: restaurant-erp-billing-worker
+    restart: unless-stopped
+    depends_on:
+      api-fastapi:
+        condition: service_started
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-restaurant_erp}
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-development_secret_key_change_in_production}
+      - PIN_PEPPER=${PIN_PEPPER:-development_pin_pepper_change_in_production}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+    command: python -m app.cli run-billing --loop
+    volumes:
+      - ./services/api-fastapi:/app
+
 volumes:
   postgres_data:
   redis_data:

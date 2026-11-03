@@ -16,21 +16,29 @@ Permission matrix (enforced with `require_roles` on each route):
 """
 
 import uuid
-from dataclasses import dataclass
-from typing import Any, Callable, Coroutine, Dict, Optional
+from dataclasses import dataclass, field
+from typing import Any, Callable, Coroutine, Dict, FrozenSet, Optional
 
-from fastapi import Depends
+import redis.asyncio as aioredis
+from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import get_db, scope_session
+from app.core.entitlements import SAFE_METHODS, enforce_access, enforce_module, get_entitlements
 from app.core.enums import MANAGER_ROLES, ROLE_RANK, Role
 from app.core.errors import ApprovalRequired, Forbidden, NotFound, Unauthorized
+from app.core.redis import get_redis
 from app.core.security import DUMMY_HASH, compute_pin_lookup, decode_access_token, verify_pin
+from app.models.floor import Branch
 from app.models.staff import StaffUser
 
 bearer = HTTPBearer(auto_error=False)
+
+# A device token proves a tablet was linked to a branch by a manager. It is not a user session:
+# it carries no user, so it only unlocks the pre-login staff list.
+DEVICE_TOKEN_TYPE = "device"
 
 
 @dataclass(frozen=True)
@@ -41,6 +49,11 @@ class CurrentUser:
     username: str
     full_name: str
     auth_method: str  # "pwd" | "pin"
+    organization_id: uuid.UUID
+    # Owners act across branches, but only those of their own organization.
+    org_branch_ids: FrozenSet[uuid.UUID] = field(default_factory=frozenset)
+    # Set when a platform operator is looking at this account (support impersonation): strictly read-only.
+    impersonated_by: Optional[uuid.UUID] = None
 
     @property
     def is_manager(self) -> bool:
@@ -53,6 +66,7 @@ class CurrentUser:
 
 def token_claims(user: StaffUser, auth_method: str) -> Dict[str, Any]:
     return {
+        "org": str(user.organization_id),
         "role": user.role,
         "branch_id": str(user.branch_id) if user.branch_id else None,
         "tv": user.token_version,
@@ -60,12 +74,19 @@ def token_claims(user: StaffUser, auth_method: str) -> Dict[str, Any]:
     }
 
 
+def _impersonator(payload: Dict[str, Any]) -> Optional[uuid.UUID]:
+    try:
+        return uuid.UUID(payload["imp"]) if payload.get("imp") else None
+    except ValueError:
+        return None
+
+
 async def resolve_token(db: AsyncSession, token: Optional[str]) -> CurrentUser:
     """Validate a bearer token and load its active user. Shared by HTTP and WebSocket auth."""
     if not token:
         raise Unauthorized("Missing bearer token")
     payload = decode_access_token(token)
-    if payload is None:
+    if payload is None or payload.get("typ") == DEVICE_TOKEN_TYPE:
         raise Unauthorized("Invalid or expired token")
     try:
         user_id = uuid.UUID(payload["sub"])
@@ -76,21 +97,67 @@ async def resolve_token(db: AsyncSession, token: Optional[str]) -> CurrentUser:
     if user is None or not user.is_active or payload.get("tv") != user.token_version:
         raise Unauthorized("Session is no longer valid")
 
+    claimed_org = payload.get("org")
+    if claimed_org is not None and claimed_org != str(user.organization_id):
+        raise Unauthorized("Session is no longer valid")
+
+    org_branch_ids: FrozenSet[uuid.UUID] = frozenset()
+    if user.role == Role.OWNER.value:
+        org_branch_ids = frozenset(
+            await db.scalars(select(Branch.id).where(Branch.organization_id == user.organization_id))
+        )
+
     return CurrentUser(
         id=user.id,
+        organization_id=user.organization_id,
+        org_branch_ids=org_branch_ids,
         branch_id=user.branch_id,
         role=Role(user.role),
         username=user.username,
         full_name=user.full_name,
         auth_method=payload.get("amr", "pwd"),
+        impersonated_by=_impersonator(payload),
     )
 
 
+async def require_device_branch(x_device_token: Optional[str] = Header(default=None)) -> uuid.UUID:
+    """Branch of the linked device making this pre-login request (X-Device-Token)."""
+    payload = decode_access_token(x_device_token) if x_device_token else None
+    if payload is None or payload.get("typ") != DEVICE_TOKEN_TYPE:
+        raise Unauthorized("This device is not linked to a branch", code="device_not_linked")
+    try:
+        return uuid.UUID(payload["branch_id"])
+    except (KeyError, ValueError) as exc:
+        raise Unauthorized("This device is not linked to a branch", code="device_not_linked") from exc
+
+
 async def get_current_user(
+    request: Request,
     creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
     db: AsyncSession = Depends(get_db),
+    redis_client: aioredis.Redis = Depends(get_redis),
 ) -> CurrentUser:
-    return await resolve_token(db, creds.credentials if creds else None)
+    """Authenticate, then apply the organization's subscription state (suspended / read-only)."""
+    user = await resolve_token(db, creds.credentials if creds else None)
+    await scope_session(db, user.organization_id)  # database-level backstop: this request can only see its own organization
+    if user.impersonated_by is not None and request.method.upper() not in SAFE_METHODS:
+        raise Forbidden("Support sessions are read-only", code="impersonation_read_only")
+    enforce_access(await get_entitlements(db, user.organization_id, redis_client), request.method)
+    return user
+
+
+def require_module(module_key: str) -> Callable[..., Coroutine[Any, Any, CurrentUser]]:
+    """Dependency factory: the caller's organization must have `module_key` enabled."""
+
+    async def dependency(
+        user: CurrentUser = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+        redis_client: aioredis.Redis = Depends(get_redis),
+    ) -> CurrentUser:
+        enforce_module(await get_entitlements(db, user.organization_id, redis_client), str(module_key))
+        return user
+
+    return dependency
 
 
 def require_roles(*roles: Role, password_session: bool = False) -> Callable[..., Coroutine[Any, Any, CurrentUser]]:
@@ -108,7 +175,9 @@ def require_roles(*roles: Role, password_session: bool = False) -> Callable[...,
 
 
 def can_access_branch(user: CurrentUser, branch_id: uuid.UUID) -> bool:
-    return user.is_owner or user.branch_id == branch_id
+    if user.is_owner:
+        return branch_id in user.org_branch_ids
+    return user.branch_id == branch_id
 
 
 def require_branch_access(user: CurrentUser, branch_id: uuid.UUID, *, hide: bool = True) -> None:

@@ -73,6 +73,31 @@ Allocated transactionally in Postgres (`document_counters`), per branch:
 Delivery is best-effort: after reconnecting, refetch state over REST. Events fan out across
 workers through Redis pub/sub and are only published after the database commit.
 
+## Subscription billing
+
+Operators record what subscribers owe and pay through the platform API (`/api/v1/platform`, see the console app).
+
+- **Invoices and payments.** Activation and plan-change invoices describe a period that is already in effect; renewal
+  invoices are issued `BILLING_INVOICE_LEAD_DAYS` (14) before a period ends, and **recording the payment in full is what
+  extends the subscription** and applies any scheduled monthly/yearly change. Overpayments and downgrade leftovers become
+  account credit that pays the next invoice. Payments are recorded by hand (bank transfer, UPI, cash, ...); there is no
+  payment gateway yet, and the `InvoicePayment` model leaves room for a provider reference.
+- **The billing worker** runs the renewal sweep: it issues renewal invoices, queues reminders (14/7/1 days before renewal,
+  3/1 before a trial ends), moves unpaid subscriptions to *past due* (full access during `SUBSCRIPTION_GRACE_DAYS`), then to
+  *expired* (read-only), and cancels subscriptions set to end with their period. It never suspends on its own.
+
+  ```bash
+  python -m app.cli run-billing            # one pass, e.g. from cron / a Kubernetes CronJob
+  python -m app.cli run-billing --loop     # keep running every BILLING_SWEEP_INTERVAL_SECONDS (docker compose: billing-worker)
+  ```
+
+  Safe to run twice or on several machines at once: each subscription is locked with `SKIP LOCKED`, every action is
+  idempotent, and a failure on one subscription does not stop the rest. Access rules are also evaluated lazily from the
+  dates, so a stopped worker never grants or removes access incorrectly; it only delays invoices, reminders and the
+  stored status.
+- **Reminders** are written to the `billing_notifications` outbox. Delivery uses a `Mailer`; the default only logs, so
+  plug in an SMTP/API mailer in `app/modules/platform/billing_service.py` before relying on emails.
+
 ## Tests
 
 Tests use a real Postgres (`restaurant_erp_test`, recreated and migrated each run) and Redis DB 15.

@@ -27,40 +27,52 @@ ITEM_LOADERS = (
 )
 
 
-async def list_categories(db: AsyncSession, include_inactive: bool) -> Sequence[Category]:
-    stmt = select(Category).order_by(Category.sort_order, Category.name)
+async def _scoped(db: AsyncSession, model, org_id: uuid.UUID, obj_id: uuid.UUID, *options, populate_existing: bool = False):
+    """Load a catalog row only if it belongs to the organization; other tenants' rows look nonexistent."""
+    obj = await get_or_404(db, model, obj_id, *options, populate_existing=populate_existing)
+    if obj.organization_id != org_id:
+        raise NotFound(f"{model.__name__} not found")
+    return obj
+
+
+async def list_categories(db: AsyncSession, org_id: uuid.UUID, include_inactive: bool) -> Sequence[Category]:
+    stmt = select(Category).where(Category.organization_id == org_id).order_by(Category.sort_order, Category.name)
     if not include_inactive:
         stmt = stmt.where(Category.is_active.is_(True))
     return (await db.scalars(stmt)).all()
 
 
-async def create_category(db: AsyncSession, payload: CategoryCreate) -> Category:
-    category = Category(**payload.model_dump())
+async def create_category(db: AsyncSession, org_id: uuid.UUID, payload: CategoryCreate) -> Category:
+    category = Category(organization_id=org_id, **payload.model_dump())
     db.add(category)
     await commit(db)
     return category
 
 
-async def update_category(db: AsyncSession, category_id: uuid.UUID, payload: CategoryUpdate) -> Category:
-    category = await get_or_404(db, Category, category_id)
+async def update_category(db: AsyncSession, org_id: uuid.UUID, category_id: uuid.UUID, payload: CategoryUpdate) -> Category:
+    category = await _scoped(db, Category, org_id, category_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(category, field, value)
     await commit(db)
     return category
 
 
-async def get_item(db: AsyncSession, item_id: uuid.UUID) -> MenuItem:
-    return await get_or_404(db, MenuItem, item_id, *ITEM_LOADERS, populate_existing=True)
+async def get_item(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID) -> MenuItem:
+    return await _scoped(db, MenuItem, org_id, item_id, *ITEM_LOADERS, populate_existing=True)
 
 
 async def list_items(
     db: AsyncSession,
+    org_id: uuid.UUID,
     category_id: Optional[uuid.UUID],
     station: Optional[Station],
     available_only: bool,
     include_inactive: bool,
 ) -> Sequence[MenuItem]:
-    stmt = select(MenuItem).options(*ITEM_LOADERS).order_by(MenuItem.sort_order, MenuItem.name)
+    stmt = (
+        select(MenuItem).where(MenuItem.organization_id == org_id)
+        .options(*ITEM_LOADERS).order_by(MenuItem.sort_order, MenuItem.name)
+    )
     if category_id is not None:
         stmt = stmt.where(MenuItem.category_id == category_id)
     if station is not None:
@@ -72,93 +84,104 @@ async def list_items(
     return (await db.scalars(stmt)).all()
 
 
-async def _load_modifier_groups(db: AsyncSession, group_ids: List[uuid.UUID]) -> List[ModifierGroup]:
+async def _load_modifier_groups(db: AsyncSession, org_id: uuid.UUID, group_ids: List[uuid.UUID]) -> List[ModifierGroup]:
     if not group_ids:
         return []
-    groups = (await db.scalars(select(ModifierGroup).where(ModifierGroup.id.in_(group_ids)))).all()
+    groups = (await db.scalars(
+        select(ModifierGroup).where(ModifierGroup.id.in_(group_ids), ModifierGroup.organization_id == org_id)
+    )).all()
     missing = set(group_ids) - {g.id for g in groups}
     if missing:
         raise NotFound("Modifier group not found", details={"modifier_group_ids": sorted(map(str, missing))})
     return list(groups)
 
 
-async def create_item(db: AsyncSession, payload: MenuItemCreate) -> MenuItem:
+async def create_item(db: AsyncSession, org_id: uuid.UUID, payload: MenuItemCreate) -> MenuItem:
     category = await db.get(Category, payload.category_id)
-    if category is None or not category.is_active:
+    if category is None or category.organization_id != org_id or not category.is_active:
         raise NotFound("Category not found")
 
     data = payload.model_dump(exclude={"variants", "modifier_group_ids"})
     data["station"] = payload.station.value
-    item = MenuItem(**data)
+    item = MenuItem(organization_id=org_id, **data)
     item.variants = [ItemVariant(**v.model_dump()) for v in payload.variants]
-    item.modifier_groups = await _load_modifier_groups(db, payload.modifier_group_ids)
+    item.modifier_groups = await _load_modifier_groups(db, org_id, payload.modifier_group_ids)
     db.add(item)
     await commit(db)
-    return await get_item(db, item.id)
+    return await get_item(db, org_id, item.id)
 
 
-async def update_item(db: AsyncSession, item_id: uuid.UUID, payload: MenuItemUpdate) -> MenuItem:
-    item = await get_item(db, item_id)
+async def update_item(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID, payload: MenuItemUpdate) -> MenuItem:
+    item = await get_item(db, org_id, item_id)
     changes = payload.model_dump(exclude_unset=True)
     group_ids = changes.pop("modifier_group_ids", None)
     if "category_id" in changes:
         category = await db.get(Category, changes["category_id"])
-        if category is None or not category.is_active:
+        if category is None or category.organization_id != org_id or not category.is_active:
             raise NotFound("Category not found")
     for field, value in changes.items():
         setattr(item, field, value.value if isinstance(value, Station) else value)
     if group_ids is not None:
-        item.modifier_groups = await _load_modifier_groups(db, group_ids)
+        item.modifier_groups = await _load_modifier_groups(db, org_id, group_ids)
     await commit(db)
-    return await get_item(db, item.id)
+    return await get_item(db, org_id, item.id)
 
 
-async def _queue_86_event(db: AsyncSession, item_id: uuid.UUID, variant_id: Optional[uuid.UUID], available: bool) -> None:
-    # The menu is global, so every active branch's POS terminals must hear about it.
-    branch_ids = (await db.scalars(select(Branch.id).where(Branch.is_active.is_(True)))).all()
+async def _queue_86_event(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID, variant_id: Optional[uuid.UUID], available: bool) -> None:
+    # The menu is shared by the organization, so every active branch of it must hear about the change.
+    branch_ids = (await db.scalars(
+        select(Branch.id).where(Branch.is_active.is_(True), Branch.organization_id == org_id)
+    )).all()
     for branch_id in branch_ids:
         queue_event(db, branch_id, Topic.CATALOG, "item.86_changed", item_id,
                     {"item_id": str(item_id), "variant_id": str(variant_id) if variant_id else None,
                      "is_available_86": available})
 
 
-async def toggle_item_86(db: AsyncSession, item_id: uuid.UUID, available: bool) -> MenuItem:
-    item = await get_item(db, item_id)
+async def toggle_item_86(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID, available: bool) -> MenuItem:
+    item = await get_item(db, org_id, item_id)
     item.is_available_86 = available
-    await _queue_86_event(db, item.id, None, available)
+    await _queue_86_event(db, org_id, item.id, None, available)
     await commit(db)
-    return await get_item(db, item.id)
+    return await get_item(db, org_id, item.id)
 
 
-async def toggle_variant_86(db: AsyncSession, variant_id: uuid.UUID, available: bool) -> MenuItem:
+async def toggle_variant_86(db: AsyncSession, org_id: uuid.UUID, variant_id: uuid.UUID, available: bool) -> MenuItem:
     variant = await get_or_404(db, ItemVariant, variant_id)
+    item = await get_item(db, org_id, variant.item_id)  # 404s when the variant belongs to another organization
     variant.is_available_86 = available
-    await _queue_86_event(db, variant.item_id, variant.id, available)
+    await _queue_86_event(db, org_id, variant.item_id, variant.id, available)
     await commit(db)
-    return await get_item(db, variant.item_id)
+    return await get_item(db, org_id, item.id)
 
 
-async def list_modifier_groups(db: AsyncSession) -> Sequence[ModifierGroup]:
-    stmt = select(ModifierGroup).options(selectinload(ModifierGroup.modifiers)).order_by(ModifierGroup.name)
+async def list_modifier_groups(db: AsyncSession, org_id: uuid.UUID) -> Sequence[ModifierGroup]:
+    stmt = (
+        select(ModifierGroup).where(ModifierGroup.organization_id == org_id)
+        .options(selectinload(ModifierGroup.modifiers)).order_by(ModifierGroup.name)
+    )
     return (await db.scalars(stmt)).all()
 
 
-async def create_modifier_group(db: AsyncSession, payload: ModifierGroupCreate) -> ModifierGroup:
-    group = ModifierGroup(**payload.model_dump(exclude={"modifiers"}))
+async def create_modifier_group(db: AsyncSession, org_id: uuid.UUID, payload: ModifierGroupCreate) -> ModifierGroup:
+    group = ModifierGroup(organization_id=org_id, **payload.model_dump(exclude={"modifiers"}))
     group.modifiers = [ModifierItem(**m.model_dump()) for m in payload.modifiers]
     db.add(group)
     await commit(db)
     return await get_or_404(db, ModifierGroup, group.id, selectinload(ModifierGroup.modifiers), populate_existing=True)
 
 
-async def menu_etag(db: AsyncSession) -> str:
-    """Cheap fingerprint of the whole menu so POS terminals can skip unchanged reloads."""
+async def menu_etag(db: AsyncSession, org_id: uuid.UUID) -> str:
+    """Cheap fingerprint of the organization's menu so POS terminals can skip unchanged reloads."""
     parts = union_all(
-        select(func.max(Category.updated_at).label("ts"), func.count().label("n")),
-        select(func.max(MenuItem.updated_at), func.count()),
-        select(func.max(ItemVariant.updated_at), func.count()),
-        select(func.max(ModifierGroup.updated_at), func.count()),
-        select(func.max(ModifierItem.updated_at), func.count()),
+        select(func.max(Category.updated_at).label("ts"), func.count().label("n"))
+        .where(Category.organization_id == org_id),
+        select(func.max(MenuItem.updated_at), func.count()).where(MenuItem.organization_id == org_id),
+        select(func.max(ItemVariant.updated_at), func.count())
+        .join(MenuItem, ItemVariant.item_id == MenuItem.id).where(MenuItem.organization_id == org_id),
+        select(func.max(ModifierGroup.updated_at), func.count()).where(ModifierGroup.organization_id == org_id),
+        select(func.max(ModifierItem.updated_at), func.count())
+        .join(ModifierGroup, ModifierItem.group_id == ModifierGroup.id).where(ModifierGroup.organization_id == org_id),
     )
     sub = parts.subquery()
     rows = (await db.execute(select(sub.c.ts, sub.c.n))).all()
@@ -166,8 +189,9 @@ async def menu_etag(db: AsyncSession) -> str:
 
 
 async def get_menu(db: AsyncSession, user: CurrentUser) -> List[dict]:
-    categories = await list_categories(db, include_inactive=False)
-    items = await list_items(db, None, None, available_only=False, include_inactive=False)
+    org_id = user.organization_id
+    categories = await list_categories(db, org_id, include_inactive=False)
+    items = await list_items(db, org_id, None, None, available_only=False, include_inactive=False)
     by_category: dict = {}
     for item in items:
         by_category.setdefault(item.category_id, []).append(item)

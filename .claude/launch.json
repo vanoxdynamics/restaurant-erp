@@ -12,6 +12,24 @@
       "runtimeExecutable": "cmd",
       "runtimeArgs": ["/c", "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_API_URL=http://127.0.0.1:8000&& npx expo start --web --port 8091 --clear"],
       "port": 8091
+    },
+    {
+      "name": "api",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd services\\api-fastapi && set ALLOWED_ORIGINS=http://localhost:8090,http://localhost:8091,http://localhost:8092,http://localhost:8081&& venv\\Scripts\\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000"],
+      "port": 8000
+    },
+    {
+      "name": "pos-web-billing",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_API_URL=http://127.0.0.1:8000&& npx expo start --web --port 8092 --clear"],
+      "port": 8092
+    },
+    {
+      "name": "platform-console",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd apps\\platform-console && set VITE_API_TARGET=http://127.0.0.1:8000&& npx vite --host 127.0.0.1"],
+      "port": 5180
     }
   ]
 }

@@ -57,6 +57,11 @@ async def commit(db: AsyncSession) -> None:
     except Exception:
         discard_events(db)
         raise
+    await publish_pending(db)
+
+
+async def publish_pending(db: AsyncSession) -> None:
+    """Publish events queued on `db`. Call after the commit (and after any cache invalidation that must precede them)."""
     pending = db.info.pop(_PENDING_KEY, [])
     if _publisher is None:
         return

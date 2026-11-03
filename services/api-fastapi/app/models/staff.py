@@ -22,6 +22,7 @@ class StaffUser(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         enum_check("staff_users", "role", Role),
     )
 
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=True, index=True)
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     email: Mapped[Optional[str]] = mapped_column(String(100), unique=True, index=True, nullable=True)

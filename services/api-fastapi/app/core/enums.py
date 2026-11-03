@@ -4,6 +4,72 @@ from enum import StrEnum
 from typing import Dict, Set
 
 
+class OrgStatus(StrEnum):
+    TRIAL = "trial"
+    ACTIVE = "active"
+    PAST_DUE = "past_due"
+    SUSPENDED = "suspended"
+    CANCELLED = "cancelled"
+
+
+class PlatformRole(StrEnum):
+    SUPER_ADMIN = "super_admin"
+    BILLING = "billing"
+    SUPPORT = "support"
+    READ_ONLY = "read_only"
+
+
+class AlertSeverity(StrEnum):
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+class ApprovalStatus(StrEnum):
+    PENDING = "pending"
+    EXECUTED = "executed"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+    FAILED = "failed"
+
+
+class SubscriptionStatus(StrEnum):
+    TRIALING = "trialing"
+    ACTIVE = "active"
+    PAST_DUE = "past_due"
+    PAUSED = "paused"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class InvoiceKind(StrEnum):
+    RENEWAL = "renewal"  # next period; paying it extends the subscription
+    ACTIVATION = "activation"  # first or restarted paid period (already in effect when issued)
+    PLAN_CHANGE = "plan_change"  # prorated amount for a mid-period plan/term change (already in effect)
+    MANUAL = "manual"
+
+
+class InvoiceStatus(StrEnum):
+    OPEN = "open"
+    PAID = "paid"
+    VOID = "void"
+
+
+class PaymentMethod(StrEnum):
+    BANK_TRANSFER = "bank_transfer"
+    UPI = "upi"
+    CARD_OFFLINE = "card_offline"
+    CASH = "cash"
+    CHEQUE = "cheque"
+    OTHER = "other"
+
+
+class BillingTerm(StrEnum):
+    MONTHLY = "monthly"
+    YEARLY = "yearly"
+
+
 class OrderStatus(StrEnum):
     ACTIVE = "active"
     BILLED = "billed"
@@ -106,6 +172,7 @@ class Topic(StrEnum):
     TABLES = "tables"
     BILLING = "billing"
     CATALOG = "catalog"
+    ENTITLEMENTS = "entitlements"  # subscription / module changes; every signed-in user of a branch may listen
 
 
 ROLE_RANK: Dict[Role, int] = {

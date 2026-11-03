@@ -1,7 +1,7 @@
 import uuid
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, with_loader_criteria
@@ -10,6 +10,7 @@ from app.core.audit import record_audit
 from app.core.auth import CurrentUser, require_branch_access
 from app.core.enums import AuditAction, OrderStatus, TableStatus, Topic
 from app.core.errors import Conflict, NotFound
+from app.core.entitlements import compute_entitlements, enforce_limit
 from app.core.events import commit, queue_event
 from app.core.lookups import get_or_404
 from app.models.floor import Branch, DiningTable, Floor
@@ -18,14 +19,19 @@ from app.schemas.floor import BranchCreate, DiningTableCreate, FloorCreate, Tabl
 
 
 async def list_branches(db: AsyncSession, user: CurrentUser) -> Sequence[Branch]:
-    stmt = select(Branch).order_by(Branch.name)
+    stmt = select(Branch).where(Branch.organization_id == user.organization_id).order_by(Branch.name)
     if not user.is_owner:
         stmt = stmt.where(Branch.id == user.branch_id)
     return (await db.scalars(stmt)).all()
 
 
-async def create_branch(db: AsyncSession, payload: BranchCreate) -> Branch:
-    branch = Branch(**payload.model_dump())
+async def create_branch(db: AsyncSession, user: CurrentUser, payload: BranchCreate) -> Branch:
+    ent = await compute_entitlements(db, user.organization_id)
+    active = await db.scalar(
+        select(func.count()).select_from(Branch).where(Branch.organization_id == user.organization_id, Branch.is_active.is_(True))
+    )
+    enforce_limit(active or 0, ent.max_branches, "branches")
+    branch = Branch(organization_id=user.organization_id, **payload.model_dump())
     db.add(branch)
     try:
         await db.flush()

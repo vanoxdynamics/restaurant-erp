@@ -21,6 +21,7 @@ menu_item_modifier_groups = Table(
 class Category(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "categories"
 
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
@@ -40,6 +41,7 @@ class MenuItem(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         enum_check("menu_items", "station", Station),
     )
 
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     category_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(150), index=True, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -82,6 +84,7 @@ class ModifierGroup(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         ),
     )
 
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     min_selection: Mapped[int] = mapped_column(Integer, default=0)
     max_selection: Mapped[int] = mapped_column(Integer, default=1)

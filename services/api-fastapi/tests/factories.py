@@ -4,9 +4,11 @@ import uuid
 from decimal import Decimal
 from typing import Dict, Iterable, Optional
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import token_claims
+from app.core.entitlements import ensure_legacy_subscription
 from app.core.security import compute_pin_lookup, create_access_token, get_password_hash, get_pin_hash
 from app.models import (
     Branch,
@@ -17,12 +19,29 @@ from app.models import (
     MenuItem,
     ModifierGroup,
     ModifierItem,
+    Organization,
     StaffUser,
 )
 
 
-async def make_branch(db: AsyncSession, *, code: str = "BLR1", name: str = "Indiranagar", **kw) -> Branch:
-    branch = Branch(code=code, name=name, **kw)
+async def make_org(db: AsyncSession, *, slug: str = "acme", name: str = "Acme Restaurants",
+                   subscribe: bool = True) -> Organization:
+    """Get-or-create an organization by slug (tests share one default org unless they ask for another)."""
+    org = await db.scalar(select(Organization).where(Organization.slug == slug))
+    if org is None:
+        org = Organization(slug=slug, name=name)
+        db.add(org)
+        await db.flush()
+        if subscribe:
+            await ensure_legacy_subscription(db, org)
+        await db.commit()
+    return org
+
+
+async def make_branch(db: AsyncSession, *, code: str = "BLR1", name: str = "Indiranagar",
+                      org: Optional[Organization] = None, **kw) -> Branch:
+    org = org or await make_org(db)
+    branch = Branch(code=code, name=name, organization_id=org.id, **kw)
     branch.floors = []
     db.add(branch)
     await db.commit()
@@ -53,8 +72,11 @@ async def make_staff(
     password: Optional[str] = "correct-horse-battery",
     username: Optional[str] = None,
     is_active: bool = True,
+    org: Optional[Organization] = None,
 ) -> StaffUser:
+    org = org or await make_org(db)
     user = StaffUser(
+        organization_id=branch.organization_id if branch else org.id,
         branch_id=branch.id if branch else None,
         username=username or f"{role}_{uuid.uuid4().hex[:6]}",
         full_name=f"Test {role.title()}",
@@ -78,8 +100,9 @@ def idem(user: StaffUser, key: Optional[str] = None) -> Dict[str, str]:
     return auth_headers(user, **{"X-Idempotency-Key": key or uuid.uuid4().hex})
 
 
-async def make_category(db: AsyncSession, *, name: str = "Mains") -> Category:
-    category = Category(name=name)
+async def make_category(db: AsyncSession, *, name: str = "Mains", org: Optional[Organization] = None) -> Category:
+    org = org or await make_org(db)
+    category = Category(name=name, organization_id=org.id)
     category.items = []
     db.add(category)
     await db.commit()
@@ -100,6 +123,7 @@ async def make_menu_item(
 ) -> MenuItem:
     category = category or await make_category(db)
     item = MenuItem(
+        organization_id=category.organization_id,
         category_id=category.id,
         name=name,
         base_price=Decimal(price),
@@ -117,8 +141,10 @@ async def make_menu_item(
 async def make_modifier_group(
     db: AsyncSession, *, name: str = "Spice", min_selection: int = 0, max_selection: int = 1,
     modifiers: Iterable[tuple] = (("Mild", "0.00"), ("Extra Hot", "20.00")),
+    org: Optional[Organization] = None,
 ) -> ModifierGroup:
-    group = ModifierGroup(name=name, min_selection=min_selection, max_selection=max_selection)
+    org = org or await make_org(db)
+    group = ModifierGroup(organization_id=org.id, name=name, min_selection=min_selection, max_selection=max_selection)
     group.modifiers = [ModifierItem(name=n, price=Decimal(p)) for n, p in modifiers]
     db.add(group)
     await db.commit()

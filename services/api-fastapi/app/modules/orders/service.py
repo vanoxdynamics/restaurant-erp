@@ -94,14 +94,16 @@ def recompute_totals(order: Order) -> None:
     order.total_amount = order.subtotal
 
 
-async def _build_order_items(db: AsyncSession, requested: List[OrderItemCreate]) -> List[OrderItem]:
+async def _build_order_items(
+    db: AsyncSession, org_id: uuid.UUID, requested: List[OrderItemCreate]
+) -> List[OrderItem]:
     """Validate requested lines against the live catalog and snapshot names and prices."""
     item_ids = {r.item_id for r in requested}
     menu_items: Dict[uuid.UUID, MenuItem] = {
         m.id: m
         for m in (await db.scalars(
             select(MenuItem)
-            .where(MenuItem.id.in_(item_ids))
+            .where(MenuItem.id.in_(item_ids), MenuItem.organization_id == org_id)
             .options(
                 selectinload(MenuItem.variants),
                 selectinload(MenuItem.modifier_groups).selectinload(ModifierGroup.modifiers),
@@ -212,7 +214,7 @@ async def create_order(db: AsyncSession, user: CurrentUser, payload: OrderCreate
         notes=payload.notes,
         business_date=business_date(branch.timezone),
     )
-    order.items = await _build_order_items(db, payload.items)
+    order.items = await _build_order_items(db, user.organization_id, payload.items)
     recompute_totals(order)
     db.add(order)
     await db.flush()
@@ -244,7 +246,7 @@ async def update_order(db: AsyncSession, user: CurrentUser, order_id: uuid.UUID,
 async def add_order_items(db: AsyncSession, user: CurrentUser, order_id: uuid.UUID, payload: OrderItemsAppend) -> Order:
     order = await _load_for_change(db, user, order_id, payload.version)
     _ensure_active(order)
-    order.items.extend(await _build_order_items(db, payload.items))
+    order.items.extend(await _build_order_items(db, user.organization_id, payload.items))
     recompute_totals(order)
     queue_event(db, order.branch_id, Topic.ORDERS, "order.items_added", order.id, {"count": len(payload.items)})
     await commit(db)

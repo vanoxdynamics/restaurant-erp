@@ -54,7 +54,24 @@ class RealtimeConnectionManager:
         finally:
             await client.aclose()
 
+    async def close_branch(self, branch_prefix: str, code: int = 4403) -> None:
+        """Drop every socket of one branch (all topics): the organization lost access."""
+        for channel in [c for c in self._connections if c.startswith(branch_prefix)]:
+            for ws in list(self._connections.get(channel, ())):
+                self.unregister(channel, ws)
+                try:
+                    await ws.close(code=code)
+                except Exception:
+                    pass
+
     async def fan_out_local(self, channel: str, text: str) -> None:
+        if '"access.revoked"' in text:
+            await self.fan_out_local_only(channel, text)
+            await self.close_branch(channel.rsplit(":", 1)[0] + ":")
+            return
+        await self.fan_out_local_only(channel, text)
+
+    async def fan_out_local_only(self, channel: str, text: str) -> None:
         sockets = list(self._connections.get(channel, ()))
         if not sockets:
             return

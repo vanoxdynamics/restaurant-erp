@@ -39,9 +39,13 @@ async def list_branches(user: CurrentUser = Depends(get_current_user), db: Async
 
 @router.post("/branches", response_model=BranchRead, status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(owners)])
-async def create_branch(payload: BranchCreate, db: AsyncSession = Depends(get_db)):
-    """Create a new branch."""
-    return await service.create_branch(db, payload)
+async def create_branch(
+    payload: BranchCreate,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new branch in the caller's organization."""
+    return await service.create_branch(db, user, payload)
 
 
 @router.get("/branches/{branch_id}/floors", response_model=List[FloorRead])

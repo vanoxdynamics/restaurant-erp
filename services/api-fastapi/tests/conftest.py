@@ -35,7 +35,13 @@ os.environ.update({
     "DB_NULL_POOL": "true",
     "DB_ECHO": "false",
     "DEBUG": "false",
+    "PLATFORM_COOKIE_SECURE": "false",  # the test client speaks plain http
 })
+# RLS_TEST_ROLE=rls_app runs the whole suite with the API connected as an ordinary (non-superuser) role, so row-level
+# security is actually enforced for every request. Without it the app connects as the superuser and RLS is bypassed.
+RLS_TEST_ROLE = os.environ.get("RLS_TEST_ROLE", "")
+if RLS_TEST_ROLE:
+    os.environ["DB_SET_ROLE"] = RLS_TEST_ROLE
 
 import asyncpg  # noqa: E402
 import httpx  # noqa: E402
@@ -66,6 +72,33 @@ async def _recreate_database() -> None:
         await conn.close()
 
 
+async def _superuser_connect():
+    url = make_url(TEST_DATABASE_URL)
+    return await asyncpg.connect(host=url.host, port=url.port, user=url.username, password=url.password, database=url.database)
+
+
+async def ensure_app_role(name: str) -> None:
+    """Create (if needed) a NOLOGIN role that may use every table but is neither superuser nor BYPASSRLS."""
+    conn = await _superuser_connect()
+    try:
+        await conn.execute(f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{name}') "
+                           f"THEN CREATE ROLE {name} NOLOGIN; END IF; END $$")
+        await conn.execute(f"GRANT USAGE ON SCHEMA public TO {name}")
+        await conn.execute(f"GRANT ALL ON ALL TABLES IN SCHEMA public TO {name}")
+        await conn.execute(f"GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO {name}")
+    finally:
+        await conn.close()
+
+
+async def superuser_sql(sql: str) -> None:
+    """Run DDL the restricted app role may not (e.g. disabling the audit trigger to simulate tampering)."""
+    conn = await _superuser_connect()
+    try:
+        await conn.execute(sql)
+    finally:
+        await conn.close()
+
+
 def _alembic(*args: str) -> None:
     subprocess.run([sys.executable, "-m", "alembic", *args], cwd=SERVICE_DIR, check=True,
                    env=os.environ.copy(), capture_output=True)
@@ -75,6 +108,8 @@ def _alembic(*args: str) -> None:
 async def migrated_database():
     await _recreate_database()
     _alembic("upgrade", "head")
+    if RLS_TEST_ROLE:
+        await ensure_app_role(RLS_TEST_ROLE)
     yield
 
 
@@ -84,9 +119,12 @@ TABLES = ", ".join(f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables))
 @pytest.fixture(autouse=True)
 async def clean_state(migrated_database):
     yield
-    async with AsyncSessionLocal() as session:
-        await session.execute(text(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE"))
-        await session.commit()
+    if RLS_TEST_ROLE:  # restarting identity sequences needs ownership, which the restricted app role deliberately lacks
+        await superuser_sql(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE")
+    else:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE"))
+            await session.commit()
     client = redis_module.redis_client()
     try:
         await client.flushdb()

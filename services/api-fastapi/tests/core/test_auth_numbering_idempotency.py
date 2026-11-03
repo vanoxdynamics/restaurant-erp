@@ -16,7 +16,7 @@ from tests.flows import API, create_order, line
 
 def as_current(user) -> CurrentUser:
     return CurrentUser(id=user.id, branch_id=user.branch_id, role=Role(user.role), username=user.username,
-                       full_name=user.full_name, auth_method="pwd")
+                       full_name=user.full_name, auth_method="pwd", organization_id=user.organization_id)
 
 
 # --- Auth ------------------------------------------------------------------------
