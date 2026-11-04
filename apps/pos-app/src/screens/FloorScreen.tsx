@@ -8,6 +8,7 @@ import { Icon } from '../components/Icon';
 import { QueryState } from '../components/QueryState';
 import { TopBar } from '../components/TopBar';
 import { useDeviceStore } from '../stores/deviceStore';
+import { useKitchenPlan } from '../plan';
 
 const STATUS_TINT: Record<string, string> = {
   [TableStatus.AVAILABLE]: colors.available,
@@ -16,11 +17,26 @@ const STATUS_TINT: Record<string, string> = {
   [TableStatus.RESERVED]: colors.dirty,
 };
 
-const ReadyChip: React.FC<{ count: number }> = ({ count }) => (
+const ReadyChip: React.FC<{ count: number; onPaper?: boolean }> = ({ count, onPaper }) => (
   <View style={styles.readyChip} accessibilityLabel={`${count} ready to serve`}>
     <Icon name="check-circle" size={14} color={colors.textInverse} />
-    <Text style={styles.readyChipText}>{count} ready</Text>
+    <Text style={styles.readyChipText}>{count} {onPaper ? 'to serve' : 'ready'}</Text>
   </View>
+);
+
+const UnprintedChip: React.FC<{ count: number }> = ({ count }) => (
+  <View style={[styles.readyChip, { backgroundColor: colors.danger }]} accessibilityLabel={`${count} KOTs not printed`}>
+    <Icon name="printer" size={14} color={colors.textInverse} />
+    <Text style={styles.readyChipText}>{count} not printed</Text>
+  </View>
+);
+
+/** The chips a table or takeaway tile shows for its open tickets. */
+const TicketChips: React.FC<{ ready: number; unprinted: number; onPaper: boolean }> = ({ ready, unprinted, onPaper }) => (
+  <>
+    {unprinted > 0 ? <UnprintedChip count={unprinted} /> : null}
+    {ready > 0 ? <ReadyChip count={ready} onPaper={onPaper} /> : null}
+  </>
 );
 
 export interface FloorScreenProps {
@@ -33,15 +49,21 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder }) => {
   const takeawayQuery = useOpenTakeaways(device.branchId);
   const createOrder = useCreateOrder();
 
-  // Tickets the kitchen has finished, counted per order, so a waiter can see food waiting to be
-  // picked up without opening each table.
+  // Tickets waiting for the floor, counted per order, so a waiter can see food to pick up without opening each table:
+  // screen tickets once the kitchen marks them ready, paper tickets as soon as they are sent. Paper slips that never
+  // printed are counted too, since the kitchen does not know about those orders.
+  const plan = useKitchenPlan();
   const board = useKitchenBoard(device.branchId);
-  const readyByOrder = useMemo(() => {
-    const counts = new Map<string, number>();
+  const { readyByOrder, unprintedByOrder } = useMemo(() => {
+    const ready = new Map<string, number>();
+    const unprinted = new Map<string, number>();
+    const bump = (m: Map<string, number>, id: string) => m.set(id, (m.get(id) ?? 0) + 1);
     for (const ticket of board.data ?? []) {
-      if (ticket.status === 'ready') counts.set(ticket.order_id, (counts.get(ticket.order_id) ?? 0) + 1);
+      const onPaper = ticket.fulfilment === 'slip' && ticket.status === 'queued';
+      if (ticket.status === 'ready' || onPaper) bump(ready, ticket.order_id);
+      if (onPaper && ticket.print_count === 0) bump(unprinted, ticket.order_id);
     }
-    return counts;
+    return { readyByOrder: ready, unprintedByOrder: unprinted };
   }, [board.data]);
 
   const floors = floorQuery.data ?? [];
@@ -124,6 +146,7 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder }) => {
               const busy = !!table.running_order_id;
               const merged = !!table.merged_into_table_id;
               const ready = table.running_order_id ? readyByOrder.get(table.running_order_id) ?? 0 : 0;
+              const unprinted = table.running_order_id ? unprintedByOrder.get(table.running_order_id) ?? 0 : 0;
               return (
                 <Pressable
                   key={table.id}
@@ -153,7 +176,7 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder }) => {
                       </Text>
                     </View>
                   ) : null}
-                  {ready > 0 ? <ReadyChip count={ready} /> : null}
+                  <TicketChips ready={ready} unprinted={unprinted} onPaper={plan.slip} />
                 </Pressable>
               );
             })}
@@ -168,6 +191,7 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder }) => {
                 const label = 'Takeaway';
                 const items = order.lines.filter((l) => l.status !== 'cancelled').reduce((n, l) => n + l.quantity, 0);
                 const ready = readyByOrder.get(order.id) ?? 0;
+                const unprinted = unprintedByOrder.get(order.id) ?? 0;
                 return (
                   <Pressable
                     key={order.id}
@@ -183,7 +207,7 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder }) => {
                         {getOccupancyTime(order.created_at)} · {items} items
                       </Text>
                     </View>
-                    {ready > 0 ? <ReadyChip count={ready} /> : null}
+                    <TicketChips ready={ready} unprinted={unprinted} onPaper={plan.slip} />
                   </Pressable>
                 );
               })}

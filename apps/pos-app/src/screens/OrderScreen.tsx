@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { Badge, BadgeProps, Button, colors, fonts, humanizeLabel, radii, spacing, typography } from '@repo/shared-ui';
-import { formatPaiseToRupees, StaffRole } from '@repo/shared-utils';
+import { formatPaiseToRupees } from '@repo/shared-utils';
 import {
   ApiError,
   CartLine,
@@ -18,6 +18,7 @@ import {
   useRequestVoid,
   useSendToKitchen,
   useTransferTable,
+  useVoidTicket,
 } from '@repo/api-client';
 import { ItemOptionsSheet, StepButton } from '../components/ItemOptionsSheet';
 import { CartBar } from '../components/CartBar';
@@ -29,9 +30,10 @@ import { Icon } from '../components/Icon';
 import { useCartStore } from '../stores/cartStore';
 import { useDeviceStore } from '../stores/deviceStore';
 import { useSessionStore } from '../stores/sessionStore';
+import { useKitchenPlan } from '../plan';
+import { useSlipPrinting } from '../printing/useSlipPrinting';
 
 const EMPTY_CART: CartLine[] = [];
-const BILLING_ROLES: StaffRole[] = [StaffRole.OWNER, StaffRole.MANAGER, StaffRole.CASHIER];
 const errorText = (e: unknown) => (e instanceof ApiError ? e.message : 'Something went wrong. Try again.');
 const money = (paise: number) => formatPaiseToRupees(paise, { decimals: 0 });
 
@@ -56,6 +58,8 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
   const wide = width >= 900;
   const device = useDeviceStore((s) => s.device)!;
   const role = useSessionStore((s) => s.user?.role);
+  const plan = useKitchenPlan();
+  const slips = useSlipPrinting(orderId);
 
   const orderQuery = useOrder(orderId);
   const ticketsQuery = useOrderTickets(orderId);
@@ -80,6 +84,7 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
   const cancelLine = useCancelOrderLine();
   const advanceTicket = useAdvanceTicket();
   const requestVoid = useRequestVoid();
+  const voidTicketNow = useVoidTicket();
   const transfer = useTransferTable();
 
   const [tab, setTab] = useState<'menu' | 'order'>('menu');
@@ -136,8 +141,11 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
     try {
       const fired = await send.mutateAsync({ orderId, version: order.version, cart });
       clear(orderId);
-      setNotice(`Sent to kitchen: ${fired.map((t) => `KOT ${t.kot_number.split('-').pop()}`).join(', ')}`);
+      const kots = fired.map((t) => `KOT ${t.kot_number.split('-').pop()}`).join(', ');
+      setNotice(plan.slip ? `${kots} printed. Hand it to the kitchen.` : `Sent to kitchen: ${kots}`);
       if (!wide) setTab('order');
+      // The order is already with the kitchen; a slip that fails to print stays "not printed" with a button to retry.
+      void slips.print(fired.filter((t) => t.fulfilment === 'slip'));
     } catch (e) {
       setError(errorText(e));
     }
@@ -161,10 +169,17 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
     }
   };
 
-  const submitVoid = async (reason: string) => {
+  const submitVoid = async (reason: string, approverPin?: string) => {
     if (!voidTicket) return;
     setSheetError(null);
     try {
+      if (voidTicket.fulfilment === 'slip') {
+        const voided = await voidTicketNow.mutateAsync({ kotId: voidTicket.id, reason, approverPin: approverPin ?? '', orderId });
+        setNotice(`KOT ${voided.kot_number.split('-').pop()} cancelled. Take the original KOT back from the kitchen.`);
+        setVoidTicket(null);
+        void slips.printVoid(voided);
+        return;
+      }
       await requestVoid.mutateAsync({ kotId: voidTicket.id, reason, orderId });
       setNotice(`Cancel request sent to the kitchen for KOT ${voidTicket.kot_number.split('-').pop()}`);
       setVoidTicket(null);
@@ -196,7 +211,20 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
     <View style={styles.orderPanel}>
       <ScrollView contentContainerStyle={styles.orderScroll}>
         {error ? <Text style={styles.error}>{error}</Text> : null}
+        {slips.error ? <Text style={styles.error}>{slips.error}</Text> : null}
         {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+        {slips.awaiting ? (
+          <View style={styles.printCheck}>
+            <Text style={styles.printCheckTitle}>
+              Did the KOT print? {slips.awaiting.map((t) => `KOT ${t.kot_number.split('-').pop()}`).join(', ')}
+            </Text>
+            <View style={styles.printCheckActions}>
+              <Button title="Yes, printed" variant="success" size="sm" onPress={slips.confirmPrinted} loading={slips.confirming} />
+              <Button title="Print again" variant="secondary" size="sm" onPress={() => slips.print(slips.awaiting ?? [])} loading={slips.printing} />
+              <Button title="Not printed" variant="ghost" size="sm" onPress={slips.notPrinted} />
+            </View>
+          </View>
+        ) : null}
 
         {/* Not yet sent */}
         <Text style={styles.sectionTitle}>New items</Text>
@@ -241,11 +269,15 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
         ))}
 
         {/* Sent */}
-        <Text style={[styles.sectionTitle, { marginTop: spacing.xl }]}>Sent to kitchen</Text>
+        <Text style={[styles.sectionTitle, { marginTop: spacing.xl }]}>{plan.slip ? 'KOTs' : 'Sent to kitchen'}</Text>
         <QueryState query={ticketsQuery} isEmpty={sentTickets.length === 0} emptyText="Nothing sent yet.">
           {sentTickets.map((ticket) => {
             const voidable = editable && (ticket.status === 'queued' || ticket.status === 'preparing' || ticket.status === 'ready');
             const request = latestRequest.get(ticket.id);
+            const onPaper = ticket.fulfilment === 'slip';
+            // Paper tickets skip the kitchen stages: the floor marks them served straight from queued.
+            const servable = ticket.status === 'ready' || (onPaper && ticket.status === 'queued');
+            const unprinted = onPaper && ticket.status === 'queued' && ticket.print_count === 0;
             return (
               <View key={ticket.id} style={[styles.ticket, ticket.status === 'voided' ? { opacity: 0.55 } : null]}>
                 <View style={styles.ticketHead}>
@@ -253,7 +285,13 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
                     KOT {ticket.kot_number.split('-').pop()} · {humanizeLabel(ticket.station)}
                   </Text>
                   <Badge
-                    label={ticket.status === 'ready' ? 'Ready, pick up' : humanizeLabel(ticket.status.toUpperCase())}
+                    label={
+                      ticket.status === 'ready'
+                        ? 'Ready, pick up'
+                        : onPaper && ticket.status === 'queued'
+                          ? 'On paper'
+                          : humanizeLabel(ticket.status.toUpperCase())
+                    }
                     variant={TICKET_BADGE[ticket.status]}
                     size="sm"
                   />
@@ -272,16 +310,44 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
                     </View>
                   );
                 })}
-                {ticket.status === 'ready' ? (
-                  <Button
-                    title="Mark served"
-                    variant="success"
-                    onPress={() => markServed(ticket)}
-                    loading={advanceTicket.isPending && advanceTicket.variables?.kotId === ticket.id}
-                    style={{ marginTop: spacing.sm }}
-                  />
+                {unprinted ? <Text style={styles.notPrinted}>KOT not printed</Text> : null}
+                {servable || onPaper ? (
+                  <View style={styles.ticketActions}>
+                    {servable ? (
+                      <Button
+                        title="Mark served"
+                        variant="success"
+                        onPress={() => markServed(ticket)}
+                        loading={advanceTicket.isPending && advanceTicket.variables?.kotId === ticket.id}
+                        style={{ flex: 1 }}
+                      />
+                    ) : null}
+                    {onPaper && ticket.status === 'voided' ? (
+                      <Button title="Print VOID KOT" variant="secondary" onPress={() => slips.printVoid(ticket)} disabled={slips.printing} />
+                    ) : onPaper && ticket.status !== 'served' ? (
+                      <Button
+                        title={unprinted ? 'Print KOT' : 'Reprint'}
+                        variant={unprinted ? 'primary' : 'secondary'}
+                        onPress={() => slips.print([ticket])}
+                        disabled={slips.printing}
+                        icon={<Icon name="printer" size={16} color={unprinted ? colors.textInverse : colors.text} />}
+                      />
+                    ) : null}
+                  </View>
                 ) : null}
-                {voidable && request?.status === 'PENDING' ? (
+                {voidable && onPaper ? (
+                  <Button
+                    title="Cancel ticket"
+                    variant="ghost"
+                    size="sm"
+                    onPress={() => {
+                      setSheetError(null);
+                      setVoidTicket(ticket);
+                    }}
+                    textStyle={{ color: colors.danger }}
+                    style={{ alignSelf: 'flex-start', marginTop: spacing.xs, paddingHorizontal: 0 }}
+                  />
+                ) : voidable && request?.status === 'PENDING' ? (
                   <Text style={styles.voidRequested}>Cancel requested · waiting for kitchen</Text>
                 ) : voidable ? (
                   <>
@@ -326,7 +392,7 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
               icon={<Icon name="shuffle" size={16} color={colors.text} />}
             />
           ) : null}
-          {onBill && role && BILLING_ROLES.includes(role) && order && ['active', 'billed'].includes(order.status) && order.lines.length > 0 ? (
+          {onBill && plan.canBill(role) && order && ['active', 'billed'].includes(order.status) && order.lines.length > 0 ? (
             <Button
               title={order.status === 'billed' ? 'Payment' : 'Bill'}
               variant="secondary"
@@ -335,7 +401,8 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
             />
           ) : null}
           <Button
-            title={cartCount ? `Send to kitchen · ${cartCount}` : 'Send to kitchen'}
+            // Without a kitchen screen the order goes to the kitchen on paper: the waiter prints the KOT and hands it over.
+            title={`${plan.slip ? 'Print KOT' : 'Send to kitchen'}${cartCount ? ` · ${cartCount}` : ''}`}
             onPress={sendToKitchen}
             disabled={!editable || cartCount === 0}
             loading={send.isPending}
@@ -406,7 +473,8 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
       />
       <VoidRequestSheet
         ticket={voidTicket}
-        loading={requestVoid.isPending}
+        withManagerPin={voidTicket?.fulfilment === 'slip'}
+        loading={requestVoid.isPending || voidTicketNow.isPending}
         error={sheetError}
         onClose={() => setVoidTicket(null)}
         onSubmit={submitVoid}
@@ -585,6 +653,35 @@ const styles = StyleSheet.create({
     color: colors.danger,
     fontFamily: fonts.semibold,
     marginTop: spacing.sm,
+  },
+  notPrinted: {
+    ...typography.caption,
+    color: colors.danger,
+    fontFamily: fonts.semibold,
+    marginTop: spacing.sm,
+  },
+  ticketActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  printCheck: {
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryGlow,
+    borderRadius: radii.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  printCheckTitle: {
+    ...typography.bodyBold,
+    color: colors.text,
+  },
+  printCheckActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
   },
   struck: {
     textDecorationLine: 'line-through',

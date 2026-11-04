@@ -24,24 +24,37 @@ export interface VoidRequestSheetProps {
   ticket: KitchenTicket | null;
   loading?: boolean;
   error?: string | null;
+  /** No kitchen screen to ask (slip plan): a manager's PIN cancels the ticket on the spot. */
+  withManagerPin?: boolean;
   onClose: () => void;
-  onSubmit: (reason: string) => void;
+  onSubmit: (reason: string, approverPin?: string) => void;
 }
 
-export const VoidRequestSheet: React.FC<VoidRequestSheetProps> = ({ ticket, loading, error, onClose, onSubmit }) => {
+export const VoidRequestSheet: React.FC<VoidRequestSheetProps> = ({ ticket, loading, error, withManagerPin, onClose, onSubmit }) => {
   const [reason, setReason] = useState<string | null>(null);
-  useEffect(() => setReason(null), [ticket]);
+  const [pin, setPin] = useState('');
+  useEffect(() => {
+    setReason(null);
+    setPin('');
+  }, [ticket]);
+  const ready = !!reason && (!withManagerPin || pin.length >= 4);
 
   return (
     <Modal
       visible={ticket !== null}
       onClose={onClose}
-      title="Request cancel"
+      title={withManagerPin ? 'Cancel ticket' : 'Request cancel'}
       subtitle={ticket ? `KOT ${ticket.kot_number.split('-').pop()} · ${ticket.items.map((i) => `${i.quantity} × ${i.name}`).join(', ')}` : ''}
       footer={
         <>
-          <Button title="Cancel" variant="secondary" onPress={onClose} />
-          <Button title="Send to kitchen" onPress={() => reason && onSubmit(reason)} disabled={!reason} loading={loading} />
+          <Button title="Back" variant="secondary" onPress={onClose} />
+          <Button
+            title={withManagerPin ? 'Cancel ticket' : 'Send to kitchen'}
+            variant={withManagerPin ? 'danger' : undefined}
+            onPress={() => reason && onSubmit(reason, withManagerPin ? pin : undefined)}
+            disabled={!ready}
+            loading={loading}
+          />
         </>
       }
     >
@@ -51,6 +64,18 @@ export const VoidRequestSheet: React.FC<VoidRequestSheetProps> = ({ ticket, load
           <Choice key={r} label={wastageReasonLabel(r)} selected={reason === r} onPress={() => setReason(r)} />
         ))}
       </View>
+      {withManagerPin ? (
+        <View style={{ marginTop: spacing.lg }}>
+          <Input
+            label="Manager PIN"
+            value={pin}
+            onChangeText={(v) => setPin(v.replace(/\D/g, '').slice(0, 6))}
+            keyboardType="number-pad"
+            secureTextEntry
+            helper="A VOID KOT prints for the kitchen. Take the original back."
+          />
+        </View>
+      ) : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
     </Modal>
   );

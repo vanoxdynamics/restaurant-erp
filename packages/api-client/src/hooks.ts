@@ -8,6 +8,7 @@ import {
   PaymentInput,
   PaymentOutcome,
   CartLine,
+  Entitlements,
   KitchenTicket,
   OrderDetail,
   Category,
@@ -50,6 +51,18 @@ export function useSignInRoster(deviceToken: string | undefined) {
 
 export function useCreateDeviceSetupCode() {
   return useMutation({ mutationFn: (branchId?: string) => apiClient.createDeviceSetupCode(branchId) });
+}
+
+// ---- Subscription ----------------------------------------------------------------
+
+/** The organization's modules. Re-checked every minute so a plan change reaches a running tablet mid-shift. */
+export function useEntitlements(enabled = true) {
+  return useQuery<Entitlements>({
+    queryKey: ['entitlements'],
+    queryFn: () => apiClient.getEntitlements(),
+    enabled,
+    refetchInterval: 60000,
+  });
 }
 
 // ---- Branches --------------------------------------------------------------------
@@ -359,6 +372,25 @@ export function useRequestVoid() {
       invalidate(vars.orderId);
       queryClient.invalidateQueries({ queryKey: ['orderVoidRequests', vars.orderId] });
     },
+  });
+}
+
+/** Cancel a ticket straight away with a manager's PIN. */
+export function useVoidTicket() {
+  const invalidate = useInvalidateOrder();
+  return useMutation({
+    mutationFn: ({ kotId, reason, approverPin }: { kotId: string; reason: string; approverPin: string; orderId: string }) =>
+      apiClient.voidTicket(kotId, reason, approverPin),
+    onSettled: (_data, _error, vars) => invalidate(vars.orderId),
+  });
+}
+
+export function useConfirmSlipPrinted() {
+  const invalidate = useInvalidateOrder();
+  return useMutation({
+    mutationFn: ({ kotId, idempotencyKey }: { kotId: string; idempotencyKey: string; orderId: string }) =>
+      apiClient.confirmSlipPrinted(kotId, idempotencyKey),
+    onSettled: (_data, _error, vars) => invalidate(vars.orderId),
   });
 }
 

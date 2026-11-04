@@ -458,6 +458,8 @@ export interface BoardTicket {
   kot_number: string;
   station: KitchenStation;
   status: 'queued' | 'preparing' | 'ready' | 'served' | 'voided';
+  fulfilment: 'screen' | 'slip';
+  print_count: number;
   /** Table number, or 'Takeaway'. */
   table_label: string;
   order_id: string;
@@ -471,8 +473,20 @@ export interface KitchenTicket {
   kot_number: string;
   station: KitchenStation;
   status: 'queued' | 'preparing' | 'ready' | 'served' | 'voided';
+  /** 'screen' tickets go to the kitchen display; 'slip' tickets go on paper and are marked served by the floor. */
+  fulfilment: 'screen' | 'slip';
+  /** Confirmed prints of the slip; 0 means the paper has not come out yet. */
+  print_count: number;
   items: { order_item_id: string; name: string; quantity: number; notes?: string; status: string }[];
   created_at: string;
+}
+
+/** The parts of the subscription the apps act on. */
+export interface Entitlements {
+  access: 'full' | 'read_only' | 'blocked';
+  plan_code?: string;
+  /** Module keys, e.g. 'pos', 'kds' (kitchen display), 'analytics'. */
+  modules: string[];
 }
 
 /** An item the waiter has added but not yet sent to the kitchen. */

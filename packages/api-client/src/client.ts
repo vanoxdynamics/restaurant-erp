@@ -15,6 +15,7 @@ import {
 import {
   AuthSession,
   CartLine,
+  Entitlements,
   KitchenTicket,
   Bill,
   BillPayment,
@@ -261,6 +262,8 @@ function adaptBoardTicket(raw: Raw): BoardTicket {
     kot_number: raw.kot_number,
     station: STATION_FROM_API[raw.station] ?? KitchenStation.MAIN_KITCHEN,
     status: raw.status,
+    fulfilment: raw.fulfilment ?? 'screen',
+    print_count: raw.print_count ?? 0,
     table_label: raw.table_number ?? 'Takeaway',
     order_id: raw.order_id,
     order_number: raw.order_number ?? '',
@@ -309,6 +312,8 @@ function adaptTicket(raw: Raw): KitchenTicket {
     kot_number: raw.kot_number,
     station: STATION_FROM_API[raw.station] ?? KitchenStation.MAIN_KITCHEN,
     status: raw.status,
+    fulfilment: raw.fulfilment ?? 'screen',
+    print_count: raw.print_count ?? 0,
     items: (raw.items ?? []).map((i: Raw) => ({
       order_item_id: i.order_item_id,
       name: i.item_name,
@@ -440,6 +445,8 @@ export class RestaurantApiClient {
     options: { body?: unknown; query?: Record<string, string | number | undefined>;
       idempotent?: boolean | string;
       headers?: Record<string, string>;
+      /** Return the body as text instead of parsing JSON (printable pages). Errors are still parsed as JSON. */
+      text?: boolean;
     } = {},
   ): Promise<T> {
     const query = Object.entries(options.query ?? {})
@@ -468,6 +475,7 @@ export class RestaurantApiClient {
 
     if (response.status === 204) return undefined as T;
     const text = await response.text();
+    if (options.text && response.ok) return text as T;
     const data = text ? JSON.parse(text) : undefined;
 
     if (!response.ok) {
@@ -520,6 +528,12 @@ export class RestaurantApiClient {
 
   async getMe(): Promise<StaffUser> {
     return adaptStaff(await this.request<Raw>('GET', '/staff/me'));
+  }
+
+  /** What the organization's plan includes. The server enforces it; apps use it to show the right workflow. */
+  async getEntitlements(): Promise<Entitlements> {
+    const raw = await this.request<Raw>('GET', '/me/entitlements');
+    return { access: raw.access, plan_code: raw.plan_code ?? undefined, modules: raw.modules ?? [] };
   }
 
   async getBranches(): Promise<BranchSummary[]> {
@@ -781,6 +795,23 @@ export class RestaurantApiClient {
 
   async requestVoid(kotId: string, reason: string): Promise<void> {
     await this.request<Raw>('POST', `/kots/${kotId}/void-requests`, { body: { reason } });
+  }
+
+  /** Cancel a ticket on the spot with a manager's PIN (no kitchen screen to ask on a slip plan). */
+  async voidTicket(kotId: string, reason: string, approverPin: string): Promise<KitchenTicket> {
+    return adaptTicket(
+      await this.request<Raw>('POST', `/kots/${kotId}/void`, { body: { void_reason: reason, approver_pin: approverPin } }),
+    );
+  }
+
+  /** The kitchen slip as a print-ready HTML page for the paper width. Reading it never counts as printing. */
+  async getSlipHtml(kotId: string, widthMm: 58 | 80 = 80): Promise<string> {
+    return this.request<string>('GET', `/kots/${kotId}/slip`, { query: { format: 'html', width: widthMm }, text: true });
+  }
+
+  /** Confirm the paper came out. Retry with the same key; a new key is a reprint and is audited. */
+  async confirmSlipPrinted(kotId: string, idempotencyKey: string): Promise<KitchenTicket> {
+    return adaptTicket(await this.request<Raw>('POST', `/kots/${kotId}/slip/printed`, { idempotent: idempotencyKey }));
   }
 
   async transferTable(sourceTableId: string, targetTableId: string, reason?: string): Promise<void> {
