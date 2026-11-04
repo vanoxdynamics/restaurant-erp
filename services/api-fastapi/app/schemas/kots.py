@@ -5,6 +5,7 @@ from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.enums import Fulfilment, KOTStatus, Station
+from app.schemas.billing import PrintRowRead
 from app.schemas.common import Pin, Reason
 
 
@@ -51,6 +52,7 @@ class KOTRead(BaseModel):
     fulfilment: Fulfilment = Fulfilment.SCREEN
     print_count: int = 0
     last_printed_at: Optional[datetime] = None
+    void_printed_at: Optional[datetime] = None  # when the VOID notice of a cancelled slip was printed
     void_reason: Optional[str] = None
     # Filled in for listings so a kitchen card can say which table it is for.
     order_number: Optional[str] = None
@@ -90,3 +92,5 @@ class SlipRead(BaseModel):
     order_notes: Optional[str] = None
     text: str
     warnings: List[str] = []
+    paper_mm: int = 80
+    rows: List[PrintRowRead] = []  # the slip line by line for the requested paper width (line printers, e.g. Pine Labs)

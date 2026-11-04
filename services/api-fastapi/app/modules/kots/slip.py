@@ -152,6 +152,42 @@ def header_rows(slip: Slip, width: int) -> List[Tuple[str, str]]:
     return rows
 
 
+# --- print rows -----------------------------------------------------------------------------------------------------------------
+
+# One printed line for printers that take text line by line (e.g. the Pine Labs device's PrintData):
+# (style, align, text) with style 'normal', 'bold' or 'big' (double width: already wrapped to half the line) and align 'left' or
+# 'center'. Text is already cleaned and wrapped to the paper width.
+PrintRow = Tuple[str, str, str]
+
+
+def print_rows(slip: Slip, paper_mm: int = 80) -> List[PrintRow]:
+    width = COLUMNS[paper_mm]
+    rule: PrintRow = ("normal", "left", "-" * width)
+    rows: List[PrintRow] = []
+    for style, text in header_rows(slip, width):
+        if style == "marker":
+            rows.append(("big" if _marker_is_wide(slip) else "bold", "center", text))
+        elif style == "big":
+            rows.append(("big", "center", text))
+        else:
+            rows.append(("normal", "left", text))
+    rows.append(rule)
+    for kind, text in _body_lines(slip, width):
+        if kind == "section":
+            rows.append(("bold", "center", text))
+        else:
+            rows.append(("normal" if kind == "note" else "bold", "left", text))
+    if slip.order_notes:
+        rows.append(rule)
+        rows += [("normal", "left", t) for t in _wrap(f"NOTE: {clean(slip.order_notes)}", width, rest="      ")]
+    rows.append(rule)
+    if slip.marker == VOID:
+        rows.append(("bold", "center", "Take the original slip back"))
+    elif slip.round > 1:
+        rows.append(("bold", "center", f"Round {slip.round} for this order"))
+    return rows
+
+
 # --- plain text -----------------------------------------------------------------------------------------------------------------
 
 

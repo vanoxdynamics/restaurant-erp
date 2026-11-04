@@ -1,7 +1,10 @@
+import re
+import secrets
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 from urllib.parse import quote, urlencode
 
 from fastapi import BackgroundTasks
@@ -31,11 +34,21 @@ from app.core.money import ZERO, q
 from app.core.numbering import next_document_number
 from app.core.pagination import PageParams, paginate
 from app.models.billing import Bill, Payment
-from app.models.floor import Branch
+from app.models.floor import Branch, DiningTable
+from app.models.orders import Order, OrderItem
+from app.models.staff import StaffUser
+from app.modules.billing import receipt as receipts
 from app.modules.billing.tax import TaxLine, compute_bill
 from app.modules.orders.service import load_order, set_table_status, set_table_vacant
 from app.modules.staff.service import get_open_shift
-from app.schemas.billing import BillCreate, BillVoidRequest, PaymentCreate
+from app.schemas.billing import (
+    BillCreate,
+    BillVoidRequest,
+    PaymentCreate,
+    PaymentReverse,
+    TerminalPaymentComplete,
+    TerminalPaymentStart,
+)
 from app.worker.tasks import deduct_bom_recipe_inventory, send_manager_push_alert
 
 BILL_LOADERS = (selectinload(Bill.payments),)
@@ -184,11 +197,23 @@ async def _new_payment(
     return record
 
 
+def _refuse_while_terminal_pending(bill: Bill) -> None:
+    """
+    While a card/UPI terminal is charging this bill, nothing else may change what is owed: another tender could overpay it,
+    and a void would orphan money the terminal may already have taken.
+    """
+    pending = next((p for p in bill.payments if p.status == PaymentStatus.PENDING.value), None)
+    if pending is not None:
+        raise Conflict("A card or UPI payment on this bill is not finished yet. Complete or resolve it first.",
+                       code="terminal_payment_pending", details={"payment_id": str(pending.id)})
+
+
 async def _load_payable(db: AsyncSession, user: CurrentUser, bill_id: uuid.UUID) -> Bill:
     bill = await load_bill(db, bill_id, for_update=True)
     require_branch_access(user, bill.branch_id)
     if bill.status not in PAYABLE:
         raise InvalidTransition(f"Bill is {bill.status}", details={"status": bill.status})
+    _refuse_while_terminal_pending(bill)
     return bill
 
 
@@ -271,6 +296,7 @@ async def void_bill(
     if bill.status != BillStatus.UNPAID.value or bill.paid_amount > ZERO:
         raise Conflict("Only unpaid bills can be voided; paid bills need a refund", code="refund_required",
                        details={"status": bill.status})
+    _refuse_while_terminal_pending(bill)
     approver_id = await resolve_approver(db, user, bill.branch_id, payload.approver_pin, redis_client)
 
     bill.status = BillStatus.VOIDED.value
@@ -294,3 +320,194 @@ async def void_bill(
                             f"{bill.bill_number} voided by {user.full_name}: {payload.reason}",
                             {"bill_id": str(bill.id)})
     return await load_bill(db, bill.id)
+
+
+# --- card/UPI terminal payments (Pine Labs) ----------------------------------------------------------------------------------
+
+TERMINAL_REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I: staff may read it off a charge slip
+TERMINAL_REF_LENGTH = 10  # Pine Labs' BillingRefNo allows at most 10 characters
+
+# What we keep from a terminal's answer. Anything else (cardholder name, expiry, track data) is dropped, and the card number is
+# stored masked whatever the device sends.
+TERMINAL_DETAIL_KEYS = {
+    "BillingRefNo", "ApprovalCode", "HostResponse", "CardNumber", "CardType", "InvoiceNumber", "BatchNumber", "TerminalId",
+    "MerchantId", "RetrievalReferenceNumber", "AcquirerName", "AcquiringBankCode", "CardEntryMode", "TransactionType",
+    "ResponseCode", "ResponseMsg", "Remark", "PlutusVersion", "PlutusTransactionLogID", "TransactionDate", "TransactionTime",
+}
+
+
+def _terminal_ref() -> str:
+    return "".join(secrets.choice(TERMINAL_REF_ALPHABET) for _ in range(TERMINAL_REF_LENGTH))
+
+
+def mask_card_number(value: str) -> str:
+    """Keep only the last four digits of anything that looks like a card number."""
+    digits = re.sub(r"\D", "", value)
+    if len(digits) <= 4:
+        return value
+    return "*" * (len(digits) - 4) + digits[-4:]
+
+
+def safe_terminal_details(details: Dict[str, Any]) -> Dict[str, Any]:
+    safe: Dict[str, Any] = {}
+    for key, value in details.items():
+        if key not in TERMINAL_DETAIL_KEYS or value is None:
+            continue
+        text_value = str(value)[:100]
+        safe[key] = mask_card_number(text_value) if key == "CardNumber" else text_value
+    return safe
+
+
+async def start_terminal_payment(
+    db: AsyncSession, user: CurrentUser, bill_id: uuid.UUID, payload: TerminalPaymentStart, idempotency_key: Optional[str],
+) -> Tuple[Payment, Bill]:
+    """
+    Record a card/UPI payment as pending before the terminal is asked to charge it. It counts towards the bill only once the
+    terminal approves it, but it exists from the start, so a crash between the charge and the answer can never lose it.
+    """
+    bill = await _load_payable(db, user, bill_id)
+    if payload.amount > bill.balance_due:
+        raise ValidationFailed("Payment exceeds the balance due", code="overpayment", details={"balance_due": str(bill.balance_due)})
+    shift = await get_open_shift(db, user.id)
+    record = Payment(
+        bill_id=bill.id,
+        payment_mode=payload.payment_mode.value,
+        amount=payload.amount,
+        status=PaymentStatus.PENDING.value,
+        received_by_id=user.id,
+        shift_id=shift.id if shift else None,
+        idempotency_key=idempotency_key,
+        provider=payload.provider,
+        provider_meta={"billing_ref_no": _terminal_ref(), "started_by": str(user.id)},
+    )
+    bill.payments.append(record)
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise Conflict("Duplicate payment", code="duplicate_payment") from exc
+    queue_event(db, bill.branch_id, Topic.BILLING, "bill.payment_started", bill.id, {"payment_id": str(record.id)})
+    await commit(db)
+    bill = await load_bill(db, bill.id)
+    return next(p for p in bill.payments if p.id == record.id), bill
+
+
+async def _load_payment_and_bill(db: AsyncSession, user: CurrentUser, payment_id: uuid.UUID) -> Tuple[Payment, Bill]:
+    payment = await get_or_404(db, Payment, payment_id)
+    bill = await load_bill(db, payment.bill_id, for_update=True)
+    require_branch_access(user, bill.branch_id)
+    return next(p for p in bill.payments if p.id == payment.id), bill
+
+
+async def complete_terminal_payment(
+    db: AsyncSession, user: CurrentUser, payment_id: uuid.UUID, payload: TerminalPaymentComplete,
+    background: Optional[BackgroundTasks] = None,
+) -> Tuple[Payment, Bill]:
+    """
+    Record the terminal's answer. Approved: the payment counts and may settle the bill. Declined: it is kept as failed. Repeating
+    the same answer is harmless (the app retries after a dropped connection); a different answer for a finished payment is refused.
+    """
+    payment, bill = await _load_payment_and_bill(db, user, payment_id)
+    if payment.provider == "manual":
+        raise InvalidTransition("This payment was not taken on a terminal", code="not_terminal_payment")
+    approved = payload.outcome == "approved"
+    final = PaymentStatus.SUCCESS.value if approved else PaymentStatus.FAILED.value
+    if payment.status != PaymentStatus.PENDING.value:
+        if payment.status == final:
+            return payment, bill
+        raise Conflict(f"This payment is already {payment.status}", code="payment_already_completed",
+                       details={"status": payment.status})
+
+    payment.status = final
+    payment.provider_meta = {
+        **(payment.provider_meta or {}),
+        **safe_terminal_details(payload.details),
+        "outcome": payload.outcome,
+        "source": payload.source,
+        "message": payload.message,
+        "completed_by": str(user.id),
+    }
+    if approved:
+        payment.reference_id = payload.approval_code
+        bill.paid_amount = q(bill.paid_amount + payment.amount)
+        await _settle_if_paid(db, bill, background)
+    else:
+        queue_event(db, bill.branch_id, Topic.BILLING, "bill.payment_failed", bill.id, {"payment_id": str(payment.id)})
+    await commit(db)
+    bill = await load_bill(db, bill.id)
+    return next(p for p in bill.payments if p.id == payment.id), bill
+
+
+async def reverse_terminal_payment(
+    db: AsyncSession, user: CurrentUser, payment_id: uuid.UUID, payload: PaymentReverse, redis_client=None,
+) -> Tuple[Payment, Bill]:
+    """
+    A terminal payment was voided on the device (same day, before settlement): it stops counting and the bill reopens for the
+    amount, so it can be collected again. Needs a manager and is audited.
+    """
+    payment, bill = await _load_payment_and_bill(db, user, payment_id)
+    if payment.status == PaymentStatus.REVERSED.value:
+        return payment, bill
+    if payment.status != PaymentStatus.SUCCESS.value or payment.provider == "manual":
+        raise InvalidTransition("Only approved card or UPI terminal payments can be reversed", code="not_reversible",
+                                details={"status": payment.status, "provider": payment.provider})
+    approver_id = await resolve_approver(db, user, bill.branch_id, payload.approver_pin, redis_client)
+    if payload.check_only:
+        return payment, bill
+
+    payment.status = PaymentStatus.REVERSED.value
+    payment.provider_meta = {
+        **(payment.provider_meta or {}),
+        "reversal": {**safe_terminal_details(payload.details), "reason": payload.reason, "by": str(user.id),
+                     "approved_by": str(approver_id), "at": utcnow().isoformat()},
+    }
+    bill.paid_amount = q(bill.paid_amount - payment.amount)
+    bill.status = BillStatus.UNPAID.value if bill.paid_amount <= ZERO else BillStatus.PARTIALLY_PAID.value
+    bill.settled_at = None
+    order = await load_order(db, bill.order_id, for_update=True)
+    if order.status == OrderStatus.COMPLETED.value:
+        order.status = OrderStatus.BILLED.value  # the guest may have left: the table is not re-occupied
+
+    record_audit(
+        db, branch_id=bill.branch_id, action=AuditAction.PAYMENT_REVERSE, actor_id=user.id, approver_id=approver_id,
+        entity_type="payment", entity_id=payment.id, amount=payment.amount,
+        details={"bill_number": bill.bill_number, "mode": payment.payment_mode, "provider": payment.provider,
+                 "billing_ref_no": (payment.provider_meta or {}).get("billing_ref_no"), "reason": payload.reason},
+    )
+    queue_event(db, bill.branch_id, Topic.BILLING, "bill.payment_reversed", bill.id,
+                {"payment_id": str(payment.id), "balance_due": str(bill.balance_due)})
+    queue_event(db, bill.branch_id, Topic.ORDERS, "order.updated", order.id, {"status": order.status})
+    await commit(db)
+    bill = await load_bill(db, bill.id)
+    return next(p for p in bill.payments if p.id == payment.id), bill
+
+
+# --- printed customer bill ---------------------------------------------------------------------------------------------------
+
+
+async def build_receipt(db: AsyncSession, user: CurrentUser, bill_id: uuid.UUID) -> receipts.Receipt:
+    bill = await get_bill(db, user, bill_id)
+    order = await get_or_404(db, Order, bill.order_id)
+    branch = await get_or_404(db, Branch, bill.branch_id)
+    table = await db.get(DiningTable, order.table_id) if order.table_id else None
+    cashier = await db.get(StaffUser, user.id)
+    items = (await db.scalars(
+        select(OrderItem).where(OrderItem.order_id == order.id, OrderItem.status != OrderItemStatus.CANCELLED.value)
+        .order_by(OrderItem.created_at)
+    )).all()
+    return receipts.Receipt(
+        branch_name=branch.name, branch_code=branch.code, address=branch.address, phone=branch.phone, gstin=branch.gstin,
+        bill_number=bill.bill_number, order_number=order.order_number, order_type=order.order_type,
+        table_number=table.table_number if table else None, guest_count=order.guest_count,
+        billed_at=bill.created_at.astimezone(ZoneInfo(branch.timezone)),
+        cashier=cashier.full_name if cashier else None,
+        lines=[receipts.ReceiptLine(
+            quantity=i.quantity,
+            name=f"{i.name_snapshot} ({i.variant_name_snapshot})" if i.variant_name_snapshot else i.name_snapshot,
+            amount=i.line_total) for i in items],
+        subtotal=bill.subtotal, discount=bill.discount_amount, discount_reason=bill.discount_reason,
+        cgst=bill.tax_cgst, sgst=bill.tax_sgst, grand_total=bill.grand_total,
+        payments=[receipts.ReceiptPayment(mode=p.payment_mode, amount=p.amount, reference=p.reference_id)
+                  for p in bill.payments if p.status == PaymentStatus.SUCCESS.value],
+        balance_due=bill.balance_due,
+    )

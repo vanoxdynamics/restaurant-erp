@@ -21,6 +21,7 @@ from app.modules.catalog import router as catalog_router
 from app.modules.entitlements import router as entitlements_router
 from app.modules.floor import router as floor_router
 from app.modules.kots import router as kots_router
+from app.modules.kots.station import router as kots_station_router
 from app.modules.orders import router as orders_router
 from app.modules.platform.billing_router import router as platform_billing_router
 from app.modules.platform.orgs_router import router as platform_orgs_router
@@ -129,6 +130,7 @@ app.include_router(catalog_router, prefix=settings.API_V1_STR)
 app.include_router(entitlements_router, prefix=settings.API_V1_STR)
 app.include_router(floor_router, prefix=settings.API_V1_STR)
 app.include_router(orders_router, prefix=settings.API_V1_STR)
+app.include_router(kots_station_router, prefix=settings.API_V1_STR)
 app.include_router(kots_router, prefix=settings.API_V1_STR)
 app.include_router(billing_router, prefix=settings.API_V1_STR)
 app.include_router(staff_router, prefix=settings.API_V1_STR)

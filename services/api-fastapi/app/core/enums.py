@@ -134,9 +134,10 @@ class PaymentMode(StrEnum):
 
 
 class PaymentStatus(StrEnum):
-    PENDING = "pending"
+    PENDING = "pending"  # a card/UPI terminal was asked to charge; the result is not known yet
     SUCCESS = "success"
     FAILED = "failed"
+    REVERSED = "reversed"  # a terminal payment voided the same day; no longer counts towards the bill
 
 
 class Role(StrEnum):
@@ -164,6 +165,7 @@ class AuditAction(StrEnum):
     LOGIN_LOCKOUT = "login_lockout"
     CASH_VARIANCE = "cash_variance"
     KOT_REPRINT = "kot_reprint"  # a kitchen slip was printed again
+    PAYMENT_REVERSE = "payment_reverse"  # a card/UPI terminal payment was voided
 
 
 class VoidRequestStatus(StrEnum):

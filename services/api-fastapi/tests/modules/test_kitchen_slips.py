@@ -280,3 +280,60 @@ async def test_slip_endpoints_follow_the_plan_both_ways(client, db, redis_client
         _, kot = await fired_ticket(client, db, waiter)
         assert (await slip(client, waiter, kot["id"], format="text")).status_code == 200
         assert kot["fulfilment"] == ("slip" if modules == SLIP else "screen")
+
+
+# --- the counter's print station --------------------------------------------------------------------------------------------------
+
+
+async def queue(client, user):
+    r = await client.get(f"{API}/kots/print-queue", headers=auth_headers(user))
+    assert r.status_code == 200, r.text
+    return [(k["kot_number"], k["status"]) for k in r.json()]
+
+
+async def test_the_print_station_gets_new_slips_then_owed_void_notices(client, db, go_slip, waiter, cashier, manager):
+    _, first = await fired_ticket(client, db, waiter, name="Curry")
+    _, second = await fired_ticket(client, db, waiter, name="Dal")
+    assert await queue(client, cashier) == [(first["kot_number"], "queued"), (second["kot_number"], "queued")]  # oldest first
+
+    await printed(client, cashier, first["id"])
+    assert await queue(client, cashier) == [(second["kot_number"], "queued")]
+
+    # The printed one is cancelled: the kitchen is owed a VOID notice. The unprinted one is cancelled: nothing to take back.
+    for kot in (first, second):
+        r = await client.post(f"{API}/kots/{kot['id']}/void", json={"void_reason": "guest left", "approver_pin": "9001"},
+                              headers=auth_headers(waiter))
+        assert r.status_code == 200, r.text
+    assert await queue(client, cashier) == [(first["kot_number"], "voided")]
+    assert (await slip(client, cashier, first["id"])).json()["marker"] == "VOID"
+
+    r = await printed(client, cashier, first["id"])
+    assert r.json()["print_count"] == 1 and r.json()["void_printed_at"]  # a VOID notice is not a reprint of the order
+    assert await queue(client, cashier) == []
+    assert (await db.scalars(select(AuditLog).where(AuditLog.action_type == "kot_reprint"))).all() == []
+    await printed(client, cashier, first["id"])  # a second VOID copy is a reprint, and audited
+    [audit] = (await db.scalars(select(AuditLog).where(AuditLog.action_type == "kot_reprint"))).all()
+    assert audit.details["void_notice"] is True
+    assert manager.id
+
+
+async def test_screen_tickets_never_reach_the_print_station(client, db, waiter, cashier):
+    await fired_ticket(client, db, waiter)  # default plan: kitchen screen
+    assert await queue(client, cashier) == []
+
+
+async def test_slip_print_rows_fit_the_paper(client, db, go_slip, waiter, table):
+    item = await factories.make_menu_item(db, name="Paneer Butter Masala with extra gravy and a very long name", station="grill",
+                                          category=await factories.make_category(db, name="Grill"))
+    other = await factories.make_menu_item(db, name="Jeera Rice")
+    order = await create_order(client, waiter, table, items=[line(item, 2, notes="less oil; no onion"), line(other)])
+    [kot] = await fire(client, waiter, order["id"])
+    for width, cols in ((58, 32), (80, 48)):
+        s = (await slip(client, waiter, kot["id"], width=width)).json()
+        assert s["paper_mm"] == width
+        styles = {(r["style"], r["align"]) for r in s["rows"]}
+        assert ("big", "center") in styles and ("bold", "center") in styles  # station banner and section headings
+        for row in s["rows"]:
+            assert len(row["text"]) <= (cols // 2 if row["style"] == "big" else cols), row
+        texts = [r["text"] for r in s["rows"]]
+        assert "[ GRILL ]" in texts and "  - less oil" in texts and texts[0].strip() == "** NEW ORDER **"

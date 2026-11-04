@@ -358,13 +358,36 @@ async def record_print(db: AsyncSession, user: CurrentUser, kot_id: uuid.UUID) -
     kot = await load_kot(db, kot_id, for_update=True)
     require_branch_access(user, kot.branch_id)
     now = datetime.now(timezone.utc)
-    kot.print_count += 1
-    kot.first_printed_at = kot.first_printed_at or now
-    kot.last_printed_at, kot.last_printed_by_id = now, user.id
-    if kot.print_count > 1:
-        record_audit(db, branch_id=kot.branch_id, action=AuditAction.KOT_REPRINT, actor_id=user.id, entity_type="kot",
-                     entity_id=kot.id, details={"kot_number": kot.kot_number, "print_count": kot.print_count, "status": kot.status})
+    if kot.status == KOTStatus.VOIDED.value and kot.print_count > 0:
+        # A cancelled ticket whose slip already went out: this print is the VOID notice for the kitchen, not a reprint of the order.
+        # The first one is expected; another copy is a reprint and audited like any other.
+        if kot.void_printed_at is not None:
+            record_audit(db, branch_id=kot.branch_id, action=AuditAction.KOT_REPRINT, actor_id=user.staff_id, entity_type="kot",
+                         entity_id=kot.id, details={"kot_number": kot.kot_number, "status": kot.status, "void_notice": True})
+        kot.void_printed_at = kot.void_printed_at or now
+    else:
+        kot.print_count += 1
+        kot.first_printed_at = kot.first_printed_at or now
+        if kot.print_count > 1:
+            record_audit(db, branch_id=kot.branch_id, action=AuditAction.KOT_REPRINT, actor_id=user.staff_id, entity_type="kot",
+                         entity_id=kot.id, details={"kot_number": kot.kot_number, "print_count": kot.print_count, "status": kot.status})
+    kot.last_printed_at, kot.last_printed_by_id = now, user.staff_id
     queue_event(db, kot.branch_id, Topic.KOTS, "kot.printed", kot.id,
                 {"print_count": kot.print_count, "station": kot.station, "order_id": str(kot.order_id)})
     await commit(db)
     return (await annotate_kots(db, [await load_kot(db, kot.id)]))[0]
+
+
+async def print_queue(db: AsyncSession, user: CurrentUser, branch_id: Optional[uuid.UUID]) -> Sequence[KOT]:
+    """
+    What the branch's print station (the counter device) still has to print, oldest first: paper tickets that have never printed,
+    and VOID notices for cancelled tickets whose slip already went to the kitchen.
+    """
+    branch_id = resolve_branch_id(user, branch_id)
+    never_printed = (KOT.status == KOTStatus.QUEUED.value) & (KOT.print_count == 0)
+    void_owed = (KOT.status == KOTStatus.VOIDED.value) & (KOT.print_count > 0) & KOT.void_printed_at.is_(None)
+    stmt = (
+        select(KOT).where(KOT.branch_id == branch_id, KOT.fulfilment == Fulfilment.SLIP.value, never_printed | void_owed)
+        .options(*KOT_LOADERS).order_by(KOT.created_at)
+    )
+    return await annotate_kots(db, (await db.scalars(stmt)).all())

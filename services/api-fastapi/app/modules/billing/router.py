@@ -2,18 +2,23 @@ import uuid
 from datetime import date
 from typing import Optional
 
+from enum import StrEnum
+
 import redis.asyncio as aioredis
-from fastapi import APIRouter, BackgroundTasks, Depends, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, get_current_user, require_roles, require_roles_by_module
 from app.core.database import get_db
+from app.core.errors import ValidationFailed
 from app.core.enums import BillStatus, Role
 from app.core.idempotency import IdempotencyGuard, idempotent
 from app.core.modules import ModuleKey
 from app.core.pagination import PageParams, page_params
 from app.core.redis import get_redis
+from app.modules.billing import receipt as receipts
 from app.modules.billing import service
+from app.modules.kots.slip import COLUMNS
 from app.schemas.billing import (
     BillCreate,
     BillRead,
@@ -21,7 +26,12 @@ from app.schemas.billing import (
     PaymentCreate,
     PaymentRead,
     PaymentResult,
+    PaymentReverse,
+    PrintRowRead,
+    ReceiptRead,
     SplitPaymentRequest,
+    TerminalPaymentComplete,
+    TerminalPaymentStart,
     UPIQRResponse,
 )
 from app.schemas.common import Page
@@ -149,3 +159,92 @@ async def void_bill(
 ):
     """Void an unpaid bill (manager approval required). The bill number stays in the series."""
     return await service.void_bill(db, user, bill_id, payload, background, redis_client)
+
+
+# --- card/UPI terminal payments ------------------------------------------------------------------------------------------------
+
+
+def _result(payment, bill) -> PaymentResult:
+    return PaymentResult(payment=PaymentRead.model_validate(payment), bill=BillRead.model_validate(bill))
+
+
+@router.post("/bills/{bill_id}/terminal-payments", response_model=PaymentResult, status_code=status.HTTP_201_CREATED)
+async def start_terminal_payment(
+    bill_id: uuid.UUID,
+    payload: TerminalPaymentStart,
+    user: CurrentUser = Depends(cashier_roles),
+    guard: IdempotencyGuard = Depends(idempotent("terminal-payments")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Start a card/UPI payment on a terminal (Pine Labs). The payment is saved as pending, with the `billing_ref_no` to give the
+    terminal; it counts towards the bill once completed as approved. Requires X-Idempotency-Key.
+    """
+    cached = await guard.begin({"bill_id": str(bill_id), **payload.model_dump(mode="json")})
+    if cached:
+        return cached.as_response()
+    try:
+        payment, bill = await service.start_terminal_payment(db, user, bill_id, payload, guard.key)
+    except Exception:
+        await guard.release()
+        raise
+    return await guard.complete(status.HTTP_201_CREATED, _result(payment, bill))
+
+
+@router.post("/payments/{payment_id}/complete", response_model=PaymentResult)
+async def complete_terminal_payment(
+    payment_id: uuid.UUID,
+    payload: TerminalPaymentComplete,
+    background: BackgroundTasks,
+    user: CurrentUser = Depends(cashier_roles),
+    db: AsyncSession = Depends(get_db),
+):
+    """Record the terminal's answer for a pending payment. Sending the same answer again is safe."""
+    payment, bill = await service.complete_terminal_payment(db, user, payment_id, payload, background)
+    return _result(payment, bill)
+
+
+@router.post("/payments/{payment_id}/reverse", response_model=PaymentResult)
+async def reverse_terminal_payment(
+    payment_id: uuid.UUID,
+    payload: PaymentReverse,
+    user: CurrentUser = Depends(void_roles),
+    db: AsyncSession = Depends(get_db),
+    redis_client: aioredis.Redis = Depends(get_redis),
+):
+    """A terminal payment was voided on the device: stop counting it and reopen the bill. Manager approval; audited."""
+    payment, bill = await service.reverse_terminal_payment(db, user, payment_id, payload, redis_client)
+    return _result(payment, bill)
+
+
+# --- printed customer bill ---------------------------------------------------------------------------------------------------
+
+
+class ReceiptFormat(StrEnum):
+    JSON = "json"
+    TEXT = "text"
+    HTML = "html"
+
+
+@router.get("/bills/{bill_id}/receipt", response_model=ReceiptRead,
+            responses={200: {"content": {"text/plain": {}, "text/html": {}}}})
+async def get_receipt(
+    bill_id: uuid.UUID,
+    format: ReceiptFormat = ReceiptFormat.JSON,
+    width: int = Query(80, description="Paper width in mm: 58 or 80"),
+    user: CurrentUser = Depends(cashier_roles),
+    db: AsyncSession = Depends(get_db),
+):
+    """The customer bill as print rows (line printers such as the Pine Labs device), plain text, or a printable HTML page."""
+    if width not in COLUMNS:
+        raise ValidationFailed("Paper width must be 58 or 80 mm", code="invalid_width")
+    receipt = await service.build_receipt(db, user, bill_id)
+    if format == ReceiptFormat.TEXT:
+        return Response(receipts.render_text(receipt, width), media_type="text/plain; charset=utf-8", headers={"Cache-Control": "no-store"})
+    if format == ReceiptFormat.HTML:
+        return Response(receipts.render_html(receipt, width), media_type="text/html; charset=utf-8", headers={
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'",
+            "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+    return ReceiptRead(bill_number=receipt.bill_number, paper_mm=width,
+                       rows=[PrintRowRead(style=st, align=al, text=tx) for st, al, tx in receipts.receipt_rows(receipt, width)],
+                       text=receipts.render_text(receipt, width))

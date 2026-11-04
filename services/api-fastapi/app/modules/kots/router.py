@@ -17,6 +17,7 @@ from app.core.idempotency import IdempotencyGuard, idempotent
 from app.core.redis import get_redis
 from app.modules.kots import service
 from app.modules.kots import slip as slips
+from app.schemas.billing import PrintRowRead
 from app.schemas.kots import KOTFireRequest, KOTRead, KOTStatusUpdate, SlipLineRead, SlipRead, VoidKOTRequest
 
 router = APIRouter(
@@ -51,6 +52,19 @@ async def list_kots(
 ):
     """List KOTs filtered by station and status (defaults to open tickets). The kitchen role only sees screen tickets."""
     return await service.list_kots(db, user, branch_id, station, status, order_id, screen_only=user.role == Role.KITCHEN)
+
+
+@router.get("/print-queue", response_model=List[KOTRead])
+async def print_queue(
+    branch_id: Optional[uuid.UUID] = None,
+    user: CurrentUser = Depends(board_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    What the counter's print station still has to print, oldest first: paper tickets never printed, and VOID notices owed to the
+    kitchen for cancelled tickets whose slip already went out. Print each, then confirm with `POST /kots/{id}/slip/printed`.
+    """
+    return await service.print_queue(db, user, branch_id)
 
 
 @router.post("/fire", response_model=List[KOTRead], status_code=status.HTTP_201_CREATED)
@@ -149,6 +163,10 @@ async def get_slip(
         if format == SlipFormat.ESCPOS_BASE64:
             return Response(base64.b64encode(data).decode(), media_type="text/plain", headers=headers)
         return Response(data, media_type="application/octet-stream", headers=headers)
+    return slip_read(slip, kot, width)
+
+
+def slip_read(slip: slips.Slip, kot, width: int) -> SlipRead:
     _, warnings = slips.render_escpos(slip, width)
     return SlipRead(
         marker=slip.marker, branch_name=slip.branch_name, branch_code=slip.branch_code, kot_number=slip.kot_number,
@@ -157,7 +175,8 @@ async def get_slip(
         print_count=slip.print_count, status=kot.status, fulfilment=kot.fulfilment, order_notes=slip.order_notes,
         lines=[SlipLineRead(quantity=i.quantity, name=slips.clean(i.name), notes=slips.clean(i.notes) or None, cancelled=i.cancelled,
                             station=i.station) for i in slip.lines],
-        text=slips.render_text(slip, 80), warnings=warnings,
+        text=slips.render_text(slip, 80), warnings=warnings, paper_mm=width,
+        rows=[PrintRowRead(style=st, align=al, text=tx) for st, al, tx in slips.print_rows(slip, width)],
     )
 
 

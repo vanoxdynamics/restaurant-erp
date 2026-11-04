@@ -54,6 +54,13 @@ class CurrentUser:
     org_branch_ids: FrozenSet[uuid.UUID] = field(default_factory=frozenset)
     # Set when a platform operator is looking at this account (support impersonation): strictly read-only.
     impersonated_by: Optional[uuid.UUID] = None
+    # Set when the caller is a linked device acting as the branch's print station, not a person (see require_print_station).
+    device_id: Optional[str] = None
+
+    @property
+    def staff_id(self) -> Optional[uuid.UUID]:
+        """The person to attribute an action to; None when a device acted on its own."""
+        return None if self.device_id else self.id
 
     @property
     def is_manager(self) -> bool:
@@ -129,6 +136,36 @@ async def require_device_branch(x_device_token: Optional[str] = Header(default=N
         return uuid.UUID(payload["branch_id"])
     except (KeyError, ValueError) as exc:
         raise Unauthorized("This device is not linked to a branch", code="device_not_linked") from exc
+
+
+async def require_print_station(
+    request: Request,
+    x_device_token: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+    redis_client: aioredis.Redis = Depends(get_redis),
+) -> CurrentUser:
+    """
+    The branch's counter device printing KOTs on its own (X-Device-Token), so printing carries on while no one is signed in
+    on it. It acts only within its branch and organization, and only on the print-station endpoints that use this dependency.
+    """
+    branch_id = await require_device_branch(x_device_token)
+    payload = decode_access_token(x_device_token) or {}
+    branch = await db.get(Branch, branch_id)
+    if branch is None or not branch.is_active:
+        raise Unauthorized("This device is not linked to a branch", code="device_not_linked")
+    await scope_session(db, branch.organization_id)
+    enforce_access(await get_entitlements(db, branch.organization_id, redis_client), request.method)
+    device_id = str(payload.get("sub", ""))
+    return CurrentUser(
+        id=uuid.uuid5(uuid.NAMESPACE_OID, f"device:{device_id}"),  # stable per device (idempotency); never stored as a person
+        branch_id=branch.id,
+        role=Role.CASHIER,
+        username=f"device:{device_id}",
+        full_name="Counter print station",
+        auth_method="device",
+        organization_id=branch.organization_id,
+        device_id=device_id,
+    )
 
 
 async def get_current_user(

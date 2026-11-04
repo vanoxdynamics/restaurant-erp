@@ -3,14 +3,22 @@ End-to-end service on each plan: one table from first order to closed bill, chai
 serving and payment the way a shift actually runs, plus a plan switch in the middle of service.
 """
 
+import pytest
 from sqlalchemy import select
 
 from app.models import AuditLog
 from tests import factories
 from tests.factories import auth_headers, idem
 from tests.flows import API, bill, create_order, fire, line, pay
-from tests.modules.test_kitchen_module import SCREEN, SLIP, go, set_status  # noqa: F401  (go is a fixture)
+from tests.modules.test_kitchen_module import SCREEN, SLIP, set_modules, set_status
 from tests.modules.test_kitchen_slips import add_round, printed, slip
+
+
+@pytest.fixture
+def go(db, redis_client, branch):
+    async def switch(modules):
+        await set_modules(db, redis_client, branch.organization_id, modules)
+    return switch
 
 
 async def test_a_full_table_service_on_the_slip_plan(client, db, go, waiter, manager, kitchen, table):
