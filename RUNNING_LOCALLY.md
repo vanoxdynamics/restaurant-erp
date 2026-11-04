@@ -173,19 +173,35 @@ There are no default operator accounts: you create your own (section 9). Each on
 
 ---
 
-## 7. Run the POS (waiter) app
+## 7. Run the POS app (counter and waiter)
+
+The POS app builds two ways (see [docs/pos-devices](docs/pos-devices/01-counter-app-plan.md)):
+
+- **Counter**, the restaurant's one Pine Labs device: bills to collect, payments, and it prints every KOT and bill. This is the
+  default when nothing is set.
+- **Waiter**, staff phones: tables and orders; KOTs print at the counter and there is no billing.
 
 ### In a browser
+
+The counter, with a **simulated Pine Labs terminal and printer** (approve, decline or lose a payment's answer; make the printer
+run out of paper; see printed paper under **KOT printer**):
 
 ```bash
 cd apps/pos-app
 ```
 
 ```bash
-EXPO_PUBLIC_API_URL=http://127.0.0.1:8000 npx expo start --web --port 8091
+EXPO_PUBLIC_APP_VARIANT=counter EXPO_PUBLIC_PINELABS_SIMULATOR=1 EXPO_PUBLIC_API_URL=http://127.0.0.1:8000 npx expo start --web --port 8093
 ```
 
-Open http://localhost:8091.
+A waiter's phone, in another browser tab (link it with its own setup code):
+
+```bash
+EXPO_PUBLIC_APP_VARIANT=waiter EXPO_PUBLIC_API_URL=http://127.0.0.1:8000 npx expo start --web --port 8094
+```
+
+Add `http://localhost:8093,http://localhost:8094` to `ALLOWED_ORIGINS` in the API's `.env`. Without the simulator, the browser
+counter prints through the browser's print dialog and card/UPI are recorded by hand.
 
 ### On a tablet (Expo Go)
 

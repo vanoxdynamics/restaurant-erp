@@ -14,7 +14,8 @@ platform operators.
 
 | App | Who uses it | Runs on | What it does |
 |---|---|---|---|
-| **POS app** (`apps/pos-app`) | waiters, captains, cashiers, kitchen staff | shared tablets, handheld Android POS devices, web | tables, orders, KOTs, serving, billing and payment; the kitchen screen for kitchen staff |
+| **POS app, counter build** (`apps/pos-app`) | cashier, owner, manager | the restaurant's one Pine Labs device (web for development) | bills to collect, card/UPI through Pine Labs, cash, printing every KOT and bill (also KOTs sent from waiters' phones), day end |
+| **POS app, waiter build** (`apps/pos-app`) | waiters, captains | staff phones (Play Store) | tables, orders, sending KOTs (printed at the counter), serving |
 | **Admin app** (`apps/admin-app`) | restaurant owner, manager | phone | menu, staff and PINs, linking devices, approvals, live sales, Z-reports |
 | **Platform console** (`apps/platform-console`) | the SaaS owner and their team | browser | subscribers, plans and modules, billing terms and invoices, security alerts, audit log, operator accounts |
 | **API** (`services/api-fastapi`) | all of the above | server | every rule is enforced here; the apps only show or hide what the server allows |
@@ -174,9 +175,9 @@ but the apps do not use generated code today.
 ## 8. Status and next steps
 
 - Done: orders, KOTs, billing, staff, analytics, platform console (subscribers, plans, modules, billing, security), the kitchen
-  module with printed KOTs, and the POS Print KOT workflow (checked on web).
-- Next: **Pine Labs handheld POS**. The Android package name, signing key and UAT build are still to be set up, and the payment and
-  printer integration depends on Pine Labs' integration method.
-  On the device: tables, orders, Print KOT on the built-in printer, serving, billing and payment. Menu, staff and reports stay in
-  the admin app.
-- Not yet tried on a real tablet or thermal printer.
+  module with printed KOTs, the **counter app** and **waiter app** builds, and the **Pine Labs App-to-App integration** (payments,
+  reversal, printing, settlement) with a development simulator. Plans: [docs/pos-devices](docs/pos-devices/01-counter-app-plan.md).
+- Android: packages `com.vanoxdynamics.pos` (waiter) and `com.vanoxdynamics.pos.counter` (`.uat` for Pine Labs UAT); the Pine Labs
+  module compiles; building the APK needs EAS Build or Windows long paths ([03-android-builds.md](docs/pos-devices/03-android-builds.md)).
+- Next: Pine Labs' ApplicationId and a UAT device, the UAT server address, then UAT; the Play Store release of the waiter app.
+- Not yet tried on a real Pine Labs device.
