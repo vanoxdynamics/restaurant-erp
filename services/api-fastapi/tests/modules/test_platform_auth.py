@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select, text, update
 from sqlalchemy.exc import DBAPIError
 
+from app.core.config import settings
 from app.core.enums import PlatformRole
 from app.core.platform_middleware import PlatformGuardMiddleware
 from app.core.platform_security import (
@@ -249,12 +250,13 @@ async def test_refresh_requires_csrf_header(client, db, root):
 async def test_idle_session_cannot_refresh_or_call_api(client, db, root):
     admin, secret, _ = root
     tokens = await sign_in(client, db, admin, secret)
-    await db.execute(update(PlatformSession).values(last_seen_at=datetime.now(timezone.utc) - timedelta(minutes=20)))
+    idle = timedelta(minutes=settings.PLATFORM_SESSION_IDLE_MINUTES + 5)
+    await db.execute(update(PlatformSession).values(last_seen_at=datetime.now(timezone.utc) - idle))
     await db.commit()
     assert (await client.get(f"{P}/me", headers=bearer(tokens))).status_code == 401
     tokens2 = await sign_in(client, db, admin, secret)
     await db.execute(update(PlatformSession).where(PlatformSession.id != None)  # noqa: E711
-                     .values(last_seen_at=datetime.now(timezone.utc) - timedelta(minutes=20)))
+                     .values(last_seen_at=datetime.now(timezone.utc) - idle))
     await db.commit()
     assert (await client.post(f"{P}/auth/refresh", headers=csrf(tokens2))).status_code == 401
 
@@ -321,7 +323,8 @@ async def test_step_up_expires(client, db, root):
     admin, secret, _ = root
     tokens = await sign_in(client, db, admin, secret)
     await step_up(client, db, admin, secret, tokens)
-    await db.execute(update(PlatformSession).values(step_up_at=datetime.now(timezone.utc) - timedelta(minutes=6)))
+    expired = timedelta(minutes=settings.PLATFORM_STEP_UP_MINUTES + 1)
+    await db.execute(update(PlatformSession).values(step_up_at=datetime.now(timezone.utc) - expired))
     await db.commit()
     r = await client.post(f"{P}/admins", json=NEW_ADMIN, headers=bearer(tokens))
     assert r.status_code == 403 and r.json()["error"]["code"] == "step_up_required"
@@ -475,3 +478,12 @@ def test_production_requires_distinct_platform_secrets():
         _prod(PLATFORM_COOKIE_SECURE=False)
     with pytest.raises(ValueError):
         _prod(PLATFORM_IP_ALLOWLIST="not-a-cidr")
+
+
+def test_defaults_suit_a_small_operator_team():
+    """Password + authenticator at sign-in; then an hour between re-checks, and no second approver unless switched on."""
+    from app.core.config import Settings
+    defaults = {name: field.default for name, field in Settings.model_fields.items()}
+    assert defaults["PLATFORM_FOUR_EYES"] is False
+    assert defaults["PLATFORM_STEP_UP_MINUTES"] == 60
+    assert (defaults["PLATFORM_SESSION_IDLE_MINUTES"], defaults["PLATFORM_SESSION_ABSOLUTE_HOURS"]) == (60, 12)

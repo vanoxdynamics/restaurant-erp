@@ -30,6 +30,12 @@ async def alerts_of(db, kind=None):
     return list((await db.scalars(stmt)).all())
 
 
+@pytest.fixture(autouse=True)
+def four_eyes_on(monkeypatch):
+    """Four-eyes approval is off by default; these tests are about how it behaves when an operator team turns it on."""
+    monkeypatch.setattr(settings, "PLATFORM_FOUR_EYES", True)
+
+
 @pytest.fixture
 async def pro(db):
     return await make_plan(db, "pro")

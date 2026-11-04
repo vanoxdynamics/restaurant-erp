@@ -157,7 +157,7 @@ function Sessions() {
           </table>
         </div>
       )}
-      <p className="muted" style={{ marginBottom: 0 }}>Sessions end after 15 minutes idle or 8 hours.</p>
+      <p className="muted" style={{ marginBottom: 0 }}>Sessions end after an hour idle or 12 hours.</p>
     </section>
   );
 }

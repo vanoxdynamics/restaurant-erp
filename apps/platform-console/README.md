@@ -66,7 +66,7 @@ Also:
   refresh token as theft and ends the session, so two tabs must never refresh with the same cookie at once.
 - Sensitive actions (suspend, reinstate, cancel, impersonation, the platform-wide switch, applying a bulk change,
   managing operators) make the API answer `step_up_required`. The console shows a password + authenticator prompt and
-  retries the action; it stays unlocked for 5 minutes.
+  retries the action; it stays unlocked for an hour (`PLATFORM_STEP_UP_MINUTES`).
 - Money-affecting calls (create subscriber, change term/plan/price, extend, activate) carry an idempotency key made when
   the dialog opens, so a double click or retry never applies twice. Subscription edits also send the `version` they were
   based on; a stale form gets a clear conflict instead of overwriting someone else's change.

@@ -36,9 +36,10 @@ class Settings(BaseSettings):
     PLATFORM_ENCRYPTION_KEYS_OLD: Annotated[List[str], NoDecode] = []  # previous keys still accepted while rotating
     PLATFORM_JWT_ISSUER: str = "restaurant-erp-platform"
     PLATFORM_ACCESS_TOKEN_MINUTES: int = 10
-    PLATFORM_SESSION_IDLE_MINUTES: int = 15
-    PLATFORM_SESSION_ABSOLUTE_HOURS: int = 8
-    PLATFORM_STEP_UP_MINUTES: int = 5
+    # A small operator team: sign in with password + authenticator code, then work without frequent re-prompts.
+    PLATFORM_SESSION_IDLE_MINUTES: int = 60
+    PLATFORM_SESSION_ABSOLUTE_HOURS: int = 12
+    PLATFORM_STEP_UP_MINUTES: int = 60  # how long a password + code re-check unlocks sensitive actions
     PLATFORM_COOKIE_SECURE: bool = True
     PLATFORM_MAX_BODY_BYTES: int = 256 * 1024  # platform requests are small JSON; anything bigger is refused with 413
     PLATFORM_IP_ALLOWLIST: Annotated[List[str], NoDecode] = []  # CIDRs; empty = no network restriction
@@ -46,7 +47,7 @@ class Settings(BaseSettings):
     # Security alerts and four-eyes approval
     PLATFORM_ALERT_WEBHOOK_URL: str = ""  # optional; receives a signed JSON POST for every alert (https required in production)
     PLATFORM_ALERT_WEBHOOK_SECRET: str = ""  # HMAC key for the X-Alert-Signature header
-    PLATFORM_FOUR_EYES: bool = True  # dangerous actions need a second super admin (when one exists)
+    PLATFORM_FOUR_EYES: bool = False  # true: dangerous actions need a second super admin's approval (when one exists)
     PLATFORM_APPROVAL_TTL_HOURS: int = 24
     # Optional role the API switches to after connecting (SET ROLE). Use a non-superuser role so row-level security applies.
     DB_SET_ROLE: str = ""

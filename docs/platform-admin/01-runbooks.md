@@ -34,7 +34,8 @@ Audience: the people who run the platform console and the API behind it. Command
 - `python -m app.cli dispatch-alerts` every 5 minutes, to retry alert webhooks that failed.
 
 **First operator.** `python -m app.cli create-platform-admin --email ... --full-name ...` (prints the authenticator key and recovery
-codes once). Create a **second** super admin straight away: four-eyes approval needs two, and one is a single point of failure.
+codes once). Create a **second** super admin straight away: one is a single point of failure. Four-eyes approval is **off** by default
+(`PLATFORM_FOUR_EYES=false`); turn it on once the team has two super admins who should check each other.
 
 **Before go-live.** Set `PLATFORM_ALERT_WEBHOOK_URL`; replace the log-only `Mailer` in `billing_service.py` with a real one; confirm
 Redis and Postgres backups; run the test suite once with `RLS_TEST_ROLE=rls_app` (section 6).
@@ -88,8 +89,8 @@ server access, which is the point), then deactivate the old one if needed.
 **A subscriber must be cut off now (abuse, chargeback, legal).** Subscribers > the subscriber > Suspend (re-authenticate, give a
 reason). Every session is revoked and open connections are closed immediately; nothing works until you reinstate. Their data is untouched.
 
-**A module is misbehaving for everyone.** Modules > switch it off platform-wide. This needs a second super admin's approval (or runs
-immediately if you are the only one, which raises `approval.unavailable`). Subscribers lose it on their next request.
+**A module is misbehaving for everyone.** Modules > switch it off platform-wide. With `PLATFORM_FOUR_EYES=true` this needs a second super
+admin's approval (or runs immediately if you are the only one, which raises `approval.unavailable`). Subscribers lose it on their next request.
 
 **Payments recorded wrongly.** Payments cannot be edited. If an invoice has no payments, void it (reason required). If it has payments,
 the mistake is corrected by a new invoice and credit; note it in the payment's note field. There is no refund workflow yet.
