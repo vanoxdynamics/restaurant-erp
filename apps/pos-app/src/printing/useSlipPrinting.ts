@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ApiError, apiClient, KitchenTicket, newIdempotencyKey, useConfirmSlipPrinted } from '@repo/api-client';
 import { printHtml } from './printHtml';
+import { usePrinterSettings } from '../stores/printerStore';
 
 const errorText = (e: unknown) => (e instanceof ApiError ? e.message : 'The KOT could not be printed. Try again.');
 
@@ -22,7 +23,8 @@ export function useSlipPrinting(orderId: string) {
   const [error, setError] = useState<string | null>(null);
 
   const printPages = async (tickets: KitchenTicket[]) => {
-    for (const ticket of tickets) await printHtml(await apiClient.getSlipHtml(ticket.id));
+    const paperMm = usePrinterSettings.getState().paperMm;
+    for (const ticket of tickets) await printHtml(await apiClient.getSlipHtml(ticket.id, paperMm), paperMm);
   };
 
   /** Print new slips or reprints, then ask whether they came out. */

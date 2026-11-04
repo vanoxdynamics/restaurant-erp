@@ -46,6 +46,11 @@ apps/*/android/.gradle/
 apps/*/android/build/
 apps/*/ios/Pods/
 apps/*/ios/build/
+# The POS app's native projects are generated from app.config.js (expo prebuild); never commit them or signing keys.
+apps/pos-app/android/
+apps/pos-app/ios/
+*.jks
+*.keystore
 *.xcworkspace/
 *.xcodeproj/
 .expo/

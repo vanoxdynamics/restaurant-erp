@@ -41,9 +41,11 @@ const TicketChips: React.FC<{ ready: number; unprinted: number; onPaper: boolean
 
 export interface FloorScreenProps {
   onOpenOrder: (orderId: string, title: string) => void;
+  /** On the counter device the floor is opened from the bills list, so it has a way back. */
+  onBack?: () => void;
 }
 
-export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder }) => {
+export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder, onBack }) => {
   const device = useDeviceStore((s) => s.device)!;
   const floorQuery = useFloorLayout(device.branchId);
   const takeawayQuery = useOpenTakeaways(device.branchId);
@@ -113,6 +115,7 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder }) => {
       <TopBar
         title="Tables"
         subtitle={device.branchName}
+        onBack={onBack}
         right={<Button title="Takeaway" size="sm" variant="secondary" onPress={newTakeaway} icon={<Icon name="shopping-bag" size={15} color={colors.text} />} />}
       />
 

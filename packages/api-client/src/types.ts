@@ -477,6 +477,11 @@ export interface KitchenTicket {
   fulfilment: 'screen' | 'slip';
   /** Confirmed prints of the slip; 0 means the paper has not come out yet. */
   print_count: number;
+  /** Table number or 'Takeaway', and the order number (filled in by listings such as the print queue). */
+  table_label?: string;
+  order_number?: string;
+  /** A cancelled paper KOT: whether its VOID notice has printed for the kitchen. */
+  void_printed?: boolean;
   items: { order_item_id: string; name: string; quantity: number; notes?: string; status: string }[];
   created_at: string;
 }
@@ -512,9 +517,14 @@ export interface BillPayment {
   payment_mode: PaymentMode;
   amount_paise: number;
   reference_id?: string;
-  /** Who captured it: 'manual' (cashier keyed it in) today; a card-terminal provider later. */
+  /** Who captured it: 'manual' (cashier keyed it in), or a card terminal such as 'pinelabs'. */
   provider: string;
-  status: 'pending' | 'success' | 'failed';
+  /** pending: a terminal is charging it (not counted yet); reversed: voided on the terminal the same day. */
+  status: 'pending' | 'success' | 'failed' | 'reversed';
+  /** Terminal payments: the reference given to the terminal (at most 10 characters). */
+  billing_ref_no?: string;
+  /** Terminal payments: the terminal's (masked) transaction details, e.g. ApprovalCode, InvoiceNumber, CardType. */
+  terminal?: Record<string, unknown>;
   created_at: string;
 }
 
@@ -533,6 +543,49 @@ export interface Bill {
   settled_at?: string;
   payments: BillPayment[];
   created_at: string;
+}
+
+/** One printed line, already wrapped to the paper: 'big' is double width (so at most half a line of characters). */
+export interface PrintRow {
+  style: 'normal' | 'bold' | 'big';
+  align: 'left' | 'center';
+  text: string;
+}
+
+/** Something to print on a line printer: a KOT or a customer bill, rendered by the server for the paper width. */
+export interface PrintablePage {
+  /** A short reference for the printer's log (KOT or bill number). */
+  reference: string;
+  paper_mm: 58 | 80;
+  rows: PrintRow[];
+  text: string;
+}
+
+export interface BillDiscount {
+  amount_paise: number;
+  reason: string;
+  /** A manager's PIN when the discount is above the approval threshold. */
+  approver_pin?: string;
+}
+
+/** The terminal's answer for a pending card/UPI payment. */
+export interface TerminalOutcome {
+  outcome: 'approved' | 'declined';
+  approval_code?: string;
+  message?: string;
+  /** 'manual' when the cashier resolves an unconfirmed payment from the charge slip. */
+  source?: 'terminal' | 'manual';
+  details?: Record<string, string | number | boolean | null>;
+}
+
+export interface CashShift {
+  id: string;
+  start_time: string;
+  opening_cash_paise: number;
+  status: string;
+  /** Shown to managers only. */
+  expected_cash_paise?: number;
+  variance_paise?: number;
 }
 
 /** A tender the cashier is recording. UPI and card need the UTR / approval code as reference. */

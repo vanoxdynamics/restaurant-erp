@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Android 11+ hides other apps unless declared: we need to see and call Pine Labs' Plutus Smart app. -->
+  <queries>
+    <package android:name="com.pinelabs.masterapp" />
+    <intent>
+      <action android:name="com.pinelabs.masterapp.HYBRID_REQUEST" />
+    </intent>
+  </queries>
+</manifest>

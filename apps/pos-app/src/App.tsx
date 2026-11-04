@@ -16,6 +16,13 @@ import { FloorScreen } from './screens/FloorScreen';
 import { OrderScreen } from './screens/OrderScreen';
 import { BillScreen } from './screens/BillScreen';
 import { KitchenScreen } from './screens/KitchenScreen';
+import { CounterHomeScreen } from './screens/CounterHomeScreen';
+import { KotPrinterScreen } from './screens/KotPrinterScreen';
+import { DayEndScreen } from './screens/DayEndScreen';
+import { SimulatorSheet } from './components/SimulatorSheet';
+import { IS_COUNTER, paymentKind } from './device';
+import { PrintStation } from './printing/usePrintStation';
+import { usePrinterSettings } from './stores/printerStore';
 import { useDeviceStore } from './stores/deviceStore';
 import { IDLE_LOCK_MS, useSessionStore } from './stores/sessionStore';
 import { useCartStore } from './stores/cartStore';
@@ -25,24 +32,33 @@ const queryClient = new QueryClient({
 });
 
 export type Route =
+  | { name: 'home' }
   | { name: 'floor' }
   | { name: 'order'; orderId: string; title: string }
-  | { name: 'bill'; orderId: string; title: string };
+  | { name: 'bill'; orderId: string; title: string }
+  | { name: 'printer' }
+  | { name: 'dayend' };
+
+/** The counter device starts on the bills to collect; a waiter's phone on the tables. */
+const START: Route = IS_COUNTER ? { name: 'home' } : { name: 'floor' };
 
 function Main(): React.JSX.Element {
-  const [route, setRoute] = useState<Route>({ name: 'floor' });
+  const [route, setRoute] = useState<Route>(START);
   const role = useSessionStore((s) => s.user?.role);
 
   // Kitchen staff only handle the kitchen's own queue; they never see the floor.
   if (role === StaffRole.KITCHEN) return <KitchenScreen />;
+
+  const home = () => setRoute(START);
+  const openOrder = (orderId: string, title: string) => setRoute({ name: 'order', orderId, title });
 
   if (route.name === 'bill') {
     return (
       <BillScreen
         orderId={route.orderId}
         title={route.title}
-        onBack={() => setRoute({ name: 'order', orderId: route.orderId, title: route.title })}
-        onDone={() => setRoute({ name: 'floor' })}
+        onBack={() => openOrder(route.orderId, route.title)}
+        onDone={home}
       />
     );
   }
@@ -51,12 +67,25 @@ function Main(): React.JSX.Element {
       <OrderScreen
         orderId={route.orderId}
         title={route.title}
-        onBack={() => setRoute({ name: 'floor' })}
+        onBack={home}
         onBill={() => setRoute({ name: 'bill', orderId: route.orderId, title: route.title })}
       />
     );
   }
-  return <FloorScreen onOpenOrder={(orderId, title) => setRoute({ name: 'order', orderId, title })} />;
+  if (route.name === 'printer') return <KotPrinterScreen onBack={home} />;
+  if (route.name === 'dayend') return <DayEndScreen onBack={home} />;
+  if (route.name === 'home') {
+    return (
+      <CounterHomeScreen
+        onOpenOrder={openOrder}
+        onOpenBill={(orderId, title) => setRoute({ name: 'bill', orderId, title })}
+        onNewOrder={() => setRoute({ name: 'floor' })}
+        onPrinter={() => setRoute({ name: 'printer' })}
+        onDayEnd={() => setRoute({ name: 'dayend' })}
+      />
+    );
+  }
+  return <FloorScreen onOpenOrder={openOrder} onBack={IS_COUNTER ? home : undefined} />;
 }
 
 export default function App(): React.JSX.Element {
@@ -68,6 +97,7 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     void loadDevice();
+    void usePrinterSettings.getState().load();
   }, [loadDevice]);
 
   // Lock after a period without touches; clear unsent carts and cached data with it.
@@ -104,6 +134,9 @@ export default function App(): React.JSX.Element {
       >
         <StatusBar barStyle="dark-content" backgroundColor={colors.surface} />
         {deviceStatus === 'unregistered' ? <DeviceSetupScreen /> : user ? <Main /> : <SignInScreen />}
+        {paymentKind() === 'simulator' ? <SimulatorSheet /> : null}
+        {/* The counter prints waiters' KOTs on its own credential, signed in or locked. */}
+        {deviceStatus === 'registered' ? <PrintStation /> : null}
       </SafeAreaView>
     </QueryClientProvider>
   );

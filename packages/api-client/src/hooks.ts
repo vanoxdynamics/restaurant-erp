@@ -7,9 +7,12 @@ import {
   BranchSummary,
   PaymentInput,
   PaymentOutcome,
+  BillDiscount,
   CartLine,
+  CashShift,
   Entitlements,
   KitchenTicket,
+  TerminalOutcome,
   OrderDetail,
   Category,
   Floor,
@@ -426,9 +429,72 @@ function useInvalidateBilling() {
 export function useGenerateBill() {
   const invalidate = useInvalidateBilling();
   return useMutation({
-    mutationFn: ({ orderId, idempotencyKey }: { orderId: string; idempotencyKey: string }) =>
-      apiClient.generateBill(orderId, idempotencyKey),
+    mutationFn: ({ orderId, idempotencyKey, discount }: { orderId: string; idempotencyKey: string; discount?: BillDiscount }) =>
+      apiClient.generateBill(orderId, idempotencyKey, discount),
     onSettled: (_data, _error, vars) => invalidate(vars.orderId),
+  });
+}
+
+export function useStartTerminalPayment() {
+  const invalidate = useInvalidateBilling();
+  return useMutation({
+    mutationFn: ({ billId, mode, amountPaise, idempotencyKey }: {
+      orderId: string; billId: string; mode: 'card' | 'upi'; amountPaise: number; idempotencyKey: string;
+    }) => apiClient.startTerminalPayment(billId, mode, amountPaise, idempotencyKey),
+    onSettled: (_data, _error, vars) => invalidate(vars.orderId),
+  });
+}
+
+export function useCompleteTerminalPayment() {
+  const invalidate = useInvalidateBilling();
+  return useMutation({
+    mutationFn: ({ paymentId, outcome }: { orderId: string; paymentId: string; outcome: TerminalOutcome }) =>
+      apiClient.completeTerminalPayment(paymentId, outcome),
+    onSettled: (_data, _error, vars) => invalidate(vars.orderId),
+  });
+}
+
+export function useReverseTerminalPayment() {
+  const invalidate = useInvalidateBilling();
+  return useMutation({
+    mutationFn: ({ paymentId, reason, approverPin, details, checkOnly }: {
+      orderId: string; paymentId: string; reason: string; approverPin?: string; details?: TerminalOutcome['details']; checkOnly?: boolean;
+    }) => apiClient.reverseTerminalPayment(paymentId, { reason, approver_pin: approverPin, details, check_only: checkOnly }),
+    onSettled: (_data, _error, vars) => invalidate(vars.orderId),
+  });
+}
+
+// ---- Print station and cash shift ---------------------------------------------------------
+
+/** KOTs this branch's counter still has to print; polled so waiters' orders print within seconds. */
+export function usePrintQueue(branchId: string, enabled = true) {
+  return useQuery<KitchenTicket[]>({
+    queryKey: ['printQueue', branchId],
+    queryFn: () => apiClient.getPrintQueue(branchId),
+    enabled: !!branchId && enabled,
+    refetchInterval: 4000,
+    // The counter keeps printing waiters' KOTs even while another screen or app (e.g. Pine Labs taking a card) is in front.
+    refetchIntervalInBackground: true,
+  });
+}
+
+export function useCurrentShift(enabled = true) {
+  return useQuery<CashShift | null>({ queryKey: ['currentShift'], queryFn: () => apiClient.getCurrentShift(), enabled });
+}
+
+export function useOpenShift() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (openingCashPaise: number) => apiClient.openShift(openingCashPaise),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['currentShift'] }),
+  });
+}
+
+export function useCloseShift() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (countedCashPaise: number) => apiClient.closeShift(countedCashPaise),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['currentShift'] }),
   });
 }
 

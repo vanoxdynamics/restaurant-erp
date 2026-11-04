@@ -8,7 +8,8 @@
     "start": "expo start --lan",
     "start:clear": "expo start --lan -c",
     "web": "expo start --web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"tests/*.test.ts\""
   },
   "dependencies": {
     "@expo-google-fonts/inter": "^0.4.2",

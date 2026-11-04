@@ -14,9 +14,14 @@ import {
 } from '@repo/shared-utils';
 import {
   AuthSession,
+  BillDiscount,
   CartLine,
+  CashShift,
   Entitlements,
   KitchenTicket,
+  PrintablePage,
+  PrintRow,
+  TerminalOutcome,
   Bill,
   BillPayment,
   BoardTicket,
@@ -314,6 +319,9 @@ function adaptTicket(raw: Raw): KitchenTicket {
     status: raw.status,
     fulfilment: raw.fulfilment ?? 'screen',
     print_count: raw.print_count ?? 0,
+    table_label: raw.order_number ? raw.table_number ?? 'Takeaway' : undefined,
+    order_number: raw.order_number ?? undefined,
+    void_printed: !!raw.void_printed_at,
     items: (raw.items ?? []).map((i: Raw) => ({
       order_item_id: i.order_item_id,
       name: i.item_name,
@@ -393,10 +401,32 @@ function adaptBill(raw: Raw): Bill {
         reference_id: p.reference_id ?? undefined,
         provider: p.provider ?? 'manual',
         status: p.status,
+        billing_ref_no: p.provider_meta?.billing_ref_no ?? undefined,
+        terminal: p.provider_meta ?? undefined,
         created_at: p.created_at,
       }),
     ),
     created_at: raw.created_at,
+  };
+}
+
+function adaptPrintable(reference: string, raw: Raw): PrintablePage {
+  return {
+    reference,
+    paper_mm: raw.paper_mm === 58 ? 58 : 80,
+    rows: (raw.rows ?? []).map((r: Raw): PrintRow => ({ style: r.style, align: r.align, text: r.text })),
+    text: raw.text ?? '',
+  };
+}
+
+function adaptCashShift(raw: Raw): CashShift {
+  return {
+    id: raw.id,
+    start_time: raw.start_time,
+    opening_cash_paise: toPaise(raw.opening_cash),
+    status: String(raw.status),
+    expected_cash_paise: raw.expected_cash != null ? toPaise(raw.expected_cash) : undefined,
+    variance_paise: raw.cash_variance != null ? toPaise(raw.cash_variance) : undefined,
   };
 }
 
@@ -447,6 +477,8 @@ export class RestaurantApiClient {
       headers?: Record<string, string>;
       /** Return the body as text instead of parsing JSON (printable pages). Errors are still parsed as JSON. */
       text?: boolean;
+      /** Send no staff session (device-token calls): a refusal must not sign out whoever is using the device. */
+      anonymous?: boolean;
     } = {},
   ): Promise<T> {
     const query = Object.entries(options.query ?? {})
@@ -457,7 +489,7 @@ export class RestaurantApiClient {
 
     const headers: Record<string, string> = { Accept: 'application/json', ...options.headers };
     if (options.body !== undefined) headers['Content-Type'] = 'application/json';
-    if (this.token) headers.Authorization = `Bearer ${this.token}`;
+    if (this.token && !options.anonymous) headers.Authorization = `Bearer ${this.token}`;
     if (options.idempotent) {
       headers['X-Idempotency-Key'] = typeof options.idempotent === 'string' ? options.idempotent : newIdempotencyKey();
     }
@@ -480,7 +512,7 @@ export class RestaurantApiClient {
 
     if (!response.ok) {
       const err = data?.error;
-      if (response.status === 401 && this.token) this.onUnauthorized?.();
+      if (response.status === 401 && this.token && !options.anonymous) this.onUnauthorized?.();
       const message =
         err?.message ??
         (Array.isArray(data?.detail) ? data.detail.map((d: Raw) => d.msg).join('; ') : undefined) ??
@@ -739,10 +771,77 @@ export class RestaurantApiClient {
   }
 
   /** Bill an order. Safe to retry with the same key. */
-  async generateBill(orderId: string, idempotencyKey: string): Promise<Bill> {
-    return adaptBill(
-      await this.request<Raw>('POST', '/billing/bills', { idempotent: idempotencyKey, body: { order_id: orderId } }),
-    );
+  async generateBill(orderId: string, idempotencyKey: string, discount?: BillDiscount): Promise<Bill> {
+    const body: Raw = { order_id: orderId };
+    if (discount && discount.amount_paise > 0) {
+      body.discount_amount = toRupees(discount.amount_paise);
+      body.discount_reason = discount.reason;
+      body.approver_pin = discount.approver_pin || undefined;
+    }
+    return adaptBill(await this.request<Raw>('POST', '/billing/bills', { idempotent: idempotencyKey, body }));
+  }
+
+  /**
+   * Start a card/UPI payment on the terminal: saved as pending (not counted yet) with the `billing_ref_no` to give the
+   * terminal. Safe to retry with the same key.
+   */
+  async startTerminalPayment(
+    billId: string, mode: 'card' | 'upi', amountPaise: number, idempotencyKey: string,
+  ): Promise<{ payment: BillPayment; bill: Bill }> {
+    const raw = await this.request<Raw>('POST', `/billing/bills/${billId}/terminal-payments`, {
+      idempotent: idempotencyKey,
+      body: { payment_mode: mode, amount: toRupees(amountPaise), provider: 'pinelabs' },
+    });
+    return { payment: adaptBill(raw.bill).payments.find((p) => p.id === raw.payment.id)!, bill: adaptBill(raw.bill) };
+  }
+
+  /** Record the terminal's answer. Sending the same answer again is safe. */
+  async completeTerminalPayment(paymentId: string, outcome: TerminalOutcome): Promise<Bill> {
+    const raw = await this.request<Raw>('POST', `/billing/payments/${paymentId}/complete`, { body: outcome });
+    return adaptBill(raw.bill);
+  }
+
+  /** A terminal payment was voided on the device: stop counting it and reopen the bill. Needs a manager. */
+  async reverseTerminalPayment(
+    paymentId: string,
+    body: { reason: string; approver_pin?: string; details?: TerminalOutcome['details']; check_only?: boolean },
+  ): Promise<Bill> {
+    const raw = await this.request<Raw>('POST', `/billing/payments/${paymentId}/reverse`, {
+      body: { ...body, approver_pin: body.approver_pin || undefined },
+    });
+    return adaptBill(raw.bill);
+  }
+
+  /** The customer bill as print rows for the paper width. */
+  async getReceiptPrint(billId: string, widthMm: 58 | 80 = 80): Promise<PrintablePage> {
+    const raw = await this.request<Raw>('GET', `/billing/bills/${billId}/receipt`, { query: { width: widthMm } });
+    return adaptPrintable(raw.bill_number, raw);
+  }
+
+  /** The customer bill as a print-ready HTML page (browsers and the system print dialog). */
+  async getReceiptHtml(billId: string, widthMm: 58 | 80 = 80): Promise<string> {
+    return this.request<string>('GET', `/billing/bills/${billId}/receipt`, { query: { format: 'html', width: widthMm }, text: true });
+  }
+
+  // ---- Cash shift ------------------------------------------------------------------
+
+  /** The signed-in person's open cash shift, or null. */
+  async getCurrentShift(): Promise<CashShift | null> {
+    try {
+      return adaptCashShift(await this.request<Raw>('GET', '/staff/shifts/current'));
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  async openShift(openingCashPaise: number): Promise<CashShift> {
+    return adaptCashShift(await this.request<Raw>('POST', '/staff/shifts/open', { body: { opening_cash: toRupees(openingCashPaise) } }));
+  }
+
+  /** Close with a blind count: the counted cash is entered without seeing what the system expects. */
+  async closeShift(countedCashPaise: number): Promise<CashShift> {
+    return adaptCashShift(await this.request<Raw>('POST', '/staff/shifts/close', { body: { blind_drop_cash: toRupees(countedCashPaise) } }));
   }
 
   /**
@@ -766,6 +865,45 @@ export class RestaurantApiClient {
   /** The kitchen starts and finishes tickets; floor staff mark a ready ticket served. */
   async advanceTicket(kotId: string, status: 'preparing' | 'ready' | 'served'): Promise<void> {
     await this.request<Raw>('PATCH', `/kots/${kotId}/status`, { body: { status } });
+  }
+
+  /** What this branch's print station still has to print, oldest first (new paper KOTs and owed VOID notices). */
+  async getPrintQueue(branchId: string): Promise<KitchenTicket[]> {
+    const rows = await this.request<Raw[]>('GET', '/kots/print-queue', { query: { branch_id: branchId } });
+    return rows.map(adaptTicket);
+  }
+
+  // ---- Print station: the counter device prints with its own device token, so it works while no one is signed in ----
+
+  async getStationPrintQueue(deviceToken: string): Promise<KitchenTicket[]> {
+    const rows = await this.request<Raw[]>('GET', '/kots/station/print-queue', { headers: { 'X-Device-Token': deviceToken }, anonymous: true });
+    return rows.map(adaptTicket);
+  }
+
+  async getStationSlipPrint(deviceToken: string, kotId: string, widthMm: 58 | 80): Promise<PrintablePage> {
+    const raw = await this.request<Raw>('GET', `/kots/station/${kotId}/slip`, {
+      query: { width: widthMm },
+      headers: { 'X-Device-Token': deviceToken },
+      anonymous: true,
+    });
+    return adaptPrintable(raw.kot_number, raw);
+  }
+
+  /** The printer reported success. Retry with the same key: it is never a second print. */
+  async confirmStationPrinted(deviceToken: string, kotId: string, idempotencyKey: string): Promise<KitchenTicket> {
+    return adaptTicket(
+      await this.request<Raw>('POST', `/kots/station/${kotId}/printed`, {
+        idempotent: idempotencyKey,
+        headers: { 'X-Device-Token': deviceToken },
+        anonymous: true,
+      }),
+    );
+  }
+
+  /** A KOT as print rows for the paper width (line printers such as the Pine Labs device). */
+  async getSlipPrint(kotId: string, widthMm: 58 | 80 = 80): Promise<PrintablePage> {
+    const raw = await this.request<Raw>('GET', `/kots/${kotId}/slip`, { query: { width: widthMm } });
+    return adaptPrintable(raw.kot_number, raw);
   }
 
   async getOrderTickets(orderId: string): Promise<KitchenTicket[]> {

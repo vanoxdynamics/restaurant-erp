@@ -42,6 +42,18 @@
       "runtimeExecutable": "C:\\Users\\arsha\\restaurant-erp\\services\\api-fastapi\\venv\\Scripts\\python.exe",
       "runtimeArgs": ["C:\\Users\\arsha\\AppData\\Local\\Temp\\claude\\C--Users-arsha--claude-spares-spare-c1Ive8\\94fcea91-d70f-4641-8581-a68cefa7f0de\\scratchpad\\pos_demo_api.py"],
       "port": 8000
+    },
+    {
+      "name": "pos-web-counter-sim",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_APP_VARIANT=counter&& set EXPO_PUBLIC_PINELABS_SIMULATOR=1&& set EXPO_PUBLIC_API_URL=http://127.0.0.1:8000&& npx expo start --web --port 8093 --clear"],
+      "port": 8093
+    },
+    {
+      "name": "pos-web-waiter",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_APP_VARIANT=waiter&& set EXPO_PUBLIC_API_URL=http://127.0.0.1:8000&& npx expo start --web --port 8094 --clear"],
+      "port": 8094
     }
   ]
 }

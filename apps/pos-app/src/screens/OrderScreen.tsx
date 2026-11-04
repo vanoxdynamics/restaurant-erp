@@ -31,7 +31,7 @@ import { useCartStore } from '../stores/cartStore';
 import { useDeviceStore } from '../stores/deviceStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useKitchenPlan } from '../plan';
-import { useSlipPrinting } from '../printing/useSlipPrinting';
+import { useKotPrinting } from '../printing/useKotPrinting';
 
 const EMPTY_CART: CartLine[] = [];
 const errorText = (e: unknown) => (e instanceof ApiError ? e.message : 'Something went wrong. Try again.');
@@ -59,7 +59,10 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
   const device = useDeviceStore((s) => s.device)!;
   const role = useSessionStore((s) => s.user?.role);
   const plan = useKitchenPlan();
-  const slips = useSlipPrinting(orderId);
+  const kotPrint = useKotPrinting(orderId);
+  const slips = kotPrint.dialog;
+  // A waiter's phone has no printer: paper KOTs print at the counter.
+  const atCounter = kotPrint.mode === 'counter';
 
   const orderQuery = useOrder(orderId);
   const ticketsQuery = useOrderTickets(orderId);
@@ -142,10 +145,17 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
       const fired = await send.mutateAsync({ orderId, version: order.version, cart });
       clear(orderId);
       const kots = fired.map((t) => `KOT ${t.kot_number.split('-').pop()}`).join(', ');
-      setNotice(plan.slip ? `${kots} printed. Hand it to the kitchen.` : `Sent to kitchen: ${kots}`);
+      const onPaper = fired.filter((t) => t.fulfilment === 'slip');
+      setNotice(
+        onPaper.length === 0
+          ? `Sent to kitchen: ${kots}`
+          : atCounter
+            ? `${kots} sent. It prints at the counter.`
+            : `${kots} printing. Hand it to the kitchen.`,
+      );
       if (!wide) setTab('order');
-      // The order is already with the kitchen; a slip that fails to print stays "not printed" with a button to retry.
-      void slips.print(fired.filter((t) => t.fulfilment === 'slip'));
+      // The order is already with the kitchen; a KOT that fails to print stays "not printed" with a way to retry.
+      kotPrint.printNew(onPaper);
     } catch (e) {
       setError(errorText(e));
     }
@@ -175,9 +185,14 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
     try {
       if (voidTicket.fulfilment === 'slip') {
         const voided = await voidTicketNow.mutateAsync({ kotId: voidTicket.id, reason, approverPin: approverPin ?? '', orderId });
-        setNotice(`KOT ${voided.kot_number.split('-').pop()} cancelled. Take the original KOT back from the kitchen.`);
+        const label = `KOT ${voided.kot_number.split('-').pop()}`;
+        setNotice(
+          atCounter
+            ? `${label} cancelled. The VOID KOT prints at the counter; take the original back from the kitchen.`
+            : `${label} cancelled. Take the original KOT back from the kitchen.`,
+        );
         setVoidTicket(null);
-        void slips.printVoid(voided);
+        kotPrint.printVoid(voided);
         return;
       }
       await requestVoid.mutateAsync({ kotId: voidTicket.id, reason, orderId });
@@ -278,6 +293,8 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
             // Paper tickets skip the kitchen stages: the floor marks them served straight from queued.
             const servable = ticket.status === 'ready' || (onPaper && ticket.status === 'queued');
             const unprinted = onPaper && ticket.status === 'queued' && ticket.print_count === 0;
+            const job = kotPrint.jobFor(ticket.id);
+            const voidOwed = onPaper && ticket.status === 'voided' && ticket.print_count > 0 && !ticket.void_printed;
             return (
               <View key={ticket.id} style={[styles.ticket, ticket.status === 'voided' ? { opacity: 0.55 } : null]}>
                 <View style={styles.ticketHead}>
@@ -310,8 +327,25 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
                     </View>
                   );
                 })}
-                {unprinted ? <Text style={styles.notPrinted}>KOT not printed</Text> : null}
-                {servable || onPaper ? (
+                {job?.state === 'printing' || job?.state === 'waiting' ? (
+                  <Text style={styles.printing}>Printing…</Text>
+                ) : job?.state === 'failed' ? (
+                  <View style={styles.printFailed}>
+                    <Text style={styles.notPrinted}>Not printed: {job.error}</Text>
+                    <Button title="Retry" variant="secondary" size="sm" onPress={() => kotPrint.retry(job.key)} />
+                  </View>
+                ) : atCounter && onPaper && ticket.status === 'queued' ? (
+                  ticket.print_count > 0 ? (
+                    <Text style={styles.printedAtCounter}>Printed at counter ✓</Text>
+                  ) : (
+                    <Text style={styles.notPrinted}>Waiting for counter printer</Text>
+                  )
+                ) : atCounter && voidOwed ? (
+                  <Text style={styles.notPrinted}>VOID KOT waiting for counter printer</Text>
+                ) : unprinted ? (
+                  <Text style={styles.notPrinted}>KOT not printed</Text>
+                ) : null}
+                {servable || (onPaper && !atCounter) ? (
                   <View style={styles.ticketActions}>
                     {servable ? (
                       <Button
@@ -322,13 +356,13 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
                         style={{ flex: 1 }}
                       />
                     ) : null}
-                    {onPaper && ticket.status === 'voided' ? (
-                      <Button title="Print VOID KOT" variant="secondary" onPress={() => slips.printVoid(ticket)} disabled={slips.printing} />
+                    {atCounter ? null : onPaper && ticket.status === 'voided' ? (
+                      <Button title="Print VOID KOT" variant="secondary" onPress={() => kotPrint.printVoid(ticket)} disabled={slips.printing} />
                     ) : onPaper && ticket.status !== 'served' ? (
                       <Button
                         title={unprinted ? 'Print KOT' : 'Reprint'}
                         variant={unprinted ? 'primary' : 'secondary'}
-                        onPress={() => slips.print([ticket])}
+                        onPress={() => kotPrint.reprint(ticket)}
                         disabled={slips.printing}
                         icon={<Icon name="printer" size={16} color={unprinted ? colors.textInverse : colors.text} />}
                       />
@@ -402,7 +436,7 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
           ) : null}
           <Button
             // Without a kitchen screen the order goes to the kitchen on paper: the waiter prints the KOT and hands it over.
-            title={`${plan.slip ? 'Print KOT' : 'Send to kitchen'}${cartCount ? ` · ${cartCount}` : ''}`}
+            title={`${plan.slip ? (atCounter ? 'Send KOT' : 'Print KOT') : 'Send to kitchen'}${cartCount ? ` · ${cartCount}` : ''}`}
             onPress={sendToKitchen}
             disabled={!editable || cartCount === 0}
             loading={send.isPending}
@@ -653,6 +687,24 @@ const styles = StyleSheet.create({
     color: colors.danger,
     fontFamily: fonts.semibold,
     marginTop: spacing.sm,
+  },
+  printing: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontFamily: fonts.semibold,
+    marginTop: spacing.sm,
+  },
+  printedAtCounter: {
+    ...typography.caption,
+    color: colors.success,
+    fontFamily: fonts.semibold,
+    marginTop: spacing.sm,
+  },
+  printFailed: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
   notPrinted: {
     ...typography.caption,
