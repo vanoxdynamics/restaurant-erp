@@ -53,6 +53,8 @@ pnpm generate:api
 
 ## 3. Quick Start
 
+> **Full local setup, demo data and every sign-in:** see [RUNNING_LOCALLY.md](RUNNING_LOCALLY.md).
+
 ### Prerequisites
 - Node.js >= 18 and `pnpm`
 - Python >= 3.11

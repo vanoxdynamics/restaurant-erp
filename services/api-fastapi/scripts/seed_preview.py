@@ -38,7 +38,8 @@ async def ensure_owner() -> None:
     async with AsyncSessionLocal() as db:
         if await db.scalar(select(StaffUser).where(StaffUser.username == OWNER["username"])):
             return
-    await create_owner(OWNER["username"], "Arjun Mehta", "BLR1", "Indiranagar", OWNER["password"], OWNER["pin"])
+    await create_owner(OWNER["username"], "Arjun Mehta", "BLR1", "Indiranagar", OWNER["password"], OWNER["pin"],
+                       "spice-route", "Spice Route")
 
 
 async def main() -> None:
