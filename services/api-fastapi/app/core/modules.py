@@ -8,6 +8,7 @@ from typing import Dict, FrozenSet, Tuple
 class ModuleKey(StrEnum):
     POS = "pos"  # orders, KOTs, billing, floor, menu and staff: the core of the product
     ANALYTICS = "analytics"  # live KPIs, sales breakdowns, Z-reports, audit log
+    KDS = "kds"  # kitchen screen, ticket statuses and kitchen staff; without it the kitchen works from printed slips
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,10 @@ class ModuleDef:
 
 MODULES: Dict[ModuleKey, ModuleDef] = {
     ModuleKey.POS: ModuleDef(ModuleKey.POS, "Point of sale", "Orders, KOTs, billing, floor, menu and staff", is_core=True),
+    ModuleKey.KDS: ModuleDef(
+        ModuleKey.KDS, "Kitchen display", "Kitchen screen, ticket statuses and kitchen staff accounts",
+        depends_on=(ModuleKey.POS,),
+    ),
     ModuleKey.ANALYTICS: ModuleDef(
         ModuleKey.ANALYTICS, "Analytics & reports", "Live KPIs, sales, Z-reports and audit log",
         depends_on=(ModuleKey.POS,),

@@ -17,7 +17,7 @@ Permission matrix (enforced with `require_roles` on each route):
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine, Dict, FrozenSet, Optional
+from typing import Any, Callable, Coroutine, Dict, FrozenSet, Iterable, Optional
 
 import redis.asyncio as aioredis
 from fastapi import Depends, Header, Request
@@ -155,6 +155,45 @@ def require_module(module_key: str) -> Callable[..., Coroutine[Any, Any, Current
         redis_client: aioredis.Redis = Depends(get_redis),
     ) -> CurrentUser:
         enforce_module(await get_entitlements(db, user.organization_id, redis_client), str(module_key))
+        return user
+
+    return dependency
+
+
+def module_flag(module_key: str) -> Callable[..., Coroutine[Any, Any, bool]]:
+    """Dependency factory yielding whether the caller's organization has `module_key` (never raises)."""
+
+    async def dependency(
+        user: CurrentUser = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+        redis_client: aioredis.Redis = Depends(get_redis),
+    ) -> bool:
+        return (await get_entitlements(db, user.organization_id, redis_client)).has_module(str(module_key))
+
+    return dependency
+
+
+def require_roles_by_module(
+    roles: Iterable[Role], *, module: str, also_without: Iterable[Role] = (), password_session: bool = False
+) -> Callable[..., Coroutine[Any, Any, CurrentUser]]:
+    """
+    `roles` may always act. The extra `also_without` roles may act only while the organization does NOT have `module`:
+    e.g. waiters may take payment on a plan without the kitchen display, where nobody else is at the counter.
+    """
+    base, extra = set(roles), set(also_without)
+
+    async def dependency(
+        user: CurrentUser = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+        redis_client: aioredis.Redis = Depends(get_redis),
+    ) -> CurrentUser:
+        allowed = set(base)
+        if extra and not (await get_entitlements(db, user.organization_id, redis_client)).has_module(str(module)):
+            allowed |= extra
+        if user.role not in allowed:
+            raise Forbidden("Your role is not allowed to perform this action")
+        if password_session and user.auth_method != "pwd":
+            raise Forbidden("This action requires a password login", code="password_login_required")
         return user
 
     return dependency

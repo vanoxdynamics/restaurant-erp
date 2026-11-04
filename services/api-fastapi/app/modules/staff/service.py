@@ -242,6 +242,13 @@ def _map_staff_integrity(exc: IntegrityError) -> Conflict:
     return Conflict("Username already taken", code="username_taken")
 
 
+def _require_kitchen_display_for(role: Role, ent) -> None:
+    """Kitchen accounts exist to use the kitchen screen; a plan without it has no use for them."""
+    if role == Role.KITCHEN and not ent.has_module("kds"):
+        raise Forbidden("The kitchen display is not part of your plan, so kitchen accounts cannot be created",
+                        code="module_disabled", details={"module": "kds"})
+
+
 async def create_staff(db: AsyncSession, actor: CurrentUser, payload: StaffUserCreate) -> StaffUser:
     branch_id = payload.branch_id if payload.branch_id is not None else actor.branch_id
     _check_can_manage(actor, payload.role, branch_id)
@@ -250,6 +257,7 @@ async def create_staff(db: AsyncSession, actor: CurrentUser, payload: StaffUserC
     await _ensure_branch(db, actor, branch_id)
 
     ent = await compute_entitlements(db, actor.organization_id)
+    _require_kitchen_display_for(payload.role, ent)
     active_staff = await db.scalar(
         select(func.count()).select_from(StaffUser).where(
             StaffUser.organization_id == actor.organization_id, StaffUser.is_active.is_(True))
@@ -314,6 +322,8 @@ async def update_staff(db: AsyncSession, actor: CurrentUser, staff_id: uuid.UUID
     new_role = Role(changes.get("role", user.role))
     new_branch = changes.get("branch_id", user.branch_id)
     _check_can_manage(actor, new_role, new_branch)
+    if "role" in changes and new_role == Role.KITCHEN and user.role != Role.KITCHEN.value:
+        _require_kitchen_display_for(new_role, await compute_entitlements(db, actor.organization_id))
     if "branch_id" in changes and changes["branch_id"] != user.branch_id:
         await _ensure_branch(db, actor, new_branch)
         # PIN lookup is branch-scoped; the user must set a new PIN for the new branch.

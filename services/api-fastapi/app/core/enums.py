@@ -100,6 +100,12 @@ class KOTStatus(StrEnum):
     VOIDED = "voided"
 
 
+class Fulfilment(StrEnum):
+    """How a kitchen ticket reaches the kitchen: on the kitchen screen, or as a printed slip carried by staff."""
+    SCREEN = "screen"
+    SLIP = "slip"
+
+
 class Station(StrEnum):
     KITCHEN = "kitchen"
     GRILL = "grill"
@@ -157,6 +163,7 @@ class AuditAction(StrEnum):
     TABLE_MERGE = "table_merge"
     LOGIN_LOCKOUT = "login_lockout"
     CASH_VARIANCE = "cash_variance"
+    KOT_REPRINT = "kot_reprint"  # a kitchen slip was printed again
 
 
 class VoidRequestStatus(StrEnum):
@@ -190,6 +197,15 @@ KOT_TRANSITIONS: Dict[KOTStatus, Set[KOTStatus]] = {
     KOTStatus.QUEUED: {KOTStatus.PREPARING, KOTStatus.VOIDED},
     KOTStatus.PREPARING: {KOTStatus.READY, KOTStatus.VOIDED},
     KOTStatus.READY: {KOTStatus.SERVED},
+    KOTStatus.SERVED: set(),
+    KOTStatus.VOIDED: set(),
+}
+
+# A printed slip has no kitchen stages: floor staff take it straight from queued to served.
+SLIP_KOT_TRANSITIONS: Dict[KOTStatus, Set[KOTStatus]] = {
+    KOTStatus.QUEUED: {KOTStatus.SERVED, KOTStatus.VOIDED},
+    KOTStatus.PREPARING: {KOTStatus.SERVED, KOTStatus.VOIDED},
+    KOTStatus.READY: {KOTStatus.SERVED, KOTStatus.VOIDED},
     KOTStatus.SERVED: set(),
     KOTStatus.VOIDED: set(),
 }

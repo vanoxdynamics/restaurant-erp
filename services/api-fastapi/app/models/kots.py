@@ -7,7 +7,7 @@ from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, Nu
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.enums import KOTStatus, Station, VoidRequestStatus
+from app.core.enums import Fulfilment, KOTStatus, Station, VoidRequestStatus
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_check
 
 
@@ -18,6 +18,7 @@ class KOT(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Index("ix_kots_branch_station_status", "branch_id", "station", "status"),
         enum_check("kots", "status", KOTStatus),
         enum_check("kots", "station", Station),
+        enum_check("kots", "fulfilment", Fulfilment),
     )
 
     branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False)
@@ -25,6 +26,14 @@ class KOT(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     kot_number: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
     station: Mapped[str] = mapped_column(String(50), default=Station.KITCHEN.value, index=True)
     status: Mapped[str] = mapped_column(String(30), default=KOTStatus.QUEUED.value, index=True)
+    # Decided when the ticket is fired from the subscriber's plan, and never changed afterwards, so adding or removing the
+    # kitchen display later cannot make a paper slip appear on the screen (or strand a screen ticket).
+    fulfilment: Mapped[str] = mapped_column(String(10), default=Fulfilment.SCREEN.value, server_default=Fulfilment.SCREEN.value, nullable=False)
+    # Slip printing (the app confirms each successful print). A second print is a reprint: counted, attributed and audited.
+    print_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    first_printed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_printed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_printed_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.id"), nullable=True)
     void_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     fired_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.id"), nullable=True)
     voided_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.id"), nullable=True)

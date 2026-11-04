@@ -56,7 +56,7 @@ async def test_entitlements_endpoint_for_legacy_plan(client, owner):
     body = r.json()
     assert body["access"] == "full" and body["plan_code"] == "legacy_all_modules"
     assert body["billing_term"] == "yearly" and body["subscription_status"] == "active"
-    assert set(body["modules"]) == {"pos", "analytics"}
+    assert set(body["modules"]) == {"pos", "analytics", "kds"}
 
 
 async def test_disabled_module_is_refused_and_enabled_by_override(client, db, org, owner, branch, redis_client):

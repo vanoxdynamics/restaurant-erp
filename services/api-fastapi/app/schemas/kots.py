@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.core.enums import KOTStatus, Station
+from app.core.enums import Fulfilment, KOTStatus, Station
 from app.schemas.common import Pin, Reason
 
 
@@ -48,6 +48,9 @@ class KOTRead(BaseModel):
     kot_number: str
     station: Station
     status: KOTStatus
+    fulfilment: Fulfilment = Fulfilment.SCREEN
+    print_count: int = 0
+    last_printed_at: Optional[datetime] = None
     void_reason: Optional[str] = None
     # Filled in for listings so a kitchen card can say which table it is for.
     order_number: Optional[str] = None
@@ -56,3 +59,34 @@ class KOTRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class SlipLineRead(BaseModel):
+    quantity: int
+    name: str
+    notes: Optional[str] = None
+    cancelled: bool = False
+    station: Optional[str] = None
+
+
+class SlipRead(BaseModel):
+    """A kitchen slip as data. `text` is the 80 mm plain-text rendering, handy for previews."""
+    marker: str  # NEW | ADDITIONAL | REPRINT | VOID
+    branch_name: str
+    branch_code: str
+    kot_number: str
+    order_number: str
+    station: str
+    order_type: str
+    table_number: Optional[str] = None
+    guest_count: int
+    fired_at: str
+    fired_by: Optional[str] = None
+    round: int
+    print_count: int
+    status: str
+    fulfilment: str
+    lines: List[SlipLineRead] = []
+    order_notes: Optional[str] = None
+    text: str
+    warnings: List[str] = []

@@ -6,10 +6,11 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, BackgroundTasks, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser, get_current_user, require_roles
+from app.core.auth import CurrentUser, get_current_user, require_roles, require_roles_by_module
 from app.core.database import get_db
 from app.core.enums import BillStatus, Role
 from app.core.idempotency import IdempotencyGuard, idempotent
+from app.core.modules import ModuleKey
 from app.core.pagination import PageParams, page_params
 from app.core.redis import get_redis
 from app.modules.billing import service
@@ -31,8 +32,10 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
-cashier_roles = require_roles(Role.OWNER, Role.MANAGER, Role.CASHIER)
-qr_roles = require_roles(Role.OWNER, Role.MANAGER, Role.CASHIER, Role.CAPTAIN)
+# On a plan without the kitchen display there is no kitchen screen or separate counter: the waiter who took the order may
+# also bill it, take payment and close it. Voiding stays with managers and cashiers on every plan.
+cashier_roles = require_roles_by_module((Role.OWNER, Role.MANAGER, Role.CASHIER), module=ModuleKey.KDS, also_without=(Role.WAITER,))
+qr_roles = require_roles_by_module((Role.OWNER, Role.MANAGER, Role.CASHIER, Role.CAPTAIN), module=ModuleKey.KDS, also_without=(Role.WAITER,))
 void_roles = require_roles(Role.OWNER, Role.MANAGER, Role.CASHIER)
 
 

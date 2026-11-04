@@ -1,10 +1,12 @@
 import uuid
 from collections import defaultdict
+from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
+from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,7 +15,9 @@ from app.core.auth import CurrentUser, require_branch_access, resolve_approver, 
 from app.core.enums import (
     KOT_TO_ORDER_ITEM_STATUS,
     KOT_TRANSITIONS,
+    SLIP_KOT_TRANSITIONS,
     AuditAction,
+    Fulfilment,
     KOTStatus,
     OrderItemStatus,
     OrderStatus,
@@ -29,6 +33,8 @@ from app.core.numbering import next_document_number
 from app.models.floor import Branch, DiningTable
 from app.models.kots import KOT, KOTItem
 from app.models.orders import Order, OrderItem
+from app.models.staff import StaffUser
+from app.modules.kots import slip as slips
 from app.modules.orders.service import load_order, recompute_totals
 from app.schemas.kots import KOTFireRequest, VoidKOTRequest
 from app.worker.tasks import send_manager_push_alert
@@ -66,9 +72,13 @@ async def list_kots(
     station: Optional[Station],
     status: Optional[KOTStatus],
     order_id: Optional[uuid.UUID],
+    *,
+    screen_only: bool = False,
 ) -> Sequence[KOT]:
     branch_id = resolve_branch_id(user, branch_id)
     stmt = select(KOT).where(KOT.branch_id == branch_id).options(*KOT_LOADERS).order_by(KOT.created_at)
+    if screen_only:  # the kitchen screen never shows tickets that went out on paper
+        stmt = stmt.where(KOT.fulfilment == Fulfilment.SCREEN.value)
     if station is not None:
         stmt = stmt.where(KOT.station == station.value)
     if status is not None:
@@ -91,8 +101,13 @@ def _kot_line_notes(item: OrderItem) -> Optional[str]:
     return "; ".join(parts) or None
 
 
-async def fire_kots(db: AsyncSession, user: CurrentUser, payload: KOTFireRequest) -> List[KOT]:
-    """Send pending order items to their prep stations, one KOT per station."""
+async def fire_kots(db: AsyncSession, user: CurrentUser, payload: KOTFireRequest, *, kds: bool = True) -> List[KOT]:
+    """
+    Send pending order items to the kitchen. With the kitchen display module there is one KOT per prep station, each on
+    that station's screen. Without it the send becomes a single slip for the whole table (`fulfilment`), so one piece of
+    paper goes to the kitchen; its lines are grouped by station on the paper.
+    """
+    fulfilment = Fulfilment.SCREEN if kds else Fulfilment.SLIP
     order = await get_or_404(db, Order, payload.order_id, for_update=True, populate_existing=True)
     require_branch_access(user, order.branch_id)
     if order.status != OrderStatus.ACTIVE.value:
@@ -118,14 +133,17 @@ async def fire_kots(db: AsyncSession, user: CurrentUser, payload: KOTFireRequest
     for item in pending:
         by_station[item.station_snapshot].append(item)
 
+    groups = by_station if kds else {Station.KITCHEN.value: list(pending)}
+
     kots: List[KOT] = []
-    for station in sorted(by_station):
+    for station in sorted(groups):
         kot = KOT(
             branch_id=order.branch_id,
             order_id=order.id,
             kot_number=await next_document_number(db, branch, "kot"),
             station=station,
             status=KOTStatus.QUEUED.value,
+            fulfilment=fulfilment.value,
             fired_by_id=user.id,
         )
         kot.items = [
@@ -136,11 +154,11 @@ async def fire_kots(db: AsyncSession, user: CurrentUser, payload: KOTFireRequest
                 notes=_kot_line_notes(item),
                 status=KOTStatus.QUEUED.value,
             )
-            for item in by_station[station]
+            for item in groups[station]
         ]
         db.add(kot)
         kots.append(kot)
-        for item in by_station[station]:
+        for item in groups[station]:
             item.status = OrderItemStatus.FIRED.value
 
     await db.flush()
@@ -164,13 +182,26 @@ async def _sync_order_items(db: AsyncSession, kot: KOT, status: OrderItemStatus)
             line.status = status.value
 
 
-async def update_kot_status(db: AsyncSession, user: CurrentUser, kot_id: uuid.UUID, new_status: KOTStatus) -> KOT:
+async def update_kot_status(
+    db: AsyncSession, user: CurrentUser, kot_id: uuid.UUID, new_status: KOTStatus, *, kds: bool = True
+) -> KOT:
     kot = await load_kot(db, kot_id, for_update=True)
     require_branch_access(user, kot.branch_id)
     if user.role not in KITCHEN_STAGE_ROLES and new_status != KOTStatus.SERVED:
         raise Forbidden("Only the kitchen can start or finish a ticket; floor staff can mark it served")
+    if new_status in (KOTStatus.PREPARING, KOTStatus.READY) and not kds:
+        raise Forbidden("The kitchen display is not part of your plan", code="module_disabled", details={"module": "kds"})
     current = KOTStatus(kot.status)
-    if new_status not in KOT_TRANSITIONS[current]:
+    if kot.fulfilment == Fulfilment.SLIP.value:
+        if new_status in (KOTStatus.PREPARING, KOTStatus.READY):
+            raise InvalidTransition("A printed slip has no kitchen stages; mark it served", code="slip_ticket",
+                                    details={"fulfilment": kot.fulfilment})
+        transitions = SLIP_KOT_TRANSITIONS
+    elif not kds:
+        transitions = SLIP_KOT_TRANSITIONS  # a screen ticket left over after the module was removed: floor staff can still close it
+    else:
+        transitions = KOT_TRANSITIONS
+    if new_status not in transitions[current]:
         raise InvalidTransition(f"Cannot move KOT from {current} to {new_status}",
                                 details={"from": current.value, "to": new_status.value})
     kot.status = new_status.value
@@ -271,3 +302,69 @@ async def void_kot(
             {"kot_id": str(kot.id), "amount": str(voided_amount)},
         )
     return await load_kot(db, kot.id)
+
+
+# --- kitchen slips ---------------------------------------------------------------------------------------------------------------
+
+
+async def build_slip(db: AsyncSession, user: CurrentUser, kot_id: uuid.UUID) -> Tuple[slips.Slip, KOT]:
+    """Assemble the slip for a ticket. Reading it changes nothing: printing is recorded separately (`record_print`)."""
+    kot = await load_kot(db, kot_id)
+    require_branch_access(user, kot.branch_id)
+    order = await get_or_404(db, Order, kot.order_id)
+    branch = await get_or_404(db, Branch, kot.branch_id)
+    table = await db.get(DiningTable, order.table_id) if order.table_id else None
+    fired_by = await db.get(StaffUser, kot.fired_by_id) if kot.fired_by_id else None
+    # Which round of this station's tickets is this? Earlier tickets count even if they were cancelled: the kitchen saw them.
+    earlier = await db.scalar(
+        select(func.count()).select_from(KOT).where(
+            KOT.order_id == kot.order_id, KOT.station == kot.station,
+            (KOT.created_at < kot.created_at) | ((KOT.created_at == kot.created_at) & (KOT.kot_number < kot.kot_number)))
+    ) or 0
+    voided = kot.status == KOTStatus.VOIDED.value
+    if voided:
+        marker = slips.VOID
+    elif kot.print_count > 0:
+        marker = slips.REPRINT
+    elif earlier > 0:
+        marker = slips.ADDITIONAL
+    else:
+        marker = slips.NEW
+    fired_at = (kot.created_at or datetime.now(timezone.utc)).astimezone(ZoneInfo(branch.timezone))
+    # A slip-plan ticket carries the whole send, so each line keeps its prep station for grouping on the paper.
+    stations = dict((await db.execute(
+        select(OrderItem.id, OrderItem.station_snapshot).where(OrderItem.id.in_([i.order_item_id for i in kot.items]))
+    )).all())
+    lines = [
+        slips.SlipLine(quantity=i.quantity, name=i.item_name, notes=i.notes, cancelled=i.status == KOTStatus.VOIDED.value and not voided,
+                       station=stations.get(i.order_item_id))
+        for i in kot.items
+    ]
+    slip = slips.Slip(
+        marker=marker, branch_name=branch.name, branch_code=branch.code, kot_number=kot.kot_number, order_number=order.order_number,
+        station=kot.station, order_type=order.order_type, table_number=table.table_number if table else None,
+        guest_count=order.guest_count, fired_at=fired_at, fired_by=fired_by.full_name if fired_by else None,
+        round=earlier + 1, print_count=kot.print_count, lines=lines, order_notes=order.notes,
+    )
+    return slip, kot
+
+
+async def record_print(db: AsyncSession, user: CurrentUser, kot_id: uuid.UUID) -> KOT:
+    """
+    The app confirms that a slip came out of the printer. The first confirmation is the original print; every later one is a
+    reprint, which is counted, attributed to the person and written to the audit log, so duplicate slips cannot be produced
+    unnoticed.
+    """
+    kot = await load_kot(db, kot_id, for_update=True)
+    require_branch_access(user, kot.branch_id)
+    now = datetime.now(timezone.utc)
+    kot.print_count += 1
+    kot.first_printed_at = kot.first_printed_at or now
+    kot.last_printed_at, kot.last_printed_by_id = now, user.id
+    if kot.print_count > 1:
+        record_audit(db, branch_id=kot.branch_id, action=AuditAction.KOT_REPRINT, actor_id=user.id, entity_type="kot",
+                     entity_id=kot.id, details={"kot_number": kot.kot_number, "print_count": kot.print_count, "status": kot.status})
+    queue_event(db, kot.branch_id, Topic.KOTS, "kot.printed", kot.id,
+                {"print_count": kot.print_count, "station": kot.station, "order_id": str(kot.order_id)})
+    await commit(db)
+    return (await annotate_kots(db, [await load_kot(db, kot.id)]))[0]
