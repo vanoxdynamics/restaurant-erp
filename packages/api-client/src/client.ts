@@ -842,6 +842,11 @@ export class RestaurantApiClient {
     return adaptStaff(await this.request<Raw>('PATCH', `/staff/${userId}`, { body: { is_active: isActive } }));
   }
 
+  /** Delete a staff member who has no history. 409 `staff_has_history` when they do: deactivate instead. */
+  async deleteStaff(userId: string): Promise<void> {
+    await this.request<void>('DELETE', `/staff/${userId}`);
+  }
+
   async getShiftHistory(branchId: string): Promise<ShiftClosureAudit[]> {
     const page = await this.request<Page<Raw>>('GET', '/staff/shifts', {
       query: { branch_id: branchId, status: 'closed', limit: 50 },
@@ -850,11 +855,6 @@ export class RestaurantApiClient {
   }
 
   // ---- Orders & kitchen tickets (waiter) ------------------------------------------------
-
-  /** Delete a staff member who has no history. 409 `staff_has_history` when they do: deactivate instead. */
-  async deleteStaff(userId: string): Promise<void> {
-    await this.request<void>('DELETE', `/staff/${userId}`);
-  }
 
   async createOrder(input: {
     tableId?: string;
