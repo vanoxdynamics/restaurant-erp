@@ -89,6 +89,9 @@ export interface ItemVariant {
   is_available_86: boolean;
 }
 
+/** The unit an item is priced in. Quantities may have 3 decimals for items sold by weight (0.75 kg). */
+export type ItemUnit = 'pcs' | 'kg' | 'g' | 'l' | 'ml';
+
 export interface MenuItem {
   id: string;
   category_id: string;
@@ -100,6 +103,12 @@ export interface MenuItem {
   is_active: boolean;
   is_available_86: boolean;
   image_url?: string;
+  barcode?: string;
+  sku?: string;
+  hsn_code?: string;
+  unit: ItemUnit;
+  /** Loose items: the quantity is weighed or measured and may have decimals. */
+  sold_by_weight: boolean;
   variants: ItemVariant[];
   modifier_group_ids?: string[];
   modifier_groups?: ModifierGroup[];
@@ -247,6 +256,8 @@ export interface RosterEntry {
   id: string;
   full_name: string;
   role: StaffRole;
+  /** 4, 5 or 6: how many digits this person's PIN has. Unknown for PINs set before it was recorded. */
+  pin_length?: number;
 }
 
 /** A one-time code a manager shows so a new tablet can be linked to the branch. */
@@ -416,6 +427,36 @@ export interface MenuItemUpdate {
   station?: KitchenStation;
   category_id?: string;
   is_active?: boolean;
+  /** null clears the code. */
+  barcode?: string | null;
+  sku?: string | null;
+  hsn_code?: string | null;
+  unit?: ItemUnit;
+  sold_by_weight?: boolean;
+}
+
+/** Fields of a new item; the shop fields are optional. */
+export interface MenuItemCreate {
+  category_id: string;
+  name: string;
+  base_price_paise: number;
+  description?: string;
+  station?: KitchenStation;
+  tax_rate_percent?: number;
+  barcode?: string;
+  sku?: string;
+  hsn_code?: string;
+  unit?: ItemUnit;
+  sold_by_weight?: boolean;
+}
+
+export interface ItemImportResult {
+  created: number;
+  updated: number;
+  categories_created: number;
+  dry_run: boolean;
+  /** Rows that were not imported: the file's line number and the reasons. */
+  errors: { row: number; errors: string[]; data: Record<string, string> }[];
 }
 
 // ==========================================
@@ -437,12 +478,17 @@ export interface OrderLine {
   status: OrderLineStatus;
   notes?: string;
   station: KitchenStation;
+  unit: ItemUnit;
 }
+
+export type OrderType = 'dine_in' | 'takeaway' | 'delivery' | 'counter_sale';
 
 export interface OrderDetail {
   id: string;
   order_number: string;
-  order_type: 'dine_in' | 'takeaway' | 'delivery';
+  order_type: OrderType;
+  /** Daily number called out when a counter order is ready (businesses with token numbers). */
+  token_number?: number;
   status: 'active' | 'billed' | 'completed' | 'cancelled';
   table_id?: string;
   guest_count: number;
@@ -464,6 +510,8 @@ export interface BoardTicket {
   table_label: string;
   order_id: string;
   order_number: string;
+  /** Who took the order (their phone is told when it is ready). */
+  waiter_id?: string;
   items: { name: string; quantity: number; notes?: string }[];
   created_at: string;
 }
@@ -486,12 +534,113 @@ export interface KitchenTicket {
   created_at: string;
 }
 
+export type NoticeKind =
+  | 'food_ready'
+  | 'kot_cancelled'
+  | 'kot_printed'
+  | 'cancel_approved'
+  | 'cancel_declined'
+  | 'bill_paid'
+  | 'sold_out';
+
+/** Something floor staff should know about now (see GET /notices). */
+export interface Notice {
+  /** Stable: the same event always has the same id. */
+  id: string;
+  kind: NoticeKind;
+  title: string;
+  detail?: string;
+  order_id?: string;
+  at: string;
+}
+
+export type OverviewPeriod = 'today' | 'yesterday' | '7d' | '30d' | '90d';
+
+export interface OverviewPoint {
+  /** An ISO date, "13:00", or a weekday ("Mon"). */
+  label: string;
+  sales_paise: number;
+  bills: number;
+}
+
+export interface OverviewSlice {
+  name: string;
+  amount_paise: number;
+  /** Bills, or item lines for categories. */
+  count: number;
+}
+
+export interface OverviewTotals {
+  net_sales_paise: number;
+  gross_sales_paise: number;
+  discounts_paise: number;
+  tax_paise: number;
+  bills: number;
+  average_bill_paise: number;
+  guests: number;
+  cancellations: number;
+  cancelled_paise: number;
+}
+
+/** The business over a period, against the same-length period before it. */
+export interface BusinessOverview {
+  period: OverviewPeriod;
+  start: string;
+  end: string;
+  branches: number;
+  totals: OverviewTotals;
+  previous: OverviewTotals;
+  /** Percent change per headline figure; null when the period before had nothing. */
+  changes: { net_sales: number | null; bills: number | null; average_bill: number | null };
+  /** By hour for a single day, else by day. */
+  trend: OverviewPoint[];
+  by_hour: OverviewPoint[];
+  by_weekday: OverviewPoint[];
+  categories: OverviewSlice[];
+  top_items: { name: string; category?: string; quantity: number; total_paise: number }[];
+  staff: OverviewSlice[];
+  order_types: OverviewSlice[];
+  payments: PaymentBreakdown;
+}
+
+/** How the business appears on its bills: set by the business itself (owners and managers). */
+export interface BusinessProfile {
+  /** What the bill prints: the business's own name, or the registered name when it has not set one. */
+  name: string;
+  display_name?: string;
+  registered_name: string;
+  /** data:image/png;base64,... */
+  logo_data_url?: string;
+}
+
+export type BusinessCategory = 'restaurant' | 'cafe' | 'grocery' | 'retail';
+
+/** Workflow steps a business uses. Its category presets them; the platform can override each one per business. */
+export interface BusinessSettings {
+  /** Floor, tables, guests and waiters' phones. */
+  table_service: boolean;
+  /** Sales make KOTs for the kitchen (on a screen with the `kds` module, else printed). */
+  kitchen_tickets: boolean;
+  /** The counter opens on the quick-sale screen. */
+  quick_sale: boolean;
+  barcode: boolean;
+  weighed_items: boolean;
+  /** Counter sales get a daily token number. */
+  tokens: boolean;
+}
+
+export const RESTAURANT_SETTINGS: BusinessSettings = {
+  table_service: true, kitchen_tickets: true, quick_sale: false, barcode: false, weighed_items: false, tokens: false,
+};
+
 /** The parts of the subscription the apps act on. */
 export interface Entitlements {
   access: 'full' | 'read_only' | 'blocked';
   plan_code?: string;
   /** Module keys, e.g. 'pos', 'kds' (kitchen display), 'analytics'. */
   modules: string[];
+  category: BusinessCategory;
+  settings: BusinessSettings;
 }
 
 /** An item the waiter has added but not yet sent to the kitchen. */
@@ -586,6 +735,25 @@ export interface CashShift {
   /** Shown to managers only. */
   expected_cash_paise?: number;
   variance_paise?: number;
+}
+
+/**
+ * The branch's cash day: opened at the counter with the cash in the drawer, closed with a blind count. One per branch, whoever
+ * is at the counter. Expected cash and the difference are only sent to managers and owners.
+ */
+export interface CashDay {
+  status: 'not_open' | 'open' | 'closed';
+  business_date: string;
+  id?: string;
+  opened_at?: string;
+  opened_by?: string;
+  opening_cash_paise?: number;
+  closed_at?: string;
+  counted_cash_paise?: number;
+  expected_cash_paise?: number;
+  variance_paise?: number;
+  /** Still open from an earlier day: it was not closed. */
+  stale: boolean;
 }
 
 /** A tender the cashier is recording. UPI and card need the UTR / approval code as reference. */

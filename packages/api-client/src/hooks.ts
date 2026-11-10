@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { StaffRole, KitchenStation } from '@repo/shared-utils';
-import { apiClient } from './client';
+import { ApiError, apiClient } from './client';
 import {
   Bill,
   BoardTicket,
@@ -9,6 +9,10 @@ import {
   PaymentOutcome,
   BillDiscount,
   CartLine,
+  BusinessOverview,
+  BusinessProfile,
+  CashDay,
+  OverviewPeriod,
   CashShift,
   Entitlements,
   KitchenTicket,
@@ -19,6 +23,7 @@ import {
   FraudAuditLog,
   LiveKPIs,
   MenuItemUpdate,
+  MenuItemCreate,
   PaymentBreakdown,
   RosterEntry,
   ShiftClosureAudit,
@@ -42,13 +47,18 @@ export const QUERY_KEYS = {
 
 // ---- Sign-in -----------------------------------------------------------------------
 
-/** Who can sign in on this tablet. Re-fetched each time the picker is shown so new hires appear. */
+/**
+ * Who can sign in on this tablet. Re-fetched each time the picker is shown so new hires appear. A slow or dropped connection is
+ * retried a few times on its own; a refused device token (401) is not, since only linking the tablet again fixes that.
+ */
 export function useSignInRoster(deviceToken: string | undefined) {
   return useQuery<RosterEntry[]>({
     queryKey: ['signInRoster', deviceToken ?? ''],
     queryFn: () => apiClient.getSignInRoster(deviceToken!),
     enabled: !!deviceToken,
     staleTime: 0,
+    retry: (failures, error) => !(error instanceof ApiError && error.status === 401) && failures < 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 5000),
   });
 }
 
@@ -110,14 +120,18 @@ export function useToggle86() {
 export function useCreateMenuItem() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (item: {
-      category_id: string;
-      name: string;
-      base_price_paise: number;
-      description?: string;
-      station?: KitchenStation;
-    }) => apiClient.createMenuItem(item),
+    mutationFn: (item: MenuItemCreate) => apiClient.createMenuItem(item),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.catalog }),
+  });
+}
+
+export function useImportItems() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ csv, dryRun }: { csv: string; dryRun?: boolean }) => apiClient.importItems(csv, dryRun),
+    onSuccess: (result) => {
+      if (!result.dry_run) queryClient.invalidateQueries({ queryKey: QUERY_KEYS.catalog });
+    },
   });
 }
 
@@ -140,11 +154,11 @@ export function useCreateCategory() {
 
 // ---- Void approvals -----------------------------------------------------------------
 
-export function useVoidApprovals(branchId: string, status?: 'pending' | 'approved' | 'rejected') {
+export function useVoidApprovals(branchId: string, status?: 'pending' | 'approved' | 'rejected', enabled = true) {
   return useQuery<VoidApprovalItem[]>({
     queryKey: QUERY_KEYS.voidRequests(branchId, status),
     queryFn: () => apiClient.getVoidRequests(branchId, status),
-    enabled: !!branchId,
+    enabled: enabled && !!branchId,
     refetchInterval: status === 'pending' ? 10000 : undefined,
   });
 }
@@ -319,8 +333,13 @@ function useInvalidateOrder() {
 export function useCreateOrder() {
   const invalidate = useInvalidateOrder();
   return useMutation({
-    mutationFn: (input: { tableId?: string; orderType: 'dine_in' | 'takeaway'; guestCount: number }) =>
-      apiClient.createOrder(input),
+    mutationFn: (input: {
+      tableId?: string;
+      orderType: 'dine_in' | 'takeaway' | 'counter_sale';
+      guestCount: number;
+      items?: CartLine[];
+      idempotencyKey?: string;
+    }) => apiClient.createOrder(input),
     onSuccess: (order) => invalidate(order.id),
   });
 }
@@ -475,6 +494,60 @@ export function usePrintQueue(branchId: string, enabled = true) {
     refetchInterval: 4000,
     // The counter keeps printing waiters' KOTs even while another screen or app (e.g. Pine Labs taking a card) is in front.
     refetchIntervalInBackground: true,
+  });
+}
+
+export function useOverview(branchId: string, period: OverviewPeriod, allBranches = false) {
+  return useQuery<BusinessOverview>({
+    queryKey: ['overview', allBranches ? 'all' : branchId, period],
+    queryFn: () => apiClient.getOverview(branchId, period, allBranches),
+    enabled: allBranches || !!branchId,
+    refetchInterval: period === 'today' ? 60000 : false,
+  });
+}
+
+export const BUSINESS_PROFILE_KEY = ['businessProfile'] as const;
+
+export function useBusinessProfile(enabled = true) {
+  return useQuery<BusinessProfile>({ queryKey: BUSINESS_PROFILE_KEY, queryFn: () => apiClient.getBusinessProfile(), enabled });
+}
+
+/** Change the bill name and/or logo. `logo: null` removes it; leave a field out to keep it. */
+export function useUpdateBusinessProfile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (change: { displayName?: string | null; logoBase64?: string | null }) => {
+      let profile: BusinessProfile | undefined;
+      if (change.displayName !== undefined) profile = await apiClient.setBusinessName(change.displayName);
+      if (change.logoBase64 === null) profile = await apiClient.removeBusinessLogo();
+      else if (change.logoBase64 !== undefined) profile = await apiClient.setBusinessLogo(change.logoBase64);
+      return profile ?? apiClient.getBusinessProfile();
+    },
+    onSuccess: (profile) => queryClient.setQueryData(BUSINESS_PROFILE_KEY, profile),
+  });
+}
+
+export const CASH_DAY_KEY = ['cashDay'] as const;
+
+/** The branch's cash day; re-checked every minute so a day opened or closed on another device shows up. */
+export function useCashDay(enabled = true) {
+  return useQuery<CashDay>({ queryKey: CASH_DAY_KEY, queryFn: () => apiClient.getCashDay(), enabled, refetchInterval: 60000 });
+}
+
+export function useOpenCashDay() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (openingCashPaise: number) => apiClient.openCashDay(openingCashPaise),
+    onSuccess: (day) => queryClient.setQueryData(CASH_DAY_KEY, day),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: CASH_DAY_KEY }),
+  });
+}
+
+export function useCloseCashDay() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (countedCashPaise: number) => apiClient.closeCashDay(countedCashPaise),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: CASH_DAY_KEY }),
   });
 }
 

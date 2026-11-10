@@ -16,6 +16,14 @@ import {
   AuthSession,
   BillDiscount,
   CartLine,
+  BusinessOverview,
+  BusinessProfile,
+  CashDay,
+  Notice,
+  OverviewPeriod,
+  OverviewPoint,
+  OverviewSlice,
+  OverviewTotals,
   CashShift,
   Entitlements,
   KitchenTicket,
@@ -37,6 +45,9 @@ import {
   LiveKPIs,
   MenuItem,
   MenuItemUpdate,
+  MenuItemCreate,
+  ItemImportResult,
+  RESTAURANT_SETTINGS,
   PaymentBreakdown,
   ShiftClosureAudit,
   RosterEntry,
@@ -147,6 +158,11 @@ function adaptMenuItem(raw: Raw): MenuItem {
     is_active: raw.is_active,
     is_available_86: raw.is_available_86,
     image_url: raw.image_url ?? undefined,
+    barcode: raw.barcode ?? undefined,
+    sku: raw.sku ?? undefined,
+    hsn_code: raw.hsn_code ?? undefined,
+    unit: raw.unit ?? 'pcs',
+    sold_by_weight: !!raw.sold_by_weight,
     variants: (raw.variants ?? [])
       .filter((v: Raw) => v.is_active !== false)
       .map((v: Raw) => ({
@@ -272,6 +288,7 @@ function adaptBoardTicket(raw: Raw): BoardTicket {
     table_label: raw.table_number ?? 'Takeaway',
     order_id: raw.order_id,
     order_number: raw.order_number ?? '',
+    waiter_id: raw.waiter_id ?? undefined,
     items: (raw.items ?? [])
       .filter((i: Raw) => i.status !== 'voided')
       .map((i: Raw) => ({ name: i.item_name, quantity: i.quantity, notes: i.notes ?? undefined })),
@@ -293,6 +310,7 @@ function adaptOrderLine(raw: Raw): OrderLine {
     status: raw.status,
     notes: raw.notes ?? undefined,
     station: STATION_FROM_API[raw.station_snapshot] ?? KitchenStation.MAIN_KITCHEN,
+    unit: raw.unit_snapshot ?? 'pcs',
   };
 }
 
@@ -301,6 +319,7 @@ function adaptOrder(raw: Raw): OrderDetail {
     id: raw.id,
     order_number: raw.order_number,
     order_type: raw.order_type,
+    token_number: raw.token_number ?? undefined,
     status: raw.status,
     table_id: raw.table_id ?? undefined,
     guest_count: raw.guest_count,
@@ -419,6 +438,67 @@ function adaptPrintable(reference: string, raw: Raw): PrintablePage {
   };
 }
 
+const optionalPaise = (value: unknown) => (value === null || value === undefined ? undefined : toPaise(value as string));
+
+const adaptPoint = (p: Raw): OverviewPoint => ({ label: p.label, sales_paise: toPaise(p.sales), bills: p.bills });
+const adaptSlice = (s: Raw): OverviewSlice => ({ name: s.name, amount_paise: toPaise(s.amount), count: s.count });
+const adaptTotals = (t: Raw): OverviewTotals => ({
+  net_sales_paise: toPaise(t.net_sales),
+  gross_sales_paise: toPaise(t.gross_sales),
+  discounts_paise: toPaise(t.discounts),
+  tax_paise: toPaise(t.tax),
+  bills: t.bills,
+  average_bill_paise: toPaise(t.average_bill),
+  guests: t.guests,
+  cancellations: t.cancellations,
+  cancelled_paise: toPaise(t.cancelled_amount),
+});
+
+function adaptOverview(raw: Raw): BusinessOverview {
+  return {
+    period: raw.period,
+    start: raw.start,
+    end: raw.end,
+    branches: raw.branches,
+    totals: adaptTotals(raw.totals),
+    previous: adaptTotals(raw.previous),
+    changes: raw.changes,
+    trend: raw.trend.map(adaptPoint),
+    by_hour: raw.by_hour.map(adaptPoint),
+    by_weekday: raw.by_weekday.map(adaptPoint),
+    categories: raw.categories.map(adaptSlice),
+    top_items: raw.top_items.map((i: Raw) => ({ name: i.name, category: i.category ?? undefined, quantity: i.quantity, total_paise: toPaise(i.total) })),
+    staff: raw.staff.map(adaptSlice),
+    order_types: raw.order_types.map(adaptSlice),
+    payments: adaptPayments(raw.payments),
+  };
+}
+
+function adaptProfile(raw: Raw): BusinessProfile {
+  return {
+    name: raw.name,
+    display_name: raw.display_name ?? undefined,
+    registered_name: raw.registered_name,
+    logo_data_url: raw.logo_data_url ?? undefined,
+  };
+}
+
+function adaptCashDay(raw: Raw): CashDay {
+  return {
+    status: raw.status,
+    business_date: raw.business_date,
+    id: raw.id ?? undefined,
+    opened_at: raw.opened_at ?? undefined,
+    opened_by: raw.opened_by ?? undefined,
+    opening_cash_paise: optionalPaise(raw.opening_cash),
+    closed_at: raw.closed_at ?? undefined,
+    counted_cash_paise: optionalPaise(raw.counted_cash),
+    expected_cash_paise: optionalPaise(raw.expected_cash),
+    variance_paise: optionalPaise(raw.cash_variance),
+    stale: !!raw.stale,
+  };
+}
+
 function adaptCashShift(raw: Raw): CashShift {
   return {
     id: raw.id,
@@ -443,6 +523,9 @@ export interface ApiClientOptions {
   token?: string;
   onUnauthorized?: () => void;
 }
+
+/** How long any API call may take before it is abandoned (see `request`). */
+export const REQUEST_TIMEOUT_MS = 20000;
 
 export function newIdempotencyKey(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
@@ -479,6 +562,8 @@ export class RestaurantApiClient {
       text?: boolean;
       /** Send no staff session (device-token calls): a refusal must not sign out whoever is using the device. */
       anonymous?: boolean;
+      /** Give up after this long (default 20 s). Without a limit a stalled connection would leave a spinner forever. */
+      timeoutMs?: number;
     } = {},
   ): Promise<T> {
     const query = Object.entries(options.query ?? {})
@@ -494,19 +579,31 @@ export class RestaurantApiClient {
       headers['X-Idempotency-Key'] = typeof options.idempotent === 'string' ? options.idempotent : newIdempotencyKey();
     }
 
+    // Phones and tablets on Wi-Fi often keep a dead connection open (after sleep, a dropped network): fetch then never
+    // settles. Abort after a limit so the screen can say so and offer a retry. Writes carry idempotency keys, so retrying one
+    // that did reach the server is safe.
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : undefined;
+    const timer = controller ? setTimeout(() => controller.abort(), options.timeoutMs ?? REQUEST_TIMEOUT_MS) : undefined;
     let response: Response;
+    let text: string;
     try {
       response = await fetch(url, {
         method,
         headers,
         body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+        signal: controller?.signal,
       });
+      text = response.status === 204 ? '' : await response.text();
     } catch {
+      if (controller?.signal.aborted) {
+        throw new ApiError(0, 'timeout', 'The server is taking too long to answer. Check the connection and try again.');
+      }
       throw new ApiError(0, 'network_error', 'Cannot reach the server. Check your connection.');
+    } finally {
+      if (timer) clearTimeout(timer);
     }
 
     if (response.status === 204) return undefined as T;
-    const text = await response.text();
     if (options.text && response.ok) return text as T;
     const data = text ? JSON.parse(text) : undefined;
 
@@ -547,8 +644,12 @@ export class RestaurantApiClient {
 
   /** Staff who can sign in at this branch's tablets, before anyone is signed in. */
   async getSignInRoster(deviceToken: string): Promise<RosterEntry[]> {
-    const rows = await this.request<Raw[]>('GET', '/staff/auth/roster', { headers: { 'X-Device-Token': deviceToken } });
-    return rows.map((r) => ({ id: r.id, full_name: r.full_name, role: roleFromApi(r.role) }));
+    const rows = await this.request<Raw[]>('GET', '/staff/auth/roster', {
+      headers: { 'X-Device-Token': deviceToken },
+      anonymous: true,
+      timeoutMs: 10000,
+    });
+    return rows.map((r) => ({ id: r.id, full_name: r.full_name, role: roleFromApi(r.role), pin_length: r.pin_length ?? undefined }));
   }
 
   async login(username: string, password: string): Promise<AuthSession> {
@@ -565,7 +666,13 @@ export class RestaurantApiClient {
   /** What the organization's plan includes. The server enforces it; apps use it to show the right workflow. */
   async getEntitlements(): Promise<Entitlements> {
     const raw = await this.request<Raw>('GET', '/me/entitlements');
-    return { access: raw.access, plan_code: raw.plan_code ?? undefined, modules: raw.modules ?? [] };
+    return {
+      access: raw.access,
+      plan_code: raw.plan_code ?? undefined,
+      modules: raw.modules ?? [],
+      category: raw.category ?? 'restaurant',
+      settings: { ...RESTAURANT_SETTINGS, ...(raw.settings ?? {}) },
+    };
   }
 
   async getBranches(): Promise<BranchSummary[]> {
@@ -626,14 +733,7 @@ export class RestaurantApiClient {
     );
   }
 
-  async createMenuItem(item: {
-    category_id: string;
-    name: string;
-    base_price_paise: number;
-    description?: string;
-    station?: KitchenStation;
-    tax_rate_percent?: number;
-  }): Promise<MenuItem> {
+  async createMenuItem(item: MenuItemCreate): Promise<MenuItem> {
     return adaptMenuItem(
       await this.request<Raw>('POST', '/catalog/items', {
         body: {
@@ -643,9 +743,24 @@ export class RestaurantApiClient {
           base_price: toRupees(item.base_price_paise),
           tax_rate: (item.tax_rate_percent ?? 5).toFixed(2),
           station: stationToApi(item.station),
+          barcode: item.barcode || undefined,
+          sku: item.sku || undefined,
+          hsn_code: item.hsn_code || undefined,
+          unit: item.unit ?? 'pcs',
+          sold_by_weight: item.sold_by_weight ?? false,
         },
       }),
     );
+  }
+
+  /** The item a scanner read (barcode or SKU), or an ApiError with code `barcode_not_found`. */
+  async lookupBarcode(code: string): Promise<MenuItem> {
+    return adaptMenuItem(await this.request<Raw>('GET', '/retail/items/lookup', { query: { code } }));
+  }
+
+  /** Create or update items from CSV text. With `dryRun` nothing is saved; the result says what would happen. */
+  async importItems(csv: string, dryRun = false): Promise<ItemImportResult> {
+    return this.request<ItemImportResult>('POST', '/retail/items/import', { body: { csv, dry_run: dryRun }, timeoutMs: 120000 });
   }
 
   async updateMenuItem(itemId: string, changes: MenuItemUpdate): Promise<MenuItem> {
@@ -657,6 +772,11 @@ export class RestaurantApiClient {
     if (changes.station !== undefined) body.station = stationToApi(changes.station);
     if (changes.category_id !== undefined) body.category_id = changes.category_id;
     if (changes.is_active !== undefined) body.is_active = changes.is_active;
+    for (const key of ['barcode', 'sku', 'hsn_code'] as const) {
+      if (changes[key] !== undefined) body[key] = changes[key] || null;
+    }
+    if (changes.unit !== undefined) body.unit = changes.unit;
+    if (changes.sold_by_weight !== undefined) body.sold_by_weight = changes.sold_by_weight;
     return adaptMenuItem(await this.request<Raw>('PATCH', `/catalog/items/${itemId}`, { body }));
   }
 
@@ -733,17 +853,20 @@ export class RestaurantApiClient {
 
   async createOrder(input: {
     tableId?: string;
-    orderType: 'dine_in' | 'takeaway';
+    orderType: 'dine_in' | 'takeaway' | 'counter_sale';
     guestCount: number;
+    /** Lines to add straight away (a quick sale is created with its whole cart). */
+    items?: CartLine[];
+    idempotencyKey?: string;
   }): Promise<OrderDetail> {
     return adaptOrder(
       await this.request<Raw>('POST', '/orders', {
-        idempotent: true,
+        idempotent: input.idempotencyKey ?? true,
         body: {
           order_type: input.orderType,
           table_id: input.orderType === 'dine_in' ? input.tableId : undefined,
           guest_count: input.guestCount,
-          items: [],
+          items: (input.items ?? []).map(cartToApi),
         },
       }),
     );
@@ -833,6 +956,55 @@ export class RestaurantApiClient {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;
     }
+  }
+
+  /** What happened since `since` (the `now` of the previous answer) that floor staff act on. Without it: none, and the clock. */
+  async getNotices(since?: string): Promise<{ now: string; notices: Notice[] }> {
+    const raw = await this.request<Raw>('GET', '/notices', { query: { since }, timeoutMs: 10000 });
+    return {
+      now: raw.now,
+      notices: (raw.notices ?? []).map((n: Raw) => ({
+        id: n.id, kind: n.kind, title: n.title, detail: n.detail ?? undefined, order_id: n.order_id ?? undefined, at: n.at,
+      })),
+    };
+  }
+
+  /** Owners and managers: the business over a period with breakdowns. `allBranches` is for owners. */
+  async getOverview(branchId: string, period: OverviewPeriod, allBranches = false): Promise<BusinessOverview> {
+    const query = allBranches ? { period, all_branches: 'true' } : { period, branch_id: branchId };
+    return adaptOverview(await this.request<Raw>('GET', '/analytics/overview', { query }));
+  }
+
+  async getBusinessProfile(): Promise<BusinessProfile> {
+    return adaptProfile(await this.request<Raw>('GET', '/business/profile'));
+  }
+
+  /** The name printed on bills; null goes back to the registered name. */
+  async setBusinessName(displayName: string | null): Promise<BusinessProfile> {
+    return adaptProfile(await this.request<Raw>('PATCH', '/business/profile', { body: { display_name: displayName } }));
+  }
+
+  /** A PNG or JPEG under 500 KB, base64 (a data: URL is fine). */
+  async setBusinessLogo(imageBase64: string): Promise<BusinessProfile> {
+    return adaptProfile(await this.request<Raw>('PUT', '/business/logo', { body: { image_base64: imageBase64 }, timeoutMs: 60000 }));
+  }
+
+  async removeBusinessLogo(): Promise<BusinessProfile> {
+    return adaptProfile(await this.request<Raw>('DELETE', '/business/logo'));
+  }
+
+  /** The branch's cash day (see CashDay). */
+  async getCashDay(): Promise<CashDay> {
+    return adaptCashDay(await this.request<Raw>('GET', '/staff/cash-day'));
+  }
+
+  async openCashDay(openingCashPaise: number): Promise<CashDay> {
+    return adaptCashDay(await this.request<Raw>('POST', '/staff/cash-day/open', { body: { opening_cash: toRupees(openingCashPaise) } }));
+  }
+
+  /** Close with a blind count: the counted cash is entered without seeing what the system expects. */
+  async closeCashDay(countedCashPaise: number): Promise<CashDay> {
+    return adaptCashDay(await this.request<Raw>('POST', '/staff/cash-day/close', { body: { counted_cash: toRupees(countedCashPaise) } }));
   }
 
   async openShift(openingCashPaise: number): Promise<CashShift> {
