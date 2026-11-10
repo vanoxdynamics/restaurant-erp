@@ -11,8 +11,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install the package (hatchling needs README.md and app/ present to build).
-COPY pyproject.toml README.md ./
+# Install the package (hatchling needs app/ present to build).
+COPY pyproject.toml ./
 COPY app ./app
 RUN pip install .
 

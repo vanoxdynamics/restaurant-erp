@@ -1,4 +1,4 @@
-# Platform operations runbooks
+# Operations
 
 Audience: the people who run the platform console and the API behind it. Commands run from `services/api-fastapi`.
 
@@ -23,7 +23,7 @@ Audience: the people who run the platform console and the API behind it. Command
 - Run migrations with a separate owner role, not the app role.
 
 **Network.**
-- Console and API behind one reverse proxy on one origin (see `apps/platform-console/README.md`). IP allowlist or VPN in front.
+- Console and API behind one reverse proxy on one origin (see section 9). IP allowlist or VPN in front.
 - `PLATFORM_IP_ALLOWLIST` as a second gate; uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy>`; proxy overwrites `X-Forwarded-For`.
 - `client_max_body_size 256k;` at the proxy (the API enforces `PLATFORM_MAX_BODY_BYTES` too).
 
@@ -134,3 +134,60 @@ throw-away database. Re-run it after changes to `get_current_user`, `compute_ent
 - **Redis is on the sign-in path** (rate limits). If Redis is down, operators cannot sign in; entitlement lookups fall back to the database.
 - **Row-level security is fail-open when unscoped** (by design: platform, login and workers need it) and does not bind superusers.
 - **No retention/purge flow** for cancelled subscribers, and no payment gateway or refunds.
+
+## 9. Deploying the platform console
+
+**The console and the API must be served from the same origin**, for example `https://console.example.com/` for the
+static files and `https://console.example.com/api/` forwarded to the API. The refresh token is an `HttpOnly`,
+`SameSite=Strict` cookie and the CSRF token is a cookie the page must be able to read; both only work when the page
+and the API share a host. The console calls relative `/api/...` URLs for the same reason.
+
+Minimal nginx sketch:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name console.example.com;
+
+    # Network gate: only the office / VPN may even see the console.
+    allow 203.0.113.0/24;
+    deny  all;
+
+    root /srv/platform-console/dist;                 # output of `pnpm build`
+    location / { try_files $uri /index.html; }
+
+    location /api/ {
+        proxy_pass http://api:8000;                  # uvicorn --proxy-headers --forwarded-allow-ips="<proxy ip>"
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;   # overwrite, never append client-supplied values
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+}
+```
+
+Also:
+
+- Keep `/api/v1/platform/*` off your public tenant hostname. Set `PLATFORM_IP_ALLOWLIST` on the API as a second gate.
+- Run uvicorn with `--proxy-headers --forwarded-allow-ips=<the proxy's IP>` so rate limits and the allowlist see real client IPs.
+- Required secrets in production: `PLATFORM_SECRET_KEY`, `PLATFORM_ENCRYPTION_KEY` (32+ characters each, different from every other key) and `PLATFORM_COOKIE_SECURE=true`. The API refuses to start otherwise.
+- The production build embeds a strict Content-Security-Policy (`script-src 'self'`, `connect-src 'self'`, no inline scripts).
+
+## 10. How the console behaves
+
+- The access token (10 minutes) lives only in memory. The page resumes a session after a reload from the refresh cookie.
+- Refreshing is single-flight in a tab and serialised across tabs with the Web Locks API: the server treats a replayed
+  refresh token as theft and ends the session, so two tabs must never refresh with the same cookie at once.
+- Sensitive actions (suspend, reinstate, cancel, impersonation, the platform-wide switch, applying a bulk change,
+  managing operators) make the API answer `step_up_required`. The console shows a password + authenticator prompt and
+  retries the action; it stays unlocked for an hour (`PLATFORM_STEP_UP_MINUTES`).
+- Money-affecting calls (create subscriber, change term/plan/price, extend, activate) carry an idempotency key made when
+  the dialog opens, so a double click or retry never applies twice. Subscription edits also send the `version` they were
+  based on; a stale form gets a clear conflict instead of overwriting someone else's change.
+- Menus and buttons are hidden by role, but the API enforces every rule; hiding is only a courtesy.
+- Secrets (a new operator's authenticator key and recovery codes, an impersonation token) are shown once in a dialog
+  and never stored by the console.
