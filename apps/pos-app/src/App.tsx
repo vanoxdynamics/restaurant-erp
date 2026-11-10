@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { SafeAreaView, StatusBar, StyleSheet, View } from 'react-native';
+import { StatusBar, StyleSheet, View } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   useFonts,
@@ -20,7 +21,11 @@ import { CounterHomeScreen } from './screens/CounterHomeScreen';
 import { KotPrinterScreen } from './screens/KotPrinterScreen';
 import { DayEndScreen } from './screens/DayEndScreen';
 import { SimulatorSheet } from './components/SimulatorSheet';
-import { IS_COUNTER, paymentKind } from './device';
+import { IS_COUNTER, IS_RETAIL, paymentKind } from './device';
+import { RetailMain } from './retail/RetailApp';
+import { WrongApp } from './components/WrongApp';
+import { ReadyAlerts } from './components/ReadyAlerts';
+import { useBusiness } from './business';
 import { PrintStation } from './printing/usePrintStation';
 import { usePrinterSettings } from './stores/printerStore';
 import { useDeviceStore } from './stores/deviceStore';
@@ -43,8 +48,17 @@ export type Route =
 const START: Route = IS_COUNTER ? { name: 'home' } : { name: 'floor' };
 
 function Main(): React.JSX.Element {
+  if (IS_RETAIL) return <RetailMain />;
+  return <RestaurantMain />;
+}
+
+/** The restaurant apps (counter and waiter): tables, waiters, KOTs. Shops and cafés use the retail app instead. */
+function RestaurantMain(): React.JSX.Element {
   const [route, setRoute] = useState<Route>(START);
   const role = useSessionStore((s) => s.user?.role);
+  const business = useBusiness();
+
+  if (business.loaded && business.category !== 'restaurant') return <WrongApp expected="retail" />;
 
   // Kitchen staff only handle the kitchen's own queue; they never see the floor.
   if (role === StaffRole.KITCHEN) return <KitchenScreen />;
@@ -52,40 +66,51 @@ function Main(): React.JSX.Element {
   const home = () => setRoute(START);
   const openOrder = (orderId: string, title: string) => setRoute({ name: 'order', orderId, title });
 
-  if (route.name === 'bill') {
-    return (
-      <BillScreen
-        orderId={route.orderId}
-        title={route.title}
-        onBack={() => openOrder(route.orderId, route.title)}
-        onDone={home}
-      />
-    );
-  }
-  if (route.name === 'order') {
-    return (
-      <OrderScreen
-        orderId={route.orderId}
-        title={route.title}
-        onBack={home}
-        onBill={() => setRoute({ name: 'bill', orderId: route.orderId, title: route.title })}
-      />
-    );
-  }
-  if (route.name === 'printer') return <KotPrinterScreen onBack={home} />;
-  if (route.name === 'dayend') return <DayEndScreen onBack={home} />;
-  if (route.name === 'home') {
-    return (
-      <CounterHomeScreen
-        onOpenOrder={openOrder}
-        onOpenBill={(orderId, title) => setRoute({ name: 'bill', orderId, title })}
-        onNewOrder={() => setRoute({ name: 'floor' })}
-        onPrinter={() => setRoute({ name: 'printer' })}
-        onDayEnd={() => setRoute({ name: 'dayend' })}
-      />
-    );
-  }
-  return <FloorScreen onOpenOrder={openOrder} onBack={IS_COUNTER ? home : undefined} />;
+  const screen = (() => {
+    if (route.name === 'bill') {
+      return (
+        <BillScreen
+          orderId={route.orderId}
+          title={route.title}
+          onBack={() => openOrder(route.orderId, route.title)}
+          onDone={home}
+        />
+      );
+    }
+    if (route.name === 'order') {
+      return (
+        <OrderScreen
+          orderId={route.orderId}
+          title={route.title}
+          onBack={home}
+          onBill={() => setRoute({ name: 'bill', orderId: route.orderId, title: route.title })}
+        />
+      );
+    }
+    if (route.name === 'printer') return <KotPrinterScreen onBack={home} />;
+    if (route.name === 'dayend') return <DayEndScreen onBack={home} />;
+    if (route.name === 'home') {
+      return (
+        <CounterHomeScreen
+          onOpenOrder={openOrder}
+          onOpenBill={(orderId, title) => setRoute({ name: 'bill', orderId, title })}
+          onNewOrder={() => setRoute({ name: 'floor' })}
+          onPrinter={() => setRoute({ name: 'printer' })}
+          onDayEnd={() => setRoute({ name: 'dayend' })}
+        />
+      );
+    }
+    return <FloorScreen onOpenOrder={openOrder} onBack={IS_COUNTER ? home : undefined} />;
+
+  })();
+
+  // Floor staff hear about food ready in the kitchen on whatever screen they are on.
+  return (
+    <View style={{ flex: 1 }}>
+      {screen}
+      <ReadyAlerts onOpenOrder={openOrder} />
+    </View>
+  );
 }
 
 export default function App(): React.JSX.Element {
@@ -123,6 +148,7 @@ export default function App(): React.JSX.Element {
   }
 
   return (
+    <SafeAreaProvider>
     <QueryClientProvider client={queryClient}>
       {/* Capture (and immediately release) every press so touch, mouse and pen all count as activity. */}
       <SafeAreaView
@@ -139,6 +165,7 @@ export default function App(): React.JSX.Element {
         {deviceStatus === 'registered' ? <PrintStation /> : null}
       </SafeAreaView>
     </QueryClientProvider>
+    </SafeAreaProvider>
   );
 }
 

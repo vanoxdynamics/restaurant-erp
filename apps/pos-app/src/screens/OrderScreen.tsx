@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { Badge, BadgeProps, Button, colors, fonts, humanizeLabel, radii, spacing, typography } from '@repo/shared-ui';
-import { formatPaiseToRupees } from '@repo/shared-utils';
+import { formatPaiseToRupees, StaffRole } from '@repo/shared-utils';
 import {
   ApiError,
   CartLine,
@@ -63,6 +63,10 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
   const slips = kotPrint.dialog;
   // A waiter's phone has no printer: paper KOTs print at the counter.
   const atCounter = kotPrint.mode === 'counter';
+  // A cashier only bills. Where the kitchen works from paper, they may still print a KOT for a counter order; with the
+  // kitchen screen, sending orders to the kitchen and moving tables is the floor's job.
+  const cashier = role === StaffRole.CASHIER;
+  const sends = !cashier || plan.slip;
 
   const orderQuery = useOrder(orderId);
   const ticketsQuery = useOrderTickets(orderId);
@@ -290,8 +294,8 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
             const voidable = editable && (ticket.status === 'queued' || ticket.status === 'preparing' || ticket.status === 'ready');
             const request = latestRequest.get(ticket.id);
             const onPaper = ticket.fulfilment === 'slip';
-            // Paper tickets skip the kitchen stages: the floor marks them served straight from queued.
-            const servable = ticket.status === 'ready' || (onPaper && ticket.status === 'queued');
+            // Only the kitchen screen has stages (preparing, ready). A paper KOT is just printed: nothing to mark.
+            const servable = !onPaper && ticket.status === 'ready';
             const unprinted = onPaper && ticket.status === 'queued' && ticket.print_count === 0;
             const job = kotPrint.jobFor(ticket.id);
             const voidOwed = onPaper && ticket.status === 'voided' && ticket.print_count > 0 && !ticket.void_printed;
@@ -303,13 +307,17 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
                   </Text>
                   <Badge
                     label={
-                      ticket.status === 'ready'
-                        ? 'Ready, pick up'
-                        : onPaper && ticket.status === 'queued'
-                          ? 'On paper'
+                      onPaper
+                        ? ticket.status === 'voided'
+                          ? 'Cancelled'
+                          : ticket.print_count > 0
+                            ? 'Printed'
+                            : 'Not printed'
+                        : ticket.status === 'ready'
+                          ? 'Ready, pick up'
                           : humanizeLabel(ticket.status.toUpperCase())
                     }
-                    variant={TICKET_BADGE[ticket.status]}
+                    variant={onPaper && ticket.status !== 'voided' ? (ticket.print_count > 0 ? 'available' : 'warning') : TICKET_BADGE[ticket.status]}
                     size="sm"
                   />
                 </View>
@@ -358,7 +366,7 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
                     ) : null}
                     {atCounter ? null : onPaper && ticket.status === 'voided' ? (
                       <Button title="Print VOID KOT" variant="secondary" onPress={() => kotPrint.printVoid(ticket)} disabled={slips.printing} />
-                    ) : onPaper && ticket.status !== 'served' ? (
+                    ) : onPaper ? (
                       <Button
                         title={unprinted ? 'Print KOT' : 'Reprint'}
                         variant={unprinted ? 'primary' : 'secondary'}
@@ -415,7 +423,7 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
           <Text style={styles.totalValue}>{money((order?.subtotal_paise ?? 0) + cartTotal)}</Text>
         </View>
         <View style={styles.footerActions}>
-          {order?.order_type === 'dine_in' && editable ? (
+          {order?.order_type === 'dine_in' && editable && !cashier ? (
             <Button
               title="Transfer"
               variant="secondary"
@@ -429,11 +437,14 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
           {onBill && plan.canBill(role) && order && ['active', 'billed'].includes(order.status) && order.lines.length > 0 ? (
             <Button
               title={order.status === 'billed' ? 'Payment' : 'Bill'}
-              variant="secondary"
+              variant={sends ? 'secondary' : 'primary'}
               onPress={onBill}
               disabled={cartCount > 0}
+              size={sends ? 'md' : 'lg'}
+              style={sends ? undefined : { flex: 1 }}
             />
           ) : null}
+          {sends ? (
           <Button
             // Without a kitchen screen the order goes to the kitchen on paper: the waiter prints the KOT and hands it over.
             title={`${plan.slip ? (atCounter ? 'Send KOT' : 'Print KOT') : 'Send to kitchen'}${cartCount ? ` · ${cartCount}` : ''}`}
@@ -443,6 +454,7 @@ export const OrderScreen: React.FC<OrderScreenProps> = ({ orderId, title, onBack
             style={{ flex: 1 }}
             size="lg"
           />
+          ) : null}
         </View>
         {!editable && order ? <Text style={styles.lockedNote}>This order is {order.status}; it can no longer be changed.</Text> : null}
       </View>

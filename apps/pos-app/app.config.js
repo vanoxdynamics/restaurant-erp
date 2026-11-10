@@ -4,6 +4,7 @@
  *   waiter       staff phones, Play Store                  com.vanoxdynamics.pos
  *   counter      the Pine Labs device, production          com.vanoxdynamics.pos.counter
  *   counter-uat  the Pine Labs device, Pine Labs UAT       com.vanoxdynamics.pos.counter.uat
+ *   retail       cafés and shops: quick sale at the counter com.vanoxdynamics.retail
  *
  * The same variable tells the app at runtime what it is (src/device.ts), so the package and the behaviour cannot disagree.
  * Unset, it is `counter` (the browser preview and local development).
@@ -12,6 +13,7 @@ const VARIANTS = {
   waiter: { name: 'Restaurant POS', package: 'com.vanoxdynamics.pos' },
   counter: { name: 'Restaurant Counter', package: 'com.vanoxdynamics.pos.counter' },
   'counter-uat': { name: 'Counter UAT', package: 'com.vanoxdynamics.pos.counter.uat' },
+  retail: { name: 'Vanox Retail', package: 'com.vanoxdynamics.retail' },
 };
 
 module.exports = ({ config }) => {

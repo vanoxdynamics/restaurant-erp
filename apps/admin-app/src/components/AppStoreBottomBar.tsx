@@ -3,34 +3,40 @@ import { View, Text, Pressable, StyleSheet, Platform } from 'react-native';
 import { colors, spacing, fonts } from '@repo/shared-ui';
 import { Icon, IconName } from './Icon';
 
-export type AppStoreTabKey =
-  | 'Today'
-  | 'Floor'
-  | 'Menu'
-  | 'Approvals'
-  | 'More';
+export type AppStoreTabKey = 'Today' | 'Insights' | 'Menu' | 'Staff' | 'Approvals';
 
 export interface AppStoreBottomBarProps {
-  currentTab: string; // 'LivePulse' | 'FloorObserver' | 'MenuBuilder' | 'VoidApprovals' | 'StaffPINs' | 'ZReports' | 'Settings' | 'More'
+  currentTab: string; // the active screen, e.g. 'LivePulse', 'Insights', 'StaffPINs', 'VoidApprovals'
   onSelectTab: (tab: AppStoreTabKey) => void;
   pendingApprovalsCount?: number;
+  /**
+   * Only businesses with the kitchen display get cancel requests to approve (without it a KOT is cancelled at the till with a
+   * manager's PIN), so only they get the Approvals tab.
+   */
+  showApprovals?: boolean;
 }
 
-const TABS: { key: AppStoreTabKey; label: string; icon: IconName; matches: string[] }[] = [
-  { key: 'Today', label: 'Today', icon: 'sun', matches: ['LivePulse', 'Today'] },
-  { key: 'Floor', label: 'Floor', icon: 'grid', matches: ['FloorObserver', 'Floor'] },
-  { key: 'Menu', label: 'Menu', icon: 'book-open', matches: ['MenuBuilder', 'Menu'] },
-  { key: 'Approvals', label: 'Approvals', icon: 'check-circle', matches: ['VoidApprovals', 'Approvals'] },
-  { key: 'More', label: 'More', icon: 'menu', matches: ['More', 'StaffPINs', 'ZReports', 'Settings'] },
+type Tab = { key: AppStoreTabKey; label: string; icon: IconName; matches: string[] };
+
+// Settings and Profile open from the top bar (gear and avatar); the floor from Today's tables card.
+const TABS: Tab[] = [
+  { key: 'Today', label: 'Today', icon: 'sun', matches: ['LivePulse', 'FloorObserver'] },
+  { key: 'Insights', label: 'Insights', icon: 'bar-chart-2', matches: ['Insights'] },
+  { key: 'Menu', label: 'Menu', icon: 'book-open', matches: ['MenuBuilder'] },
+  { key: 'Staff', label: 'Staff', icon: 'users', matches: ['StaffPINs'] },
+  { key: 'Approvals', label: 'Approvals', icon: 'check-circle', matches: ['VoidApprovals'] },
 ];
+
+const tabsFor = (showApprovals: boolean) => (showApprovals ? TABS : TABS.filter((t) => t.key !== 'Approvals'));
 
 export const AppStoreBottomBar: React.FC<AppStoreBottomBarProps> = ({
   currentTab,
   onSelectTab,
   pendingApprovalsCount = 0,
+  showApprovals = true,
 }) => (
   <View style={styles.bar} accessibilityRole="tablist">
-    {TABS.map((tab) => {
+    {tabsFor(showApprovals).map((tab) => {
       const active = tab.matches.includes(currentTab);
       const showBadge = tab.key === 'Approvals' && pendingApprovalsCount > 0;
       const tint = active ? colors.primary : colors.textMuted;

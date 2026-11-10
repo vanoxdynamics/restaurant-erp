@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, colors, Input, radii, spacing, typography } from '@repo/shared-ui';
 import { formatPaiseToRupees } from '@repo/shared-utils';
-import { ApiError, toPaise, useCloseShift, useCurrentShift, useOpenShift } from '@repo/api-client';
+import { ApiError, CashDay, toPaise, useCashDay, useCloseCashDay, useOpenCashDay } from '@repo/api-client';
 import { QueryState } from '../components/QueryState';
 import { TopBar } from '../components/TopBar';
 import { SettlementLine } from '../devices/pinelabs';
@@ -11,22 +11,27 @@ import { hasTerminalPayments, terminal } from '../devices/terminal';
 const money = (paise: number) => formatPaiseToRupees(paise);
 const errorText = (e: unknown) => (e instanceof ApiError ? e.message : 'Something went wrong. Try again.');
 
+const time = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '');
+const day = (iso?: string) => (iso ? new Date(iso).toLocaleDateString([], { day: 'numeric', month: 'short' }) : '');
+
 /**
- * Day end at the counter: settle the card terminal's batch (Pine Labs prints its settlement slip), then close the cash shift
- * with a blind count. The shift is opened here too, at the start of the day.
+ * The counter's cash: open the day with the cash in the drawer, close it with a blind count. One day per branch, whoever is at
+ * the counter; managers see the expected cash and the difference after closing. With a card terminal, its batch is settled
+ * here first (Pine Labs prints the settlement slip).
  */
 export const DayEndScreen: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const shiftQuery = useCurrentShift();
-  const openShift = useOpenShift();
-  const closeShift = useCloseShift();
-  const shift = shiftQuery.data ?? null;
+  const dayQuery = useCashDay();
+  const openDay = useOpenCashDay();
+  const closeDay = useCloseCashDay();
+  const cashDay = dayQuery.data;
+  const isOpen = cashDay?.status === 'open';
 
   const [openingCash, setOpeningCash] = useState('');
   const [counted, setCounted] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [settling, setSettling] = useState(false);
   const [settlement, setSettlement] = useState<{ message: string; lines: SettlementLine[] } | null>(null);
-  const [closed, setClosed] = useState<{ expected?: number; variance?: number } | null>(null);
+  const [closed, setClosed] = useState<CashDay | null>(null);
 
   const settle = async () => {
     setError(null);
@@ -43,8 +48,9 @@ export const DayEndScreen: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const open = async () => {
     setError(null);
     try {
-      await openShift.mutateAsync(toPaise(openingCash || '0'));
+      await openDay.mutateAsync(toPaise(openingCash || '0'));
       setClosed(null);
+      setOpeningCash('');
     } catch (e) {
       setError(errorText(e));
     }
@@ -53,8 +59,7 @@ export const DayEndScreen: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const close = async () => {
     setError(null);
     try {
-      const result = await closeShift.mutateAsync(toPaise(counted || '0'));
-      setClosed({ expected: result.expected_cash_paise, variance: result.variance_paise });
+      setClosed(await closeDay.mutateAsync(toPaise(counted || '0')));
       setCounted('');
     } catch (e) {
       setError(errorText(e));
@@ -63,7 +68,7 @@ export const DayEndScreen: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
   return (
     <View style={styles.container}>
-      <TopBar title="Day end" onBack={onBack} />
+      <TopBar title="Cash" onBack={onBack} />
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -90,30 +95,35 @@ export const DayEndScreen: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         ) : null}
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>{hasTerminalPayments() ? '2. ' : ''}Cash shift</Text>
-          <QueryState query={shiftQuery}>
-            {shift ? (
+          <Text style={styles.sectionTitle}>{hasTerminalPayments() ? '2. ' : ''}{isOpen ? 'Close the day' : 'Open the day'}</Text>
+          <QueryState query={dayQuery}>
+            {isOpen && cashDay ? (
               <>
+                {cashDay.stale ? (
+                  <Text style={styles.warning}>This day was opened on {day(cashDay.opened_at)} and never closed. Count the drawer and close it now.</Text>
+                ) : null}
                 <Text style={styles.body}>
-                  Open since {new Date(shift.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} with{' '}
-                  {money(shift.opening_cash_paise)} in the drawer.
+                  Open since {time(cashDay.opened_at)}
+                  {cashDay.opened_by ? ` (by ${cashDay.opened_by})` : ''} with {money(cashDay.opening_cash_paise ?? 0)} in the drawer.
                 </Text>
                 <Input label="Cash counted in the drawer (₹)" value={counted} onChangeText={setCounted} keyboardType="decimal-pad" />
                 <Text style={styles.hint}>Count without looking at the expected amount; managers see the difference afterwards.</Text>
-                <Button title="Close shift" variant="danger" onPress={close} loading={closeShift.isPending} disabled={!counted.trim()} />
+                <Button title="Close day" variant="danger" onPress={close} loading={closeDay.isPending} disabled={!counted.trim()} />
               </>
             ) : (
               <>
                 {closed ? (
                   <Text style={styles.body}>
-                    Shift closed.
-                    {closed.variance !== undefined ? ` Expected ${money(closed.expected ?? 0)}, difference ${money(closed.variance)}.` : ''}
+                    Day closed with {money(closed.counted_cash_paise ?? 0)} counted.
+                    {closed.variance_paise !== undefined
+                      ? ` Expected ${money(closed.expected_cash_paise ?? 0)}, difference ${money(closed.variance_paise)}.`
+                      : ''}
                   </Text>
                 ) : (
-                  <Text style={styles.body}>No shift is open. Open one at the start of the day so cash is counted per shift.</Text>
+                  <Text style={styles.body}>The day is not open. Count the cash in the drawer and open it before the first sale.</Text>
                 )}
                 <Input label="Opening cash (₹)" value={openingCash} onChangeText={setOpeningCash} keyboardType="decimal-pad" />
-                <Button title="Open shift" onPress={open} loading={openShift.isPending} />
+                <Button title="Open day" onPress={open} loading={openDay.isPending} />
               </>
             )}
           </QueryState>
@@ -137,6 +147,7 @@ const styles = StyleSheet.create({
   sectionTitle: { ...typography.bodyBold, color: colors.text },
   body: { ...typography.body, color: colors.text },
   hint: { ...typography.caption, color: colors.textSecondary },
+  warning: { ...typography.caption, color: colors.warning, backgroundColor: colors.warningBg, padding: spacing.md, borderRadius: radii.md },
   lines: { gap: spacing.xs },
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
   error: { ...typography.caption, color: colors.danger, backgroundColor: colors.dangerBg, padding: spacing.md, borderRadius: radii.md },

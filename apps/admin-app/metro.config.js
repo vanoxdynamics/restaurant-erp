@@ -47,7 +47,7 @@ config.resolver.nodeModulesPaths = [
   path.resolve(monorepoRoot, 'node_modules'),
 ];
 
-// 3. Force singleton packages across the monorepo (@tanstack/react-query, react, react-native)
+// 3. Force singleton packages across the monorepo (@tanstack/react-query, react, react-native, safe-area-context)
 // to resolve strictly from admin-app so React contexts are never duplicated.
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (
@@ -56,7 +56,9 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
     moduleName === 'react' ||
     moduleName.startsWith('react/') ||
     moduleName === 'react-native' ||
-    moduleName.startsWith('react-native/')
+    moduleName.startsWith('react-native/') ||
+    // Shared UI reads the app's safe-area insets: one copy, or its context would be empty.
+    moduleName === 'react-native-safe-area-context'
   ) {
     const redirectContext = {
       ...context,

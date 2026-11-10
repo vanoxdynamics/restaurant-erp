@@ -4,6 +4,7 @@ import { Badge, Button, colors, fonts, radii, spacing, typography } from '@repo/
 import { formatPaiseToRupees, getOccupancyTime, TableStatus } from '@repo/shared-utils';
 import { useFloorLayout, useOpenTakeaways } from '@repo/api-client';
 import { Icon } from '../components/Icon';
+import { CashDayBanner, cashButtonLabel, useCounterCashDay } from '../components/CashDayBanner';
 import { QueryState } from '../components/QueryState';
 import { TopBar } from '../components/TopBar';
 import { usePrintQueueStore } from '../printing/printQueue';
@@ -35,6 +36,7 @@ export const CounterHomeScreen: React.FC<CounterHomeProps> = ({ onOpenOrder, onO
   const floorQuery = useFloorLayout(device.branchId);
   const takeawayQuery = useOpenTakeaways(device.branchId);
   const failedPrints = usePrintQueueStore((s) => s.jobs.filter((j) => j.state === 'failed').length);
+  const cashDay = useCounterCashDay();
 
   const bills = useMemo<OpenBill[]>(() => {
     const out: OpenBill[] = [];
@@ -73,8 +75,10 @@ export const CounterHomeScreen: React.FC<CounterHomeProps> = ({ onOpenOrder, onO
       <View style={styles.actions}>
         <Button title="New order" onPress={onNewOrder} icon={<Icon name="plus" size={16} color={colors.textInverse} />} style={{ flex: 1 }} />
         <Button title="KOT printer" variant="secondary" onPress={onPrinter} icon={<Icon name="printer" size={16} color={colors.text} />} />
-        <Button title="Day end" variant="secondary" onPress={onDayEnd} icon={<Icon name="moon" size={16} color={colors.text} />} />
+        <Button title={cashButtonLabel(cashDay?.status)} variant="secondary" onPress={onDayEnd} icon={<Icon name={cashDay?.status === 'open' ? 'moon' : 'sun'} size={16} color={colors.text} />} />
       </View>
+
+      <CashDayBanner onPress={onDayEnd} />
 
       {failedPrints > 0 ? (
         <Pressable onPress={onPrinter} style={styles.alert} accessibilityRole="button">

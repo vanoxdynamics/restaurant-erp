@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { api, newKey, type BillingTerm, type Plan } from '../api';
+import { api, newKey, type BillingTerm, type BusinessCategories, type Plan } from '../api';
 import { useCan } from '../auth';
 import { date, label, money, relativeDays } from '../format';
 import { Badge, ErrorBox, Field, Loading, Modal, PageHead, Pager, Segmented, useDebounced, useToast } from '../ui';
@@ -21,12 +21,16 @@ export function SubscribersPage() {
   const subStatus = params.get('subscription_status') ?? '';
   const planId = params.get('plan_id') ?? '';
   const expiring = params.get('expiring_within_days') ?? '';
+  const category = params.get('category') ?? '';
 
   const plans = useQuery({ queryKey: ['plans'], queryFn: api.plans });
+  const categories = useQuery({ queryKey: ['business-categories'], queryFn: api.businessCategories, staleTime: Infinity });
+  const categoryName = (key: string) => categories.data?.categories.find((c) => c.key === key)?.name ?? label(key);
   const list = useQuery({
-    queryKey: ['organizations', { q, status, term, subStatus, planId, expiring, offset }],
+    queryKey: ['organizations', { q, status, term, subStatus, planId, expiring, category, offset }],
     queryFn: () => api.organizations({
       q: q || undefined, status: status || undefined, term: term || undefined, subscription_status: subStatus || undefined,
+      category: category || undefined,
       plan_id: planId || undefined, expiring_within_days: expiring || undefined, limit: PAGE, offset,
     }),
     placeholderData: (prev) => prev,
@@ -41,7 +45,7 @@ export function SubscribersPage() {
 
   return (
     <>
-      <PageHead title="Subscribers" sub="Every restaurant business on the platform.">
+      <PageHead title="Subscribers" sub="Every business on the platform.">
         {can.manageBilling && <button className="btn primary" onClick={() => setCreating(true)}>New subscriber</button>}
       </PageHead>
 
@@ -51,6 +55,10 @@ export function SubscribersPage() {
         <select aria-label="Status" value={status} onChange={(e) => setFilter('status', e.target.value)}>
           <option value="">Any status</option>
           {['trial', 'active', 'past_due', 'suspended', 'cancelled'].map((s) => <option key={s} value={s}>{label(s)}</option>)}
+        </select>
+        <select aria-label="Business type" value={category} onChange={(e) => setFilter('category', e.target.value)}>
+          <option value="">Any business type</option>
+          {categories.data?.categories.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
         </select>
         <select aria-label="Billing term" value={term} onChange={(e) => setFilter('term', e.target.value)}>
           <option value="">Any term</option>
@@ -73,15 +81,16 @@ export function SubscribersPage() {
         <>
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Subscriber</th><th>Status</th><th>Plan</th><th>Term</th><th>Subscription</th><th>Period ends</th></tr></thead>
+              <thead><tr><th>Subscriber</th><th>Type</th><th>Status</th><th>Plan</th><th>Term</th><th>Subscription</th><th>Period ends</th></tr></thead>
               <tbody>
-                {list.data?.items.length === 0 && <tr><td colSpan={6}><div className="empty">No subscribers match.</div></td></tr>}
+                {list.data?.items.length === 0 && <tr><td colSpan={7}><div className="empty">No subscribers match.</div></td></tr>}
                 {list.data?.items.map((o) => (
                   <tr key={o.id} className="link" onClick={() => navigate(`/subscribers/${o.id}`)}>
                     <td>
                       <Link to={`/subscribers/${o.id}`} onClick={(e) => e.stopPropagation()}><strong>{o.name}</strong></Link>
                       <div className="muted">{o.slug}{o.billing_email ? ` · ${o.billing_email}` : ''}</div>
                     </td>
+                    <td className="nowrap">{categoryName(o.category)}</td>
                     <td><Badge value={o.status} /></td>
                     <td>{o.plan_code ?? '—'}</td>
                     <td>{o.billing_term ? label(o.billing_term) : '—'}</td>
@@ -99,18 +108,20 @@ export function SubscribersPage() {
           }} />
         </>
       )}
-      {creating && plans.data && <CreateSubscriber plans={plans.data.filter((p) => p.is_active)} onClose={() => setCreating(false)} />}
+      {creating && plans.data && (
+        <CreateSubscriber plans={plans.data.filter((p) => p.is_active)} categories={categories.data?.categories ?? []} onClose={() => setCreating(false)} />
+      )}
     </>
   );
 }
 
-function CreateSubscriber({ plans, onClose }: { plans: Plan[]; onClose: () => void }) {
+function CreateSubscriber({ plans, categories, onClose }: { plans: Plan[]; categories: BusinessCategories['categories']; onClose: () => void }) {
   const toast = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const key = useRef(newKey()); // a retry of the same form reuses the key, so it can never create two subscribers
   const [f, setF] = useState({
-    name: '', slug: '', legal_name: '', billing_email: '', country: 'IN', plan_id: plans[0]?.id ?? '',
+    name: '', slug: '', legal_name: '', billing_email: '', country: 'IN', plan_id: plans[0]?.id ?? '', category: 'restaurant',
     billing_term: 'monthly' as BillingTerm, start: 'trial' as 'trial' | 'active', trial_days: '', price_amount: '',
     username: '', full_name: '', password: '', pin: '', branch_code: '', branch_name: 'Main Branch',
   });
@@ -120,7 +131,7 @@ function CreateSubscriber({ plans, onClose }: { plans: Plan[]; onClose: () => vo
 
   const create = useMutation({
     mutationFn: () => api.createOrganization({
-      name: f.name.trim(), slug: f.slug.trim(), legal_name: f.legal_name.trim() || undefined, billing_email: f.billing_email.trim() || undefined,
+      name: f.name.trim(), slug: f.slug.trim(), category: f.category, legal_name: f.legal_name.trim() || undefined, billing_email: f.billing_email.trim() || undefined,
       country: f.country.trim().toUpperCase() || undefined, plan_id: f.plan_id, billing_term: f.billing_term, start: f.start,
       trial_days: f.start === 'trial' && f.trial_days ? Number(f.trial_days) : undefined, price_amount: f.price_amount || undefined,
       owner: { username: f.username.trim(), full_name: f.full_name.trim(), password: f.password, pin: f.pin,
@@ -144,6 +155,13 @@ function CreateSubscriber({ plans, onClose }: { plans: Plan[]; onClose: () => vo
             onChange={(e) => { set('name', e.target.value); if (!f.slug || f.slug === slugify(f.name)) set('slug', slugify(e.target.value)); }} /></Field>
           <Field label="Slug" hint="Lowercase letters, digits, dashes" htmlFor="c-slug"><input id="c-slug" className="input" required minLength={3} maxLength={60}
             pattern="[a-z0-9][a-z0-9\-]{1,58}[a-z0-9]" value={f.slug} onChange={(e) => set('slug', e.target.value)} /></Field>
+        </div>
+        <div className="row">
+          <Field label="Business type" hint="Sets the screens and steps the apps show. You can fine-tune them later." htmlFor="c-cat">
+            <select id="c-cat" value={f.category} onChange={(e) => set('category', e.target.value)} required>
+              {(categories.length ? categories : [{ key: 'restaurant', name: 'Restaurant' }]).map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
+            </select>
+          </Field>
         </div>
         <div className="row">
           <Field label="Billing email" htmlFor="c-email"><input id="c-email" className="input" type="email" value={f.billing_email} onChange={(e) => set('billing_email', e.target.value)} /></Field>

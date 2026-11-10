@@ -12,11 +12,20 @@ import { pineLabsNativeAvailable } from './devices/pinelabsNative';
  * The variant only says what this device can do. What a restaurant may use is still decided by its plan and the signed-in
  * person's role, on the server.
  */
-export type AppVariant = 'waiter' | 'counter';
+export type AppVariant = 'waiter' | 'counter' | 'retail';
 
 const variantSetting = (process.env.EXPO_PUBLIC_APP_VARIANT ?? 'counter').toLowerCase();
-export const APP_VARIANT: AppVariant = variantSetting.startsWith('waiter') ? 'waiter' : 'counter';
-export const IS_COUNTER = APP_VARIANT === 'counter';
+export const APP_VARIANT: AppVariant = variantSetting.startsWith('waiter')
+  ? 'waiter'
+  : variantSetting.startsWith('retail')
+    ? 'retail'
+    : 'counter';
+/**
+ * The device at the counter: it prints and takes payment. The restaurant counter and the retail app are both counter devices;
+ * `retail` is a separate app for cafés and shops (quick sale), kept apart from the restaurant apps (tables, waiters, KOTs).
+ */
+export const IS_COUNTER = APP_VARIANT !== 'waiter';
+export const IS_RETAIL = APP_VARIANT === 'retail';
 
 /** Development only: pretend to be a Pine Labs terminal (payments and printer) in the browser or an emulator. */
 const SIMULATOR = process.env.EXPO_PUBLIC_PINELABS_SIMULATOR === '1';

@@ -19,6 +19,14 @@ export const storage = {
     if (Platform.OS === 'web') globalThis.localStorage?.setItem(key, raw);
     else await SecureStore.setItemAsync(key, raw);
   },
+  /** Like `set`, for data that is only a convenience (a cache): a failure is ignored. */
+  async trySet(key: string, value: unknown): Promise<void> {
+    try {
+      await this.set(key, value);
+    } catch {
+      // nothing: the next successful load writes it again
+    }
+  },
   async remove(key: string): Promise<void> {
     if (Platform.OS === 'web') globalThis.localStorage?.removeItem(key);
     else await SecureStore.deleteItemAsync(key);

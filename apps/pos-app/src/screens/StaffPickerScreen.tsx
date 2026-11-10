@@ -1,8 +1,13 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, colors, fonts, humanizeLabel, radii, spacing, typography } from '@repo/shared-ui';
 import { ApiError, RosterEntry, useSignInRoster } from '@repo/api-client';
 import { useDeviceStore } from '../stores/deviceStore';
+import { storage } from '../stores/storage';
+
+/** After this long without an answer the screen offers a retry instead of only spinning. */
+const SLOW_MS = 6000;
+const cacheKey = (branchId: string) => `pos_roster_${branchId}`;
 
 const initials = (name: string) =>
   name
@@ -21,21 +26,53 @@ export const StaffPickerScreen: React.FC<StaffPickerScreenProps> = ({ onSelect }
   const device = useDeviceStore((s) => s.device)!;
   const unregister = useDeviceStore((s) => s.unregister);
   const roster = useSignInRoster(device.deviceToken);
+  // The last list this tablet loaded: shown at once while the fresh one loads, and if the network is down.
+  const [cached, setCached] = useState<RosterEntry[] | null>(null);
+  const [slow, setSlow] = useState(false);
+
+  useEffect(() => {
+    void storage.get<RosterEntry[]>(cacheKey(device.branchId)).then(setCached);
+  }, [device.branchId]);
+
+  useEffect(() => {
+    if (roster.data) void storage.trySet(cacheKey(device.branchId), roster.data);
+  }, [roster.data, device.branchId]);
+
+  useEffect(() => {
+    if (!roster.isFetching) return setSlow(false);
+    const timer = setTimeout(() => setSlow(true), SLOW_MS);
+    return () => clearTimeout(timer);
+  }, [roster.isFetching]);
 
   // The token is rejected when it has expired or the link was revoked; linking again fixes it.
   const unlinked = roster.error instanceof ApiError && roster.error.status === 401;
+  const people = unlinked ? [] : roster.data ?? cached ?? [];
+  const waiting = !roster.data && roster.isFetching;
 
   return (
     <View style={styles.container}>
       <Text style={styles.branch}>{device.branchName}</Text>
       <Text style={styles.title}>Who's working?</Text>
 
-      {roster.isLoading ? <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xl }} /> : null}
+      {waiting && !people.length ? <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xl }} /> : null}
 
-      {roster.isError ? (
+      {waiting && slow ? (
+        <View style={styles.message}>
+          <Text style={styles.empty}>
+            {people.length ? 'Showing the last saved list; still checking for changes…' : 'The server is slow to answer…'}
+          </Text>
+          <Button title="Retry" variant="secondary" onPress={() => void roster.refetch()} />
+        </View>
+      ) : null}
+
+      {roster.isError && !roster.isFetching ? (
         <View style={styles.message}>
           <Text style={styles.error}>
-            {unlinked ? 'This tablet needs to be linked again by a manager.' : 'Could not load the staff list.'}
+            {unlinked
+              ? 'This tablet needs to be linked again by a manager.'
+              : people.length
+                ? 'Could not refresh the staff list; showing the last saved one.'
+                : 'Could not load the staff list. Check the internet connection.'}
           </Text>
           {unlinked ? (
             <Button title="Set up this device" variant="secondary" onPress={() => void unregister()} />
@@ -50,7 +87,7 @@ export const StaffPickerScreen: React.FC<StaffPickerScreenProps> = ({ onSelect }
       ) : null}
 
       <ScrollView contentContainerStyle={styles.grid}>
-        {(roster.data ?? []).map((person) => (
+        {people.map((person) => (
           <Pressable
             key={person.id}
             onPress={() => onSelect(person)}

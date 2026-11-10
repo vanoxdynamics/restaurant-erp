@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api, isApproval, newKey, type BillingTerm, type ChangePreview, type Effective, type ModuleState, type OrgDetail, type Plan } from '../api';
+import { api, isApproval, newKey, type BillingTerm, type ChangePreview, type Effective, type ModuleState, type OrgDetail, type Plan, type SettingKey } from '../api';
 import { useCan } from '../auth';
 import { date, label, localToIso, money, relativeDays } from '../format';
 import { InvoiceTable } from './invoices';
 import { Badge, CopyButton, ErrorBox, Field, Loading, Modal, PageHead, ReasonDialog, Segmented, Switch, useToast } from '../ui';
 
-type Dialog = null | 'suspend' | 'reinstate' | 'cancel' | 'activate' | 'extend' | 'change' | 'impersonate' | 'profile'
+type Dialog = null | 'suspend' | 'reinstate' | 'cancel' | 'activate' | 'extend' | 'change' | 'impersonate' | 'profile' | 'business'
   | { module: ModuleState; enable: boolean };
 
 export function SubscriberDetailPage() {
@@ -15,6 +15,7 @@ export function SubscriberDetailPage() {
   const can = useCan();
   const [dialog, setDialog] = useState<Dialog>(null);
   const { data: org, error, isLoading } = useQuery({ queryKey: ['organization', id], queryFn: () => api.organization(id) });
+  const categories = useQuery({ queryKey: ['business-categories'], queryFn: api.businessCategories, staleTime: Infinity });
   if (isLoading) return <Loading />;
   if (error || !org) return <><Link to="/subscribers">← Subscribers</Link><ErrorBox error={error} /></>;
 
@@ -49,6 +50,15 @@ export function SubscriberDetailPage() {
             {can.manageBilling && <button className="btn small" onClick={() => setDialog('profile')}>Edit</button>}
           </div>
           <dl className="kv">
+            <dt>Type</dt>
+            <dd>
+              <strong>{categories.data?.categories.find((c) => c.key === org.category)?.name ?? label(org.category)}</strong>
+              {can.manageBilling && <> <button className="btn small ghost" onClick={() => setDialog('business')}>Change…</button></>}
+              <div className="muted">
+                {(Object.keys(org.settings) as SettingKey[]).filter((k) => org.settings[k]).map((k) => categories.data?.setting_labels[k] ?? label(k)).join(' · ') || 'Basic billing only'}
+                {Object.keys(org.settings_overrides).length > 0 && ' (customised)'}
+              </div>
+            </dd>
             <dt>Legal name</dt><dd>{org.legal_name ?? '—'}</dd>
             <dt>Billing email</dt><dd>{org.billing_email ?? '—'}</dd>
             <dt>Country</dt><dd>{org.country ?? '—'}</dd>
@@ -112,6 +122,7 @@ export function SubscriberDetailPage() {
       {dialog === 'change' && sub && <ChangeDialog org={org} onClose={close} />}
       {dialog === 'impersonate' && <ImpersonateDialog org={org} onClose={close} />}
       {dialog === 'profile' && <ProfileDialog org={org} onClose={close} />}
+      {dialog === 'business' && categories.data && <BusinessDialog org={org} catalog={categories.data} onClose={close} />}
       {dialog && typeof dialog === 'object' && <ModuleDialog org={org} module={dialog.module} enable={dialog.enable} onClose={close} />}
     </>
   );
@@ -307,6 +318,56 @@ function ExtendDialog({ org, onClose }: { org: OrgDetail; onClose: () => void })
       <Field label="Days to add" htmlFor="ext-days">
         <input id="ext-days" className="input" type="number" min={1} max={366} value={days} onChange={(e) => setDays(e.target.value)} required />
       </Field>
+    </ReasonDialog>
+  );
+}
+
+/**
+ * The business type and its workflow settings. Each setting follows the type's preset unless overridden here; changing the type
+ * keeps the overrides. Devices pick the change up straight away (their entitlements are refreshed).
+ */
+function BusinessDialog({ org, catalog, onClose }: { org: OrgDetail; catalog: NonNullable<Awaited<ReturnType<typeof api.businessCategories>>>; onClose: () => void }) {
+  const toast = useToast();
+  const refresh = useRefresh(org.id);
+  const [category, setCategory] = useState(org.category);
+  const [overrides, setOverrides] = useState<Partial<Record<SettingKey, boolean>>>(org.settings_overrides);
+  const preset = catalog.categories.find((c) => c.key === category)?.settings;
+  const keys = Object.keys(catalog.setting_labels) as SettingKey[];
+  const run = useMutation({
+    mutationFn: (reason: string) => api.updateOrganization(org.id, { category, settings: overrides, reason }),
+    onSuccess: async () => { await refresh(); toast('Business type saved'); onClose(); },
+  });
+  const choose = (key: SettingKey, value: string) => setOverrides((o) => {
+    const next = { ...o };
+    if (value === 'preset') delete next[key]; else next[key] = value === 'on';
+    return next;
+  });
+  return (
+    <ReasonDialog title="Business type" lead="Changes which screens and steps the apps show for this business. Billing, payments and reports work the same for every type."
+      confirm="Save" busy={run.isPending} error={run.error} onClose={onClose} onSubmit={(r) => run.mutate(r)}>
+      <Field label="Type" htmlFor="b-cat">
+        <select id="b-cat" value={category} onChange={(e) => setCategory(e.target.value)}>
+          {catalog.categories.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
+        </select>
+      </Field>
+      <table style={{ marginBottom: 12 }}>
+        <thead><tr><th>Setting</th><th>Preset</th><th>For this business</th></tr></thead>
+        <tbody>
+          {keys.map((k) => (
+            <tr key={k}>
+              <td>{catalog.setting_labels[k]}</td>
+              <td className="muted">{preset?.[k] ? 'On' : 'Off'}</td>
+              <td>
+                <select aria-label={catalog.setting_labels[k]} value={overrides[k] === undefined ? 'preset' : overrides[k] ? 'on' : 'off'} onChange={(e) => choose(k, e.target.value)}>
+                  <option value="preset">As preset ({preset?.[k] ? 'on' : 'off'})</option>
+                  <option value="on">On</option>
+                  <option value="off">Off</option>
+                </select>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </ReasonDialog>
   );
 }

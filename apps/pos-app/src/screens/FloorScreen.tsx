@@ -51,9 +51,9 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder, onBack })
   const takeawayQuery = useOpenTakeaways(device.branchId);
   const createOrder = useCreateOrder();
 
-  // Tickets waiting for the floor, counted per order, so a waiter can see food to pick up without opening each table:
-  // screen tickets once the kitchen marks them ready, paper tickets as soon as they are sent. Paper slips that never
-  // printed are counted too, since the kitchen does not know about those orders.
+  // Tickets waiting for the floor, counted per order, so a waiter can see food to pick up without opening each table: screen
+  // tickets once the kitchen marks them ready. Paper KOTs have no stages, so only those that never printed are flagged (the
+  // kitchen does not know about those orders yet).
   const plan = useKitchenPlan();
   const board = useKitchenBoard(device.branchId);
   const { readyByOrder, unprintedByOrder } = useMemo(() => {
@@ -62,7 +62,7 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder, onBack })
     const bump = (m: Map<string, number>, id: string) => m.set(id, (m.get(id) ?? 0) + 1);
     for (const ticket of board.data ?? []) {
       const onPaper = ticket.fulfilment === 'slip' && ticket.status === 'queued';
-      if (ticket.status === 'ready' || onPaper) bump(ready, ticket.order_id);
+      if (ticket.status === 'ready' && ticket.fulfilment !== 'slip') bump(ready, ticket.order_id);
       if (onPaper && ticket.print_count === 0) bump(unprinted, ticket.order_id);
     }
     return { readyByOrder: ready, unprintedByOrder: unprinted };

@@ -9,6 +9,7 @@ import {
   ScrollView,
   useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radii, shadows, spacing, typography, fonts } from './theme';
 
 export interface ModalProps {
@@ -35,6 +36,9 @@ export const Modal: React.FC<ModalProps> = ({
 }) => {
   const { width } = useWindowDimensions();
   const asSheet = width < 600;
+  // A bottom sheet runs to the screen's edge: keep its last row above Android's navigation bar or the iPhone home indicator,
+  // and its top below the status bar when it is tall.
+  const insets = useSafeAreaInsets();
 
   return (
     <RNModal
@@ -43,7 +47,7 @@ export const Modal: React.FC<ModalProps> = ({
       animationType={asSheet ? 'slide' : 'fade'}
       onRequestClose={onClose}
     >
-      <View style={[styles.overlay, asSheet ? styles.overlaySheet : styles.overlayDialog]}>
+      <View style={[styles.overlay, asSheet ? styles.overlaySheet : styles.overlayDialog, asSheet ? { paddingTop: insets.top } : null]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
         <View style={[styles.dialog, asSheet ? styles.sheet : styles.centered, contentStyle]}>
           {asSheet ? <View style={styles.grabber} /> : null}
@@ -67,11 +71,17 @@ export const Modal: React.FC<ModalProps> = ({
             </Pressable>
           </View>
 
-          <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: spacing.lg }} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            style={styles.body}
+            contentContainerStyle={{ paddingBottom: spacing.lg + (asSheet && !footer ? insets.bottom : 0) }}
+            keyboardShouldPersistTaps="handled"
+          >
             {children}
           </ScrollView>
 
-          {footer ? <View style={styles.footer}>{footer}</View> : null}
+          {footer ? (
+            <View style={[styles.footer, asSheet ? { paddingBottom: spacing.xl + insets.bottom } : null]}>{footer}</View>
+          ) : null}
         </View>
       </View>
     </RNModal>

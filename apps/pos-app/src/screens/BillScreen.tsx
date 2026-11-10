@@ -18,6 +18,7 @@ import {
   useReverseTerminalPayment,
   useStartTerminalPayment,
 } from '@repo/api-client';
+import { useBusiness } from '../business';
 import { Choice } from '../components/Choice';
 import { QueryState } from '../components/QueryState';
 import { TopBar } from '../components/TopBar';
@@ -78,6 +79,7 @@ export const BillScreen: React.FC<BillScreenProps> = ({ orderId, title, onBack, 
   const completeTerminal = useCompleteTerminalPayment();
   const reverse = useReverseTerminalPayment();
   const paperMm = usePrinterSettings((s) => s.paperMm);
+  const { settings } = useBusiness();
 
   const order = orderQuery.data;
   const bill = billQuery.data ?? undefined;
@@ -329,7 +331,13 @@ export const BillScreen: React.FC<BillScreenProps> = ({ orderId, title, onBack, 
               ) : (
                 <Button title="Add discount" variant="ghost" size="sm" onPress={() => setDiscountOpen(true)} style={{ alignSelf: 'flex-start', paddingHorizontal: 0 }} />
               )}
-              <Text style={styles.hint}>GST is added when the bill is generated. Every item must be sent to the kitchen first.</Text>
+              <Text style={styles.hint}>
+                {!settings.kitchen_tickets
+                  ? 'GST is added when the bill is generated.'
+                  : order?.order_type === 'counter_sale'
+                    ? 'GST is added when the bill is generated, and the order goes to the kitchen.'
+                    : 'GST is added when the bill is generated. Every item must be sent to the kitchen first.'}
+              </Text>
               <Button
                 title="Generate bill"
                 size="lg"

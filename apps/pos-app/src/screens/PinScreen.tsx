@@ -21,6 +21,8 @@ export const PinScreen: React.FC<PinScreenProps> = ({ staff, onBack }) => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // One box per digit of this person's PIN (4, 5 or 6). For older PINs the length is unknown: start at 4 and grow.
+  const length = staff.pin_length && staff.pin_length >= 4 && staff.pin_length <= MAX_PIN ? staff.pin_length : undefined;
 
   const submit = async (value = pin) => {
     if (value.length < 4 || busy) return;
@@ -40,7 +42,11 @@ export const PinScreen: React.FC<PinScreenProps> = ({ staff, onBack }) => {
     setError(null);
     if (key === 'clear') return setPin('');
     if (key === 'back') return setPin((p) => p.slice(0, -1));
-    setPin((p) => (p.length >= MAX_PIN ? p : p + key));
+    if (busy || pin.length >= (length ?? MAX_PIN)) return;
+    const next = pin + key;
+    setPin(next);
+    // With a known length the last digit signs in, like a phone lock screen.
+    if (length && next.length === length) void submit(next);
   };
 
   return (
@@ -51,7 +57,7 @@ export const PinScreen: React.FC<PinScreenProps> = ({ staff, onBack }) => {
         <Text style={styles.role}>{humanizeLabel(staff.role)} · enter your PIN</Text>
 
         <View style={styles.dots} accessibilityLabel={`${pin.length} digits entered`}>
-          {Array.from({ length: Math.max(4, pin.length) }).map((_, i) => (
+          {Array.from({ length: length ?? Math.max(4, pin.length) }).map((_, i) => (
             <View key={i} style={[styles.dot, i < pin.length ? styles.dotFilled : null]} />
           ))}
         </View>

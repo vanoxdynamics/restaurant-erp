@@ -7,25 +7,60 @@
     "waiter-preview": {
       "distribution": "internal",
       "environment": "preview",
-      "android": { "buildType": "apk" },
-      "env": { "EXPO_PUBLIC_APP_VARIANT": "waiter" }
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_APP_VARIANT": "waiter"
+      }
     },
     "waiter-production": {
       "environment": "production",
-      "android": { "buildType": "app-bundle" },
-      "env": { "EXPO_PUBLIC_APP_VARIANT": "waiter" }
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_APP_VARIANT": "waiter"
+      }
     },
     "counter-uat": {
       "distribution": "internal",
       "environment": "preview",
-      "android": { "buildType": "apk" },
-      "env": { "EXPO_PUBLIC_APP_VARIANT": "counter-uat" }
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_APP_VARIANT": "counter-uat"
+      }
     },
     "counter-production": {
       "distribution": "internal",
       "environment": "production",
-      "android": { "buildType": "apk" },
-      "env": { "EXPO_PUBLIC_APP_VARIANT": "counter" }
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_APP_VARIANT": "counter"
+      }
+    },
+    "retail-preview": {
+      "distribution": "internal",
+      "environment": "preview",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_APP_VARIANT": "retail"
+      }
+    },
+    "retail-production": {
+      "environment": "production",
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_APP_VARIANT": "retail"
+      }
     }
   }
 }

@@ -7,7 +7,8 @@ import { CartLine } from '@repo/api-client';
  */
 interface CartState {
   carts: Record<string, CartLine[]>;
-  add: (orderId: string, line: Omit<CartLine, 'key'>) => void;
+  /** `merge: false` always adds a new row (each weighing of a loose item is its own line). */
+  add: (orderId: string, line: Omit<CartLine, 'key'>, options?: { merge?: boolean }) => void;
   setQuantity: (orderId: string, key: string, quantity: number) => void;
   setNotes: (orderId: string, key: string, notes: string) => void;
   remove: (orderId: string, key: string) => void;
@@ -25,13 +26,13 @@ const sameChoice = (a: Omit<CartLine, 'key'>, b: CartLine) =>
 export const useCartStore = create<CartState>((set) => ({
   carts: {},
 
-  add: (orderId, line) =>
+  add: (orderId, line, options) =>
     set((state) => {
       const cart = state.carts[orderId] ?? [];
       // Tapping the same plain item again bumps its quantity instead of adding a row.
-      const existing = cart.find((c) => sameChoice(line, c));
+      const existing = options?.merge === false ? undefined : cart.find((c) => sameChoice(line, c));
       const next = existing
-        ? cart.map((c) => (c === existing ? { ...c, quantity: c.quantity + line.quantity } : c))
+        ? cart.map((c) => (c === existing ? { ...c, quantity: Math.round((c.quantity + line.quantity) * 1000) / 1000 } : c))
         : [...cart, { ...line, key: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}` }];
       return { carts: { ...state.carts, [orderId]: next } };
     }),

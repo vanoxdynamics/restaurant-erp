@@ -20,16 +20,18 @@ import { Icon } from '../components/Icon';
 
 export interface LivePulseScreenProps {
   onNavigateToTab?: (tabName: string) => void;
+  /** Cancel requests (and their banner) only exist with the kitchen display. */
+  hasKitchenScreen?: boolean;
 }
 
 const money = (paise: number) => formatPaiseToRupees(paise, { decimals: 0 });
 
-export const LivePulseScreen: React.FC<LivePulseScreenProps> = ({ onNavigateToTab }) => {
+export const LivePulseScreen: React.FC<LivePulseScreenProps> = ({ onNavigateToTab, hasKitchenScreen = true }) => {
   const { activeBranchId } = useAuthStore();
   const kpiQuery = useLivePulse(activeBranchId);
   const { data: kpis } = kpiQuery;
   const { data: alerts } = useFraudAlerts(activeBranchId);
-  const { data: pending = [] } = useVoidApprovals(activeBranchId, 'pending');
+  const { data: pending = [] } = useVoidApprovals(activeBranchId, 'pending', hasKitchenScreen);
   const { data: payments } = useTodayPayments(activeBranchId);
   const { data: zReport } = useZReport(activeBranchId);
 
@@ -55,7 +57,7 @@ export const LivePulseScreen: React.FC<LivePulseScreenProps> = ({ onNavigateToTa
               </Text>
             </View>
 
-            {pendingVoidCount > 0 && (
+            {hasKitchenScreen && pendingVoidCount > 0 && (
               <Pressable
                 style={({ pressed }) => [styles.approvalBanner, pressed ? { opacity: 0.85 } : null]}
                 onPress={() => onNavigateToTab && onNavigateToTab('VoidApprovals')}
@@ -101,8 +103,8 @@ export const LivePulseScreen: React.FC<LivePulseScreenProps> = ({ onNavigateToTa
       <View style={styles.section}>
         <SectionHeader
           title="Alerts"
-          actionLabel="Approvals"
-          onAction={onNavigateToTab ? () => onNavigateToTab('VoidApprovals') : undefined}
+          actionLabel={hasKitchenScreen ? 'Approvals' : undefined}
+          onAction={onNavigateToTab && hasKitchenScreen ? () => onNavigateToTab('VoidApprovals') : undefined}
         />
 
         {alerts?.length ? (

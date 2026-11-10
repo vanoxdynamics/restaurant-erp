@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
@@ -22,12 +22,15 @@ import { LivePulseScreen } from './screens/LivePulse';
 import { FloorObserverScreen } from './screens/FloorObserverScreen';
 import { MenuBuilderScreen } from './screens/MenuBuilder';
 import { VoidApprovalsScreen } from './screens/VoidApprovals';
-import { MoreHubScreen, MoreSubTab } from './screens/MoreHubScreen';
+import { StaffPINsScreen } from './screens/StaffPINs';
+import { SettingsScreen } from './screens/SettingsScreen';
+import { ProfileScreen } from './screens/ProfileScreen';
+import { InsightsHub, InsightsView } from './screens/InsightsHub';
 import { AppStoreBottomBar, AppStoreTabKey } from './components/AppStoreBottomBar';
 import { useAuthStore } from './stores/authStore';
 import { SignInScreen } from './screens/SignInScreen';
 import { BranchPicker } from './components/BranchPicker';
-import { useVoidApprovals } from '@repo/api-client';
+import { useEntitlements, useVoidApprovals } from '@repo/api-client';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -40,20 +43,23 @@ const queryClient = new QueryClient({
 
 type TabType =
   | 'LivePulse'
+  | 'Insights'
   | 'FloorObserver'
   | 'MenuBuilder'
   | 'VoidApprovals'
-  | 'More'
   | 'StaffPINs'
-  | 'ZReports'
-  | 'Settings';
+  | 'Settings'
+  | 'Profile';
 
 export function AdminAppMain(): React.JSX.Element {
   const [activeTab, setActiveTab] = useState<TabType>('LivePulse');
-  const [moreSubTab, setMoreSubTab] = useState<MoreSubTab>('StaffPINs');
+  const [insightsView, setInsightsView] = useState<InsightsView>('overview');
   const { currentUser, activeBranchId, activeBranchName, branches } = useAuthStore();
 
-  const { data: pendingRequests = [] } = useVoidApprovals(activeBranchId, 'pending');
+  // Cancel requests only exist with the kitchen display; without it a KOT is cancelled at the till with a manager's PIN.
+  const entitlements = useEntitlements();
+  const hasKitchenScreen = !!entitlements.data?.modules.includes('kds');
+  const { data: pendingRequests = [] } = useVoidApprovals(activeBranchId, 'pending', hasKitchenScreen);
   const pendingCount = pendingRequests.length;
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
   const initials = (currentUser?.full_name ?? '?')
@@ -64,29 +70,20 @@ export function AdminAppMain(): React.JSX.Element {
     .toUpperCase();
 
   const handleBottomTabSelect = (key: AppStoreTabKey) => {
-    switch (key) {
-      case 'Today':
-        setActiveTab('LivePulse');
-        break;
-      case 'Floor':
-        setActiveTab('FloorObserver');
-        break;
-      case 'Menu':
-        setActiveTab('MenuBuilder');
-        break;
-      case 'Approvals':
-        setActiveTab('VoidApprovals');
-        break;
-      case 'More':
-        setActiveTab('More');
-        break;
-    }
+    const target: Record<AppStoreTabKey, TabType> = {
+      Today: 'LivePulse',
+      Insights: 'Insights',
+      Menu: 'MenuBuilder',
+      Staff: 'StaffPINs',
+      Approvals: 'VoidApprovals',
+    };
+    setActiveTab(target[key]);
   };
 
   const handleNavigateFromScreen = (tab: string) => {
-    if (tab === 'StaffPINs' || tab === 'ZReports' || tab === 'Settings') {
-      setMoreSubTab(tab as MoreSubTab);
-      setActiveTab('More');
+    if (tab === 'ZReports') {
+      setInsightsView('reports');
+      setActiveTab('Insights');
     } else {
       setActiveTab(tab as TabType);
     }
@@ -95,23 +92,21 @@ export function AdminAppMain(): React.JSX.Element {
   const renderActiveScreen = () => {
     switch (activeTab) {
       case 'LivePulse':
-        return <LivePulseScreen onNavigateToTab={handleNavigateFromScreen} />;
+        return <LivePulseScreen onNavigateToTab={handleNavigateFromScreen} hasKitchenScreen={hasKitchenScreen} />;
+      case 'Insights':
+        return <InsightsHub view={insightsView} onChangeView={setInsightsView} />;
       case 'FloorObserver':
         return <FloorObserverScreen />;
       case 'MenuBuilder':
         return <MenuBuilderScreen />;
       case 'VoidApprovals':
-        return <VoidApprovalsScreen />;
-      case 'More':
+        return hasKitchenScreen ? <VoidApprovalsScreen /> : <LivePulseScreen onNavigateToTab={handleNavigateFromScreen} hasKitchenScreen={false} />;
       case 'StaffPINs':
-      case 'ZReports':
+        return <StaffPINsScreen />;
       case 'Settings':
-        return (
-          <MoreHubScreen
-            activeSubTab={moreSubTab}
-            onChangeSubTab={(sub) => setMoreSubTab(sub)}
-          />
-        );
+        return <SettingsScreen />;
+      case 'Profile':
+        return <ProfileScreen />;
     }
   };
 
@@ -139,8 +134,7 @@ export function AdminAppMain(): React.JSX.Element {
           <Pressable
             style={({ pressed }) => [styles.iconBtn, pressed ? { backgroundColor: colors.surfaceBorder } : null]}
             onPress={() => {
-              setMoreSubTab('Settings');
-              setActiveTab('More');
+              setActiveTab('Settings');
             }}
             accessibilityRole="button"
             accessibilityLabel="Settings"
@@ -148,9 +142,15 @@ export function AdminAppMain(): React.JSX.Element {
           >
             <Icon name="settings" size={18} color={colors.textSecondary} />
           </Pressable>
-          <View style={styles.avatar} accessibilityLabel={`Signed in as ${currentUser?.full_name ?? 'owner'}`}>
+          <Pressable
+            onPress={() => setActiveTab('Profile')}
+            accessibilityRole="button"
+            accessibilityLabel={`Your profile (signed in as ${currentUser?.full_name ?? 'owner'})`}
+            hitSlop={6}
+            style={({ pressed }) => [styles.avatar, activeTab === 'Profile' ? styles.avatarActive : null, pressed ? { opacity: 0.8 } : null]}
+          >
             <Text style={styles.avatarText}>{initials}</Text>
-          </View>
+          </Pressable>
         </View>
       </View>
 
@@ -162,6 +162,7 @@ export function AdminAppMain(): React.JSX.Element {
         currentTab={activeTab}
         onSelectTab={handleBottomTabSelect}
         pendingApprovalsCount={pendingCount}
+        showApprovals={hasKitchenScreen}
       />
 
       <BranchPicker visible={branchPickerOpen} onClose={() => setBranchPickerOpen(false)} />
@@ -195,10 +196,20 @@ export default function App(): React.JSX.Element {
     return <View style={styles.container} />;
   }
 
+  // Android draws apps edge to edge: without safe areas the top bar sits under the status bar and the tab bar under the
+  // navigation bar. The sign-in screen gets the same insets as the signed-in app.
   return (
-    <QueryClientProvider client={queryClient}>
-      {status === 'signed_in' ? <AdminAppMain /> : <SignInScreen />}
-    </QueryClientProvider>
+    <SafeAreaProvider>
+      <QueryClientProvider client={queryClient}>
+        {status === 'signed_in' ? (
+          <AdminAppMain />
+        ) : (
+          <SafeAreaView style={styles.container}>
+            <SignInScreen />
+          </SafeAreaView>
+        )}
+      </QueryClientProvider>
+    </SafeAreaProvider>
   );
 }
 
@@ -263,6 +274,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.primary,
+  },
+  avatarActive: {
+    borderWidth: 2,
+    borderColor: colors.primaryLight,
   },
   avatarText: {
     color: colors.textInverse,

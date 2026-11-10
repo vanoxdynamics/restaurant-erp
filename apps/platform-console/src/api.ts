@@ -65,6 +65,15 @@ export interface OrgEvent {
   data: Record<string, unknown>;
 }
 
+/** Workflow steps a business uses; its category presets them and each can be overridden per business. */
+export type SettingKey = 'table_service' | 'kitchen_tickets' | 'quick_sale' | 'barcode' | 'weighed_items' | 'tokens';
+export type BusinessSettings = Record<SettingKey, boolean>;
+
+export interface BusinessCategories {
+  categories: { key: string; name: string; settings: BusinessSettings }[];
+  setting_labels: Record<SettingKey, string>;
+}
+
 export interface OrgDetail {
   id: string;
   name: string;
@@ -73,6 +82,10 @@ export interface OrgDetail {
   billing_email: string | null;
   country: string | null;
   status: string;
+  category: string;
+  /** Effective: the category's preset with this business's overrides applied. */
+  settings: BusinessSettings;
+  settings_overrides: Partial<BusinessSettings>;
   suspended_at: string | null;
   suspension_reason: string | null;
   created_at: string;
@@ -89,6 +102,7 @@ export interface OrgSummary {
   name: string;
   slug: string;
   status: string;
+  category: string;
   billing_email: string | null;
   created_at: string;
   plan_code: string | null;
@@ -464,6 +478,7 @@ export const api = {
 
   organizations: (query: Record<string, string | number | undefined>) => get<Page<OrgSummary>>('/organizations', query),
   organization: (id: string) => get<OrgDetail>(`/organizations/${id}`),
+  businessCategories: () => get<BusinessCategories>('/business-categories'),
   createOrganization: (body: unknown, key: string) =>
     request<{ organization: OrgDetail; amount_due: string | null; invoice_number: string | null }>('POST', '/organizations', { body, idempotencyKey: key }),
   updateOrganization: (id: string, body: unknown) => request<OrgDetail>('PATCH', `/organizations/${id}`, { body }),
