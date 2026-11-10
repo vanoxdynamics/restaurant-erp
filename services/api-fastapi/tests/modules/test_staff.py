@@ -83,6 +83,32 @@ async def test_owner_can_create_manager_and_deactivation_revokes(client, db, own
     assert (await client.get(f"{API}/staff/me", headers=headers)).status_code == 401
 
 
+async def test_delete_staff_rules(client, db, owner, branch, other_branch, manager, waiter, cashier):
+    # A waiter cannot delete anyone; a manager cannot delete themselves or a peer's branch.
+    assert (await client.delete(f"{API}/staff/{cashier.id}", headers=auth_headers(waiter))).status_code == 403
+    assert (await client.delete(f"{API}/staff/{manager.id}", headers=auth_headers(manager))).status_code == 403
+    elsewhere = await factories.make_staff(db, other_branch, pin="1313")
+    assert (await client.delete(f"{API}/staff/{elsewhere.id}", headers=auth_headers(manager))).status_code == 404
+    assert (await client.delete(f"{API}/staff/{owner.id}", headers=auth_headers(owner))).status_code == 403
+
+    # A manager deletes a brand-new staff member in their branch.
+    fresh = await factories.make_staff(db, branch, pin="2468")
+    r = await client.delete(f"{API}/staff/{fresh.id}", headers=auth_headers(manager))
+    assert r.status_code == 204, r.text
+    assert await db.scalar(select(StaffUser).where(StaffUser.id == fresh.id)) is None
+
+    # The owner can delete across branches.
+    r = await client.delete(f"{API}/staff/{elsewhere.id}", headers=auth_headers(owner))
+    assert r.status_code == 204, r.text
+
+
+async def test_delete_staff_with_history_is_refused(client, db, branch, manager, cashier):
+    await open_shift(client, cashier, "100.00")
+    r = await client.delete(f"{API}/staff/{cashier.id}", headers=auth_headers(manager))
+    assert r.status_code == 409 and r.json()["error"]["code"] == "staff_has_history"
+    assert await db.scalar(select(StaffUser).where(StaffUser.id == cashier.id)) is not None
+
+
 async def test_list_staff_is_branch_scoped(client, db, branch, other_branch, manager, waiter):
     await factories.make_staff(db, other_branch, pin="1212")
     r = await client.get(f"{API}/staff", headers=auth_headers(manager))

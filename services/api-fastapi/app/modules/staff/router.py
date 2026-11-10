@@ -174,6 +174,16 @@ async def revoke_sessions(
     return await service.revoke_sessions(db, user, staff_id)
 
 
+@router.delete("/{staff_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_staff(
+    staff_id: uuid.UUID,
+    user: CurrentUser = Depends(managers),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a staff member with no history (409 `staff_has_history` otherwise: deactivate them instead)."""
+    await service.delete_staff(db, user, staff_id)
+
+
 cash_day_roles = require_roles_by_module((Role.OWNER, Role.MANAGER, Role.CASHIER), module=ModuleKey.KDS,
                                          also_without=(Role.WAITER,))
 

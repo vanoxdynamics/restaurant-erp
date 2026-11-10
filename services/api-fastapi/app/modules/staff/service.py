@@ -366,6 +366,31 @@ async def revoke_sessions(db: AsyncSession, actor: CurrentUser, staff_id: uuid.U
     return user
 
 
+async def delete_staff(db: AsyncSession, actor: CurrentUser, staff_id: uuid.UUID) -> None:
+    """
+    Remove a staff member who has no history. Anyone who has taken orders, payments or shifts stays on record
+    (bills and the audit trail point at them), so those accounts get a 409 and should be deactivated instead.
+    """
+    user = await _load_managed_staff(db, actor, staff_id)
+    if user.id == actor.id:
+        raise Forbidden("You cannot delete your own account", code="cannot_delete_self")
+    if Role(user.role) == Role.OWNER:
+        owners = await db.scalar(
+            select(func.count()).select_from(StaffUser).where(
+                StaffUser.organization_id == actor.organization_id, StaffUser.role == Role.OWNER.value)
+        )
+        if (owners or 0) <= 1:
+            raise Forbidden("The last owner cannot be deleted", code="last_owner")
+    try:
+        await db.delete(user)
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise Conflict("This person has orders, payments or shifts on record, so they cannot be deleted. "
+                       "Deactivate them instead.", code="staff_has_history") from exc
+    await commit(db)
+
+
 # --- Shifts -----------------------------------------------------------------
 
 

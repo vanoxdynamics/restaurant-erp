@@ -236,6 +236,14 @@ export function useUpdateStaffPIN() {
   });
 }
 
+export function useDeleteStaffUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => apiClient.deleteStaff(userId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['staff'] }),
+  });
+}
+
 export function useSetStaffActive() {
   const queryClient = useQueryClient();
   return useMutation({

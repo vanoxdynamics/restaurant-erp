@@ -7,6 +7,7 @@ import {
   StaffUser,
   useCreateDeviceSetupCode,
   useCreateStaffUser,
+  useDeleteStaffUser,
   useSetStaffActive,
   useShiftAudits,
   useStaffUsers,
@@ -34,6 +35,7 @@ export const StaffPINsScreen: React.FC = () => {
   const resetPin = useUpdateStaffPIN();
   const createStaff = useCreateStaffUser();
   const setActive = useSetStaffActive();
+  const deleteStaff = useDeleteStaffUser();
   const createCode = useCreateDeviceSetupCode();
 
   // Link a new tablet: a one-time code the tablet's setup screen asks for.
@@ -66,6 +68,19 @@ export const StaffPINsScreen: React.FC = () => {
   // Activate / deactivate
   const [activeTarget, setActiveTarget] = useState<StaffUser | null>(null);
   const [activeError, setActiveError] = useState<string | null>(null);
+
+  // Delete
+  const [deleteTarget, setDeleteTarget] = useState<StaffUser | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await deleteStaff.mutateAsync(deleteTarget.id);
+      setDeleteTarget(null);
+    } catch (e) {
+      setDeleteError(errorText(e));
+    }
+  };
 
   // Add staff
   const [addOpen, setAddOpen] = useState(false);
@@ -200,6 +215,16 @@ export const StaffPINsScreen: React.FC = () => {
                       }}
                       textStyle={staff.is_active ? { color: colors.danger } : undefined}
                     />
+                    <Button
+                      title="Delete"
+                      size="sm"
+                      variant="ghost"
+                      onPress={() => {
+                        setDeleteError(null);
+                        setDeleteTarget(staff);
+                      }}
+                      textStyle={{ color: colors.danger }}
+                    />
                   </View>
                 ) : null}
               </View>
@@ -318,6 +343,26 @@ export const StaffPINsScreen: React.FC = () => {
             : 'They will be able to sign in again. Set a new PIN after reactivating.'}
         </Text>
         {activeError ? <Text style={styles.modalError}>{activeError}</Text> : null}
+      </Modal>
+
+      {/* Delete */}
+      <Modal
+        visible={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        title="Delete staff member"
+        subtitle={deleteTarget?.full_name}
+        footer={
+          <>
+            <Button title="Cancel" variant="secondary" onPress={() => setDeleteTarget(null)} />
+            <Button title="Delete" variant="danger" onPress={confirmDelete} loading={deleteStaff.isPending} />
+          </>
+        }
+      >
+        <Text style={styles.modalBody}>
+          This removes them permanently. If they have taken orders, payments or shifts, they can't be deleted: deactivate
+          them instead.
+        </Text>
+        {deleteError ? <Text style={styles.modalError}>{deleteError}</Text> : null}
       </Modal>
 
       {/* Link a device */}

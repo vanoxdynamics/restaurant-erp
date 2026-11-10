@@ -851,6 +851,11 @@ export class RestaurantApiClient {
 
   // ---- Orders & kitchen tickets (waiter) ------------------------------------------------
 
+  /** Delete a staff member who has no history. 409 `staff_has_history` when they do: deactivate instead. */
+  async deleteStaff(userId: string): Promise<void> {
+    await this.request<void>('DELETE', `/staff/${userId}`);
+  }
+
   async createOrder(input: {
     tableId?: string;
     orderType: 'dine_in' | 'takeaway' | 'counter_sale';
