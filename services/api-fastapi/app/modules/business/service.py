@@ -54,13 +54,13 @@ def check_logo(image_base64: str) -> Tuple[bytes, str]:
     try:
         data = base64.b64decode(raw, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise ValidationFailed("The logo is not a valid image file", code="invalid_logo") from exc
+        raise ValidationFailed("We couldn't read that image. Please choose a PNG or JPEG picture", code="invalid_logo") from exc
     if len(data) > LOGO_MAX_BYTES:
-        raise ValidationFailed("The logo is too large; use an image under 500 KB", code="logo_too_large",
+        raise ValidationFailed("That image is too big. Please choose a smaller picture (under 500 KB)", code="logo_too_large",
                                details={"max_bytes": LOGO_MAX_BYTES})
     content_type = next((ct for sig, ct in _SIGNATURES if data.startswith(sig)), None)
     if content_type is None:
-        raise ValidationFailed("The logo must be a PNG or JPEG image", code="invalid_logo")
+        raise ValidationFailed("That file type isn't supported. Please choose a PNG or JPEG picture", code="invalid_logo")
     return data, content_type
 
 

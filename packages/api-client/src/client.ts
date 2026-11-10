@@ -605,9 +605,18 @@ export class RestaurantApiClient {
 
     if (response.status === 204) return undefined as T;
     if (options.text && response.ok) return text as T;
-    const data = text ? JSON.parse(text) : undefined;
+    let data: any;
+    try {
+      data = text ? JSON.parse(text) : undefined;
+    } catch {
+      // A proxy or gateway answered with a plain page instead of our JSON.
+      if (response.status === 413) throw new ApiError(413, 'payload_too_large', 'That file is too big. Please choose a smaller one.');
+      if (!response.ok) throw new ApiError(response.status, 'request_failed', 'Something went wrong on our side. Please try again.');
+      throw new ApiError(response.status, 'bad_response', 'We got an unexpected reply from the server. Please try again.');
+    }
 
     if (!response.ok) {
+      if (response.status === 413) throw new ApiError(413, 'payload_too_large', 'That file is too big. Please choose a smaller one.');
       const err = data?.error;
       if (response.status === 401 && this.token && !options.anonymous) this.onUnauthorized?.();
       const message =

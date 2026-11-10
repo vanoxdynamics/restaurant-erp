@@ -20,4 +20,4 @@ class BusinessProfileUpdate(BaseModel):
 
 
 class LogoUpload(BaseModel):
-    image_base64: str = Field(min_length=8, max_length=700_000)  # the image file, base64 encoded (up to ~500 KB)
+    image_base64: str = Field(min_length=8, max_length=14_000_000)  # base64 image; the exact size limit (500 KB) is checked in the service so the message is friendly

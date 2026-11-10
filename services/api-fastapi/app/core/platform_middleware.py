@@ -68,7 +68,7 @@ class PlatformGuardMiddleware:
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
                 if received > limit:  # chunked body with no (or a false) Content-Length
-                    raise PayloadTooLarge("The request body is too large")
+                    raise PayloadTooLarge("That file is too big. Please choose a smaller one.")
             return message
 
         async def send_hardened(message: Message) -> None:
@@ -83,6 +83,6 @@ class PlatformGuardMiddleware:
 
     @staticmethod
     async def _reject_too_large(send: Send) -> None:
-        body = json.dumps({"error": {"code": "payload_too_large", "message": "The request body is too large", "details": {}}}).encode()
+        body = json.dumps({"error": {"code": "payload_too_large", "message": "That file is too big. Please choose a smaller one.", "details": {}}}).encode()
         await send({"type": "http.response.start", "status": 413, "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
         await send({"type": "http.response.body", "body": body})
