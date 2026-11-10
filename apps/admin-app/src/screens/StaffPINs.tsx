@@ -142,7 +142,7 @@ export const StaffPINsScreen: React.FC = () => {
       style={styles.container}
       contentContainerStyle={styles.contentContainer}
       refreshControl={
-        <RefreshControl refreshing={activeQuery.isRefetching} onRefresh={activeQuery.refetch} tintColor={colors.primary} />
+        <RefreshControl refreshing={activeQuery.isRefetching} onRefresh={() => void activeQuery.refetch()} tintColor={colors.primary} />
       }
     >
       <View style={styles.topHeader}>

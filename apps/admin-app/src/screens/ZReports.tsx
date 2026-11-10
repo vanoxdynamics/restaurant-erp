@@ -50,7 +50,7 @@ export const ZReportsScreen: React.FC = () => {
       refreshControl={
         <RefreshControl
           refreshing={isRefetching}
-          onRefresh={refetch}
+          onRefresh={() => void refetch()}
           tintColor={colors.cyan}
         />
       }

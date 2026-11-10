@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import {
-  StatusBar,
   StyleSheet,
   Text,
   View,
@@ -112,7 +112,7 @@ export function AdminAppMain(): React.JSX.Element {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.surface} />
+      <StatusBar style="dark" />
 
       {/* Top bar: where you are and who you are */}
       <View style={styles.topBar}>

@@ -44,7 +44,7 @@ export const LivePulseScreen: React.FC<LivePulseScreenProps> = ({ onNavigateToTa
       style={styles.container}
       contentContainerStyle={styles.contentContainer}
       refreshControl={
-        <RefreshControl refreshing={kpiQuery.isRefetching} onRefresh={kpiQuery.refetch} tintColor={colors.primary} />
+        <RefreshControl refreshing={kpiQuery.isRefetching} onRefresh={() => void kpiQuery.refetch()} tintColor={colors.primary} />
       }
     >
       <QueryState query={kpiQuery}>

@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  type TextInputInstance,
   TouchableOpacity,
   useWindowDimensions,
   View,
@@ -63,7 +64,7 @@ export const QuickSaleScreen: React.FC<QuickSaleProps> = ({ onBill, onOpenBills,
   const [cartOpen, setCartOpen] = useState(false);
   const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
   const [saleKey, setSaleKey] = useState(newIdempotencyKey);
-  const searchRef = useRef<TextInput>(null);
+  const searchRef = useRef<TextInputInstance>(null);
 
   const categories = catalogQuery.data ?? [];
   const allItems = useMemo(() => categories.flatMap((c) => c.items).filter((i) => i.is_active), [categories]);

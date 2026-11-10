@@ -121,7 +121,7 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder, onBack })
 
       <ScrollView
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={floorQuery.isRefetching} onRefresh={floorQuery.refetch} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={floorQuery.isRefetching} onRefresh={() => void floorQuery.refetch()} tintColor={colors.primary} />}
       >
         {error && !seating ? <Text style={styles.error}>{error}</Text> : null}
 

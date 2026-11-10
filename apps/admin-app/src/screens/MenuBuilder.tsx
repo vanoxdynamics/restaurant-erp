@@ -222,7 +222,7 @@ export const MenuBuilderScreen: React.FC = () => {
       contentContainerStyle={styles.content}
       keyboardShouldPersistTaps="handled"
       refreshControl={
-        <RefreshControl refreshing={catalogQuery.isRefetching} onRefresh={catalogQuery.refetch} tintColor={colors.primary} />
+        <RefreshControl refreshing={catalogQuery.isRefetching} onRefresh={() => void catalogQuery.refetch()} tintColor={colors.primary} />
       }
     >
       <View style={styles.header}>

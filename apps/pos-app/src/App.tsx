@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { StatusBar, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   useFonts,
@@ -158,7 +159,7 @@ export default function App(): React.JSX.Element {
           return false;
         }}
       >
-        <StatusBar barStyle="dark-content" backgroundColor={colors.surface} />
+        <StatusBar style="dark" />
         {deviceStatus === 'unregistered' ? <DeviceSetupScreen /> : user ? <Main /> : <SignInScreen />}
         {paymentKind() === 'simulator' ? <SimulatorSheet /> : null}
         {/* The counter prints waiters' KOTs on its own credential, signed in or locked. */}

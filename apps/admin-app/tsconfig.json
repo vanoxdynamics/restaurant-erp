@@ -2,7 +2,6 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
-    "baseUrl": ".",
     "paths": {
       "@repo/shared-utils": [
         "../../packages/shared-utils/src/index.ts"
