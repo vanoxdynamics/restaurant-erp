@@ -17,7 +17,8 @@ import textwrap
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional, Tuple
+from decimal import Decimal
+from typing import List, Optional, Tuple, Union
 
 # Marker printed at the top of the slip (the most important line on it).
 NEW, ADDITIONAL, REPRINT, VOID = "NEW", "ADDITIONAL", "REPRINT", "VOID"
@@ -27,9 +28,18 @@ COLUMNS = {58: 32, 80: 48}
 ESCPOS_CODEPAGE = "cp858"  # Western European incl. accents and the euro sign; selected with ESC t 19
 
 
+def qty_text(quantity: Union[int, Decimal], unit: str = "pcs") -> str:
+    """2 -> "2", 0.750 kg -> "0.75 kg", 500 g -> "500 g". Pieces print without a unit, as they always have."""
+    value = Decimal(quantity)
+    text = f"{value:f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text if unit in ("", "pcs") else f"{text} {unit}"
+
+
 @dataclass(frozen=True)
 class SlipLine:
-    quantity: int
+    quantity: Union[int, Decimal]
     name: str
     notes: Optional[str] = None
     cancelled: bool = False
@@ -54,6 +64,7 @@ class Slip:
     lines: List[SlipLine] = field(default_factory=list)
     order_notes: Optional[str] = None
     warnings: List[str] = field(default_factory=list)
+    token: Optional[int] = None  # counter sales of businesses with token numbers
 
     def marker_text(self) -> str:
         if self.marker == VOID:
@@ -110,7 +121,7 @@ def _body_lines(slip: Slip, width: int) -> List[Tuple[str, str]]:
             current = line.station
             rows.append(("section", f"[ {clean(current or 'other').upper()} ]"))
         name = clean(line.name)
-        head = f"{line.quantity} x {name}"
+        head = f"{qty_text(line.quantity)} x {name}"
         if line.cancelled:
             head = f"CANCELLED {head}"
         for text in _wrap(head, width, rest="    "):
@@ -136,8 +147,10 @@ def header_rows(slip: Slip, width: int) -> List[Tuple[str, str]]:
     rows += [("marker", t) for t in _wrap(slip.marker_text(), half if _marker_is_wide(slip) else width)]
     rows += [("normal", t) for t in _wrap(f"{clean(slip.branch_code)} {clean(slip.branch_name)}".strip(), width)]
     rows += [("big", t) for t in _wrap(clean(slip.station).upper(), half)]
+    if slip.token is not None:
+        rows.append(("big", f"TOKEN {slip.token}"))
     where = f"Table: {clean(slip.table_number)}" if slip.table_number else slip.order_type_label()
-    guests = f"Guests: {slip.guest_count}"
+    guests = f"Guests: {slip.guest_count}" if slip.order_type != "counter_sale" else ""
     if len(where) + len(guests) + 1 > width:
         rows += [("normal", t) for t in _wrap(where, width, rest="  ")] + [("normal", guests)]
     else:

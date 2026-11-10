@@ -53,6 +53,7 @@ async def create_order(
     user: CurrentUser = Depends(order_roles),
     guard: IdempotencyGuard = Depends(idempotent("orders")),
     db: AsyncSession = Depends(get_db),
+    redis_client: aioredis.Redis = Depends(get_redis),
 ):
     """
     Create a new order with line items and price snapshots.
@@ -62,7 +63,7 @@ async def create_order(
     if cached:
         return cached.as_response()
     try:
-        order = await service.create_order(db, user, payload)
+        order = await service.create_order(db, user, payload, redis_client)
     except Exception:
         await guard.release()
         raise

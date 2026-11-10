@@ -6,7 +6,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 from app.core.enums import KOTStatus, Station, VoidRequestStatus
-from app.schemas.common import Reason
+from app.schemas.common import QuantityOut, Reason
 
 
 class VoidRequestCreate(BaseModel):
@@ -19,7 +19,7 @@ class VoidRequestReview(BaseModel):
 
 class VoidRequestItem(BaseModel):
     name: str
-    quantity: int
+    quantity: QuantityOut
 
 
 class VoidRequestRead(BaseModel):

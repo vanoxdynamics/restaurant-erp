@@ -17,8 +17,9 @@ import httpx
 from sqlalchemy import select
 
 from app.cli import create_owner
-from app.core.database import AsyncSessionLocal
-from app.models import StaffUser
+from app.core.database import AsyncSessionLocal, dispose_engine
+from app.core.modules import ModuleKey
+from app.models import Organization, OrganizationModule, StaffUser
 
 API = os.environ.get("API_URL", "http://127.0.0.1:8000") + "/api/v1"
 OWNER = {"username": "owner", "password": "preview-owner-2026", "pin": "4821"}
@@ -40,6 +41,13 @@ async def ensure_owner() -> None:
             return
     await create_owner(OWNER["username"], "Arjun Mehta", "BLR1", "Indiranagar", OWNER["password"], OWNER["pin"],
                        "spice-route", "Spice Route")
+    # New businesses start without the kitchen display; this demo shows it (it has a kitchen-screen account), so it opts in.
+    async with AsyncSessionLocal() as db:
+        org = await db.scalar(select(Organization).where(Organization.slug == "spice-route"))
+        override = await db.get(OrganizationModule, (org.id, ModuleKey.KDS.value))
+        override.enabled, override.reason = True, "Demo restaurant uses the kitchen screen"
+        await db.commit()
+    await dispose_engine()
 
 
 async def main() -> None:

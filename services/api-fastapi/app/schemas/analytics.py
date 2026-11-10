@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict
 
 from app.core.enums import AuditAction
+from app.schemas.common import QuantityOut
 
 
 class LiveKPIsResponse(BaseModel):
@@ -61,7 +62,7 @@ class HourlySales(BaseModel):
 class TopItem(BaseModel):
     name: str
     category: Optional[str] = None
-    quantity: int
+    quantity: QuantityOut
     total: Decimal
 
 
@@ -77,4 +78,49 @@ class SalesBreakdownResponse(BaseModel):
     business_date: date
     hourly: List[HourlySales]
     top_items: List[TopItem]
+    payments: PaymentSplit
+
+
+class SeriesPoint(BaseModel):
+    label: str  # an ISO date, "13:00", or a weekday
+    sales: Decimal
+    bills: int
+
+
+class NamedAmount(BaseModel):
+    name: str
+    amount: Decimal
+    count: int  # bills, or item lines for categories
+
+
+class OverviewTotals(BaseModel):
+    net_sales: Decimal  # paid bills, after discount, with tax
+    gross_sales: Decimal  # before discount and tax
+    discounts: Decimal
+    tax: Decimal
+    bills: int
+    average_bill: Decimal
+    guests: int  # dine-in guests
+    cancellations: int  # voided KOTs, cancelled items and orders, voided bills
+    cancelled_amount: Decimal
+
+
+class OverviewResponse(BaseModel):
+    """A period of business with the same-length period before it for comparison."""
+    period: str
+    start: date
+    end: date
+    previous_start: date
+    previous_end: date
+    branches: int
+    totals: OverviewTotals
+    previous: OverviewTotals
+    changes: Dict[str, Optional[float]]  # percent change per headline figure; null when there was nothing before
+    trend: List[SeriesPoint]  # by hour for a single day, else by day
+    by_hour: List[SeriesPoint]
+    by_weekday: List[SeriesPoint]
+    categories: List[NamedAmount]
+    top_items: List[TopItem]
+    staff: List[NamedAmount]
+    order_types: List[NamedAmount]
     payments: PaymentSplit

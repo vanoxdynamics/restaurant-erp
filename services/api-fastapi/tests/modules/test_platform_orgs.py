@@ -640,3 +640,39 @@ async def test_tenant_tokens_cannot_use_the_platform_api(client, db, ops, pro, o
     await create_org(client, ops, pro, key="x-0000001")
     for path in ("/dashboard", "/organizations", "/plans", "/modules"):
         assert (await client.get(f"{P}{path}", headers=auth_headers(owner))).status_code == 401
+
+
+# --- business categories --------------------------------------------------------------------------------------------
+
+
+async def test_category_on_create_override_and_filter(client, db, redis_client, ops, pro):
+    cats = (await client.get(f"{P}/business-categories", headers=ops)).json()
+    assert [c["key"] for c in cats["categories"]] == ["restaurant", "cafe", "grocery", "retail"]
+    assert cats["setting_labels"]["tokens"] == "Token numbers"
+
+    org = await create_org(client, ops, pro, category="grocery", settings={"tokens": True})
+    assert org["category"] == "grocery" and org["settings"]["barcode"] is True and org["settings"]["tokens"] is True
+    assert org["settings_overrides"] == {"tokens": True}
+
+    tenant = await tenant_login(client, org_body(pro))
+    ent = (await client.get(f"{API}/me/entitlements", headers=tenant)).json()
+    assert ent["category"] == "grocery" and ent["settings"]["quick_sale"] is True and ent["settings"]["tokens"] is True
+
+    # Changing the type is live for the tenant at once (cached entitlements are dropped) and audited.
+    r = await client.patch(f"{P}/organizations/{org['id']}", json={"category": "cafe", "settings": {}, "reason": "Opened a cafe"},
+                           headers=ops)
+    assert r.status_code == 200, r.text
+    assert r.json()["category"] == "cafe" and r.json()["settings_overrides"] == {}
+    ent = (await client.get(f"{API}/me/entitlements", headers=tenant)).json()
+    assert ent["category"] == "cafe" and ent["settings"]["kitchen_tickets"] is True and ent["settings"]["barcode"] is False
+    events = (await db.scalars(select(SubscriptionEvent.event_type))).all()
+    assert "business_settings_changed" in events
+
+    listed = (await client.get(f"{P}/organizations", params={"category": "cafe"}, headers=ops)).json()
+    assert [o["id"] for o in listed["items"]] == [org["id"]] and listed["items"][0]["category"] == "cafe"
+    assert (await client.get(f"{P}/organizations", params={"category": "grocery"}, headers=ops)).json()["total"] == 0
+
+    bad = await client.patch(f"{P}/organizations/{org['id']}", json={"settings": {"nonsense": True}, "reason": "typo"}, headers=ops)
+    assert bad.status_code == 422
+    bad = await client.patch(f"{P}/organizations/{org['id']}", json={"category": "pharmacy", "reason": "nope"}, headers=ops)
+    assert bad.status_code == 422

@@ -6,13 +6,13 @@ from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.enums import OrderItemStatus, OrderStatus, OrderType, Station
-from app.schemas.common import Notes, Pin, Quantity, Reason
+from app.schemas.common import Notes, Pin, Quantity, QuantityOut, Reason
 
 
 class OrderItemBase(BaseModel):
     item_id: uuid.UUID
     variant_id: Optional[uuid.UUID] = None
-    quantity: Quantity = 1
+    quantity: Quantity = Decimal(1)
     notes: Notes = None
 
 
@@ -38,7 +38,9 @@ class OrderItemRead(BaseModel):
     station_snapshot: Station
     unit_price_snapshot: Decimal
     tax_rate_snapshot: Decimal
-    quantity: int
+    quantity: QuantityOut
+    unit_snapshot: str = "pcs"
+    hsn_snapshot: Optional[str] = None
     line_total: Decimal
     status: OrderItemStatus
     notes: Optional[str] = None
@@ -97,6 +99,7 @@ class OrderRead(BaseModel):
     status: OrderStatus
     guest_count: int
     notes: Optional[str] = None
+    token_number: Optional[int] = None
     business_date: date
     subtotal: Decimal = Field(description="Sum of non-cancelled line totals, before tax.")
     total_amount: Decimal = Field(description="Pre-tax running total; tax is computed on the bill.")

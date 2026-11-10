@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.enums import Fulfilment, KOTStatus, Station
 from app.schemas.billing import PrintRowRead
-from app.schemas.common import Pin, Reason
+from app.schemas.common import Pin, QuantityOut, Reason
 
 
 class KOTItemRead(BaseModel):
@@ -14,7 +14,7 @@ class KOTItemRead(BaseModel):
     kot_id: uuid.UUID
     order_item_id: uuid.UUID
     item_name: str
-    quantity: int
+    quantity: QuantityOut
     notes: Optional[str] = None
     status: KOTStatus
     model_config = ConfigDict(from_attributes=True)
@@ -57,6 +57,7 @@ class KOTRead(BaseModel):
     # Filled in for listings so a kitchen card can say which table it is for.
     order_number: Optional[str] = None
     table_number: Optional[str] = None
+    waiter_id: Optional[uuid.UUID] = None  # who took the order: their phone is told when it is ready
     items: List[KOTItemRead] = []
     created_at: datetime
     updated_at: datetime
@@ -64,7 +65,7 @@ class KOTRead(BaseModel):
 
 
 class SlipLineRead(BaseModel):
-    quantity: int
+    quantity: QuantityOut
     name: str
     notes: Optional[str] = None
     cancelled: bool = False
@@ -90,6 +91,7 @@ class SlipRead(BaseModel):
     fulfilment: str
     lines: List[SlipLineRead] = []
     order_notes: Optional[str] = None
+    token: Optional[int] = None
     text: str
     warnings: List[str] = []
     paper_mm: int = 80

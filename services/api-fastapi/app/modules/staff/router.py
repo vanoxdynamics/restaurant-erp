@@ -5,16 +5,24 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser, get_current_user, require_device_branch, require_roles, resolve_branch_id
+from app.core.auth import (
+    CurrentUser, get_current_user, require_device_branch, require_roles, require_roles_by_module, resolve_branch_id,
+)
 from app.core.database import get_db
 from app.core.enums import Role, ShiftStatus
 from app.core.errors import NotFound
+from app.core.lookups import get_or_404
+from app.core.modules import ModuleKey
 from app.core.pagination import PageParams, page_params
 from app.core.redis import get_redis
+from app.models.floor import Branch
 from app.models.staff import Shift, StaffUser
 from app.modules.staff import service
 from app.schemas.common import Page
 from app.schemas.staff import (
+    CashDayClose,
+    CashDayOpen,
+    CashDayRead,
     DeviceLinkRequest,
     DeviceSetupCode,
     DeviceSetupCodeCreate,
@@ -164,6 +172,47 @@ async def revoke_sessions(
 ):
     """Invalidate every issued token for a staff member."""
     return await service.revoke_sessions(db, user, staff_id)
+
+
+cash_day_roles = require_roles_by_module((Role.OWNER, Role.MANAGER, Role.CASHIER), module=ModuleKey.KDS,
+                                         also_without=(Role.WAITER,))
+
+
+@router.get("/cash-day", response_model=CashDayRead)
+async def get_cash_day(
+    branch_id: Optional[uuid.UUID] = None,
+    user: CurrentUser = Depends(cash_day_roles),
+    db: AsyncSession = Depends(get_db),
+):
+    """Whether the branch's cash day is open (and since when), for the counter's Open day / Close day buttons."""
+    branch = await get_or_404(db, Branch, resolve_branch_id(user, branch_id))
+    return await service.cash_day_view(db, user, branch, await service.current_cash_day(db, branch.id))
+
+
+@router.post("/cash-day/open", response_model=CashDayRead, status_code=status.HTTP_201_CREATED)
+async def open_cash_day(
+    payload: CashDayOpen,
+    branch_id: Optional[uuid.UUID] = None,
+    user: CurrentUser = Depends(cash_day_roles),
+    db: AsyncSession = Depends(get_db),
+):
+    """Open the branch's day with the cash in the drawer. 409 `day_already_open` if it is open."""
+    branch = await get_or_404(db, Branch, resolve_branch_id(user, branch_id))
+    shift = await service.open_cash_day(db, user, branch.id, payload.opening_cash)
+    return await service.cash_day_view(db, user, branch, shift)
+
+
+@router.post("/cash-day/close", response_model=CashDayRead)
+async def close_cash_day(
+    payload: CashDayClose,
+    branch_id: Optional[uuid.UUID] = None,
+    user: CurrentUser = Depends(cash_day_roles),
+    db: AsyncSession = Depends(get_db),
+):
+    """Close the day with the counted cash. Managers see the expected cash and difference in the answer."""
+    branch = await get_or_404(db, Branch, resolve_branch_id(user, branch_id))
+    shift = await service.close_cash_day(db, user, branch.id, payload.counted_cash)
+    return await service.cash_day_view(db, user, branch, shift)
 
 
 @router.get("/shifts", response_model=Page[ShiftHistoryRead])

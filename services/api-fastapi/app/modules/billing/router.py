@@ -245,6 +245,6 @@ async def get_receipt(
         return Response(receipts.render_html(receipt, width), media_type="text/html; charset=utf-8", headers={
             "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'",
             "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
-    return ReceiptRead(bill_number=receipt.bill_number, paper_mm=width,
+    return ReceiptRead(bill_number=receipt.bill_number, paper_mm=width, logo_data_url=receipt.logo_data_url,
                        rows=[PrintRowRead(style=st, align=al, text=tx) for st, al, tx in receipts.receipt_rows(receipt, width)],
                        text=receipts.render_text(receipt, width))

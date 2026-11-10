@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Numeric, SmallInteger, String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,6 +29,8 @@ class StaffUser(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     hashed_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     hashed_pin: Mapped[str] = mapped_column(String(255), nullable=False)  # 4-6 digit fast login PIN
+    # How many digits the PIN has, so the sign-in pad shows the right number of boxes. NULL for PINs set before this was kept.
+    pin_length: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
     pin_lookup: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # HMAC(branch, PIN)
     role: Mapped[str] = mapped_column(String(30), default=Role.WAITER.value, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

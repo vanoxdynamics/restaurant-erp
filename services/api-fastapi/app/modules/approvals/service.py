@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, require_branch_access
 from app.core.clock import utcnow
-from app.core.enums import KOTStatus, OrderStatus, Station, Topic, VoidRequestStatus
+from app.core.enums import Fulfilment, KOTStatus, OrderStatus, Station, Topic, VoidRequestStatus
 from app.core.errors import Conflict, Forbidden, InvalidTransition
 from app.core.events import commit, queue_event
 from app.core.lookups import get_or_404
@@ -65,6 +65,9 @@ async def create_void_request(
 ) -> VoidRequestRead:
     kot = await load_kot(db, kot_id, for_update=True)
     require_branch_access(user, kot.branch_id)
+    if kot.fulfilment == Fulfilment.SLIP.value:
+        # A paper KOT has no kitchen screen to ask: it is cancelled at the till with a manager's PIN (and a VOID slip prints).
+        raise Conflict("Cancel this KOT at the till with a manager's PIN", code="manager_pin_required")
     ensure_voidable(kot)
     order = await load_order(db, kot.order_id)
     if order.status != OrderStatus.ACTIVE.value:

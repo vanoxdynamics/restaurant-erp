@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import token_claims
+from app.core.business import clean_overrides, effective_settings
 from app.core.billing_periods import EFFECTIVE_NEXT_RENEWAL, ChangePreview, add_term, compute_change
 from app.core.config import settings
 from app.core.entitlements import compute_entitlements
@@ -111,6 +112,7 @@ async def create_organization(db: AsyncSession, redis_client: aioredis.Redis, ac
         name=payload.name, slug=payload.slug, legal_name=payload.legal_name,
         billing_email=payload.billing_email.lower() if payload.billing_email else None, country=payload.country,
         status=OrgStatus.TRIAL.value if trial else OrgStatus.ACTIVE.value,
+        category=payload.category.value, settings=payload.settings.overrides() if payload.settings else {},
     )
     db.add(org)
     try:
@@ -130,7 +132,7 @@ async def create_organization(db: AsyncSession, redis_client: aioredis.Redis, ac
         db.add(StaffUser(
             organization_id=org.id, branch_id=branch.id, username=owner.username, full_name=owner.full_name,
             role=Role.OWNER.value, hashed_password=get_password_hash(owner.password.get_secret_value()),
-            hashed_pin=get_pin_hash(owner.pin), pin_lookup=compute_pin_lookup(branch.id, owner.pin),
+            hashed_pin=get_pin_hash(owner.pin), pin_length=len(owner.pin), pin_lookup=compute_pin_lookup(branch.id, owner.pin),
         ))
         await db.flush()
     except IntegrityError as exc:
@@ -150,7 +152,8 @@ async def create_organization(db: AsyncSession, redis_client: aioredis.Redis, ac
                             "invoice": invoice.number if invoice else None})
     await append_audit(db, action="org.create", admin_id=actor.admin.id, target_type="organization", target_id=org.id,
                        after={"name": org.name, "slug": org.slug, "plan": plan.code, "term": term, "start": payload.start,
-                              "owner_username": payload.owner.username}, meta=meta)
+                              "owner_username": payload.owner.username, "category": org.category,
+                              "settings": org.settings}, meta=meta)
     await commit_and_notify(db, redis_client, [org.id])
     return org, invoice
 
@@ -161,6 +164,7 @@ async def create_organization(db: AsyncSession, redis_client: aioredis.Redis, ac
 async def list_organizations(
     db: AsyncSession, *, q_text: Optional[str], status: Optional[str], plan_id: Optional[uuid.UUID],
     term: Optional[str], sub_status: Optional[str], expiring_within_days: Optional[int], limit: int, offset: int,
+    category: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     stmt = (
         select(Organization, Subscription, Plan.code)
@@ -174,6 +178,8 @@ async def list_organizations(
                               func.lower(Organization.billing_email).like(like, escape="\\")))
     if status:
         stmt = stmt.where(Organization.status == status)
+    if category:
+        stmt = stmt.where(Organization.category == category)
     if plan_id:
         stmt = stmt.where(Subscription.plan_id == plan_id)
     if term:
@@ -186,7 +192,7 @@ async def list_organizations(
     total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = (await db.execute(stmt.order_by(Organization.created_at.desc()).limit(limit).offset(offset))).all()
     items = [
-        {"id": o.id, "name": o.name, "slug": o.slug, "status": o.status, "billing_email": o.billing_email,
+        {"id": o.id, "name": o.name, "slug": o.slug, "status": o.status, "category": o.category, "billing_email": o.billing_email,
          "created_at": o.created_at, "plan_code": code, "billing_term": s.billing_term if s else None,
          "subscription_status": s.status if s else None, "current_period_end": s.current_period_end if s else None}
         for o, s, code in rows
@@ -243,7 +249,8 @@ async def organization_detail(db: AsyncSession, org_id: uuid.UUID) -> Dict[str, 
         sub_view.update(plan_code=plan.code if plan else None, effective_status=ent.subscription_status)
     return {
         "id": org.id, "name": org.name, "slug": org.slug, "legal_name": org.legal_name, "billing_email": org.billing_email,
-        "country": org.country, "status": org.status, "suspended_at": org.suspended_at,
+        "country": org.country, "status": org.status, "suspended_at": org.suspended_at, "category": org.category,
+        "settings": effective_settings(org.category, org.settings), "settings_overrides": clean_overrides(org.settings),
         "suspension_reason": org.suspension_reason, "created_at": org.created_at, "subscription": sub_view,
         "access": ent.access, "modules": await module_states(db, org_id, ent),
         "branches": await db.scalar(select(func.count()).select_from(Branch).where(Branch.organization_id == org_id)) or 0,
@@ -260,13 +267,21 @@ async def organization_detail(db: AsyncSession, org_id: uuid.UUID) -> Dict[str, 
 async def update_organization(db: AsyncSession, redis_client: aioredis.Redis, actor: PlatformPrincipal,
                               org_id: uuid.UUID, payload: OrganizationUpdate, meta: RequestMeta) -> None:
     org = await load_org(db, org_id, lock=True)
-    changes = payload.model_dump(exclude_unset=True, exclude={"reason"})
+    changes = payload.model_dump(mode="json", exclude_unset=True, exclude={"reason", "settings"})
+    if payload.settings is not None or "settings" in payload.model_fields_set:
+        changes["settings"] = payload.settings.overrides() if payload.settings else {}
     before = {k: getattr(org, k) for k in changes}
     for k, v in changes.items():
         setattr(org, k, v.lower() if k == "billing_email" and v else v)
     await append_audit(db, action="org.update", admin_id=actor.admin.id, target_type="organization", target_id=org.id,
                        before=before, after=changes, reason=payload.reason, meta=meta)
-    await db.commit()
+    if "category" in changes or "settings" in changes:
+        # The apps change screens with the category: drop cached entitlements and tell connected devices now.
+        add_subscription_event(db, org.id, "business_settings_changed", actor.admin.id,
+                               {"category": org.category, "settings": org.settings})
+        await commit_and_notify(db, redis_client, [org.id])
+    else:
+        await db.commit()
 
 
 async def suspend_organization(db: AsyncSession, redis_client: aioredis.Redis, actor: PlatformPrincipal,

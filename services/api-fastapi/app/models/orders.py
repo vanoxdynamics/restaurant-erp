@@ -33,6 +33,8 @@ class Order(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     business_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     subtotal: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"))
     total_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"))
+    # Daily per-branch number called out when a counter order is ready (businesses with token numbers on).
+    token_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False)  # Optimistic concurrency lock
 
     items: Mapped[List["OrderItem"]] = relationship(
@@ -58,7 +60,9 @@ class OrderItem(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     station_snapshot: Mapped[str] = mapped_column(String(50), default=Station.KITCHEN.value, server_default=Station.KITCHEN.value)
     unit_price_snapshot: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     tax_rate_snapshot: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=Decimal("5.00"))
-    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(10, 3), default=Decimal("1"))
+    unit_snapshot: Mapped[str] = mapped_column(String(10), default="pcs", server_default="pcs", nullable=False)
+    hsn_snapshot: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     line_total: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), server_default="0")
     status: Mapped[str] = mapped_column(String(30), default=OrderItemStatus.ORDERED.value)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

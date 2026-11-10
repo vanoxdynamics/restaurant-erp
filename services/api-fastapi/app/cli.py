@@ -31,21 +31,29 @@ from sqlalchemy import select
 from app.core.database import AsyncSessionLocal, dispose_engine
 from app.core.entitlements import ensure_legacy_subscription
 from app.core.enums import Role
+from app.core.modules import ModuleKey
 from app.core.security import compute_pin_lookup, get_password_hash, get_pin_hash
 from app.models.floor import Branch
 from app.models.organization import Organization
 from app.models.staff import StaffUser
+from app.models.subscription import OrganizationModule
 
 
 async def create_owner(username: str, full_name: str, branch_code: str, branch_name: str,
                        password: str, pin: str, org_slug: str, org_name: str) -> None:
     async with AsyncSessionLocal() as db:
         org = await db.scalar(select(Organization).where(Organization.slug == org_slug))
+        new_org = org is None
         if org is None:
             org = Organization(slug=org_slug, name=org_name)
             db.add(org)
             await db.flush()
         await ensure_legacy_subscription(db, org)
+        if new_org:
+            # The kitchen display is an add-on: a new business starts without it (kitchen tickets print instead) until the
+            # platform console switches it on. Businesses created before this keep what they had.
+            db.add(OrganizationModule(organization_id=org.id, module_key=ModuleKey.KDS.value, enabled=False,
+                                      reason="Off by default for new businesses"))
         branch = await db.scalar(select(Branch).where(Branch.code == branch_code))
         if branch is not None and branch.organization_id != org.id:
             raise SystemExit(f"Branch code {branch_code!r} belongs to another organization")
@@ -63,6 +71,7 @@ async def create_owner(username: str, full_name: str, branch_code: str, branch_n
             role=Role.OWNER.value,
             hashed_password=get_password_hash(password),
             hashed_pin=get_pin_hash(pin),
+            pin_length=len(pin),
             pin_lookup=compute_pin_lookup(branch.id, pin),
         ))
         await db.commit()

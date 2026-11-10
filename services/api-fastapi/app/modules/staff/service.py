@@ -3,6 +3,7 @@ import uuid
 from datetime import timedelta
 from decimal import Decimal
 from typing import List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import redis.asyncio as aioredis
 from sqlalchemy import func, select
@@ -19,7 +20,7 @@ from app.core.auth import (
     resolve_branch_id,
     token_claims,
 )
-from app.core.clock import utcnow
+from app.core.clock import business_date, utcnow
 from app.core.config import settings
 from app.core.enums import AuditAction, PaymentMode, PaymentStatus, Role, ShiftStatus
 from app.core.errors import Conflict, Forbidden, NotFound, Unauthorized
@@ -38,7 +39,7 @@ from app.core.security import (
     verify_password,
     verify_pin,
 )
-from app.models.billing import Payment
+from app.models.billing import Bill, Payment
 from app.models.floor import Branch
 from app.models.staff import Shift, StaffUser
 from app.schemas.staff import (
@@ -274,6 +275,7 @@ async def create_staff(db: AsyncSession, actor: CurrentUser, payload: StaffUserC
         role=payload.role.value,
         is_active=payload.is_active,
         hashed_pin=get_pin_hash(payload.pin),
+        pin_length=len(payload.pin),
         pin_lookup=compute_pin_lookup(branch_id, payload.pin) if branch_id else None,
         hashed_password=get_password_hash(payload.password.get_secret_value()) if payload.password else None,
     )
@@ -346,6 +348,7 @@ async def update_staff(db: AsyncSession, actor: CurrentUser, staff_id: uuid.UUID
 async def reset_pin(db: AsyncSession, actor: CurrentUser, staff_id: uuid.UUID, pin: str) -> StaffUser:
     user = await _load_managed_staff(db, actor, staff_id)
     user.hashed_pin = get_pin_hash(pin)
+    user.pin_length = len(pin)
     user.pin_lookup = compute_pin_lookup(user.branch_id, pin) if user.branch_id else None
     try:
         await db.flush()
@@ -393,14 +396,16 @@ async def open_shift(db: AsyncSession, actor: CurrentUser, opening_cash: Decimal
     return shift
 
 
-async def _close(db: AsyncSession, actor: CurrentUser, shift: Shift, blind_drop_cash: Decimal) -> Shift:
-    cash_taken = await db.scalar(
-        select(func.coalesce(func.sum(Payment.amount), 0)).where(
-            Payment.shift_id == shift.id,
-            Payment.payment_mode == PaymentMode.CASH.value,
-            Payment.status == PaymentStatus.SUCCESS.value,
+async def _close(db: AsyncSession, actor: CurrentUser, shift: Shift, blind_drop_cash: Decimal,
+                 cash_taken: Optional[Decimal] = None) -> Shift:
+    if cash_taken is None:  # a personal shift: the cash its own payments took
+        cash_taken = await db.scalar(
+            select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                Payment.shift_id == shift.id,
+                Payment.payment_mode == PaymentMode.CASH.value,
+                Payment.status == PaymentStatus.SUCCESS.value,
+            )
         )
-    )
     expected = shift.opening_cash + Decimal(cash_taken or 0)
     shift.end_time = utcnow()
     shift.blind_drop_cash = blind_drop_cash
@@ -470,3 +475,69 @@ async def list_shifts(
             "cash_sales": cash_sales,
         })
     return items, int(total)
+
+
+# --- Cash day (one per branch) ------------------------------------------------------------------------------------------------
+#
+# The counter opens the day with the cash in the drawer and closes it with a blind count. Unlike a personal shift it belongs to
+# the branch: whoever is at the counter opens or closes it, and the expected cash is every cash payment taken at the branch
+# since it opened, whoever took it. It is stored as a shift row (opened by `user_id`), so shift history keeps working.
+
+
+async def current_cash_day(db: AsyncSession, branch_id: uuid.UUID, *, for_update: bool = False) -> Optional[Shift]:
+    stmt = (select(Shift).where(Shift.branch_id == branch_id, Shift.status == ShiftStatus.OPEN.value)
+            .order_by(Shift.start_time).limit(1))
+    if for_update:
+        stmt = stmt.with_for_update()
+    return await db.scalar(stmt)
+
+
+async def cash_day_view(db: AsyncSession, actor: CurrentUser, branch: Branch, shift: Optional[Shift]) -> dict:
+    today = business_date(branch.timezone)
+    if shift is None:
+        return {"status": "not_open", "business_date": today}
+    opener = await db.get(StaffUser, shift.user_id)
+    opened_on = shift.start_time.astimezone(ZoneInfo(branch.timezone)).date()
+    view = {
+        "id": shift.id, "status": shift.status, "business_date": today, "opened_at": shift.start_time,
+        "opened_on": opened_on, "opened_by": opener.full_name if opener else None, "opening_cash": shift.opening_cash,
+        "closed_at": shift.end_time, "counted_cash": shift.blind_drop_cash,
+        # Left open from an earlier day: the app reminds the counter to close it.
+        "stale": shift.status == ShiftStatus.OPEN.value and opened_on < today,
+    }
+    if actor.is_manager:  # the count stays blind for everyone else
+        view.update(expected_cash=shift.expected_cash, cash_variance=shift.cash_variance)
+    return view
+
+
+async def open_cash_day(db: AsyncSession, actor: CurrentUser, branch_id: uuid.UUID, opening_cash: Decimal) -> Shift:
+    await get_or_404(db, Branch, branch_id, for_update=True)  # serialises two counters opening at once
+    if await current_cash_day(db, branch_id) is not None:
+        raise Conflict("The day is already open", code="day_already_open")
+    shift = Shift(user_id=actor.id, branch_id=branch_id, start_time=utcnow(), opening_cash=opening_cash,
+                  status=ShiftStatus.OPEN.value)
+    db.add(shift)
+    try:
+        await db.flush()
+    except IntegrityError as exc:  # this person still has an old personal shift open
+        await db.rollback()
+        raise Conflict("Close your own open shift first", code="shift_already_open") from exc
+    await commit(db)
+    return shift
+
+
+async def close_cash_day(db: AsyncSession, actor: CurrentUser, branch_id: uuid.UUID, counted_cash: Decimal) -> Shift:
+    shift = await current_cash_day(db, branch_id, for_update=True)
+    if shift is None:
+        raise Conflict("The day is not open", code="day_not_open")
+    cash_taken = await db.scalar(
+        select(func.coalesce(func.sum(Payment.amount), 0))
+        .join(Bill, Bill.id == Payment.bill_id)
+        .where(
+            Bill.branch_id == branch_id,
+            Payment.payment_mode == PaymentMode.CASH.value,
+            Payment.status == PaymentStatus.SUCCESS.value,
+            Payment.created_at >= shift.start_time,
+        )
+    )
+    return await _close(db, actor, shift, counted_cash, Decimal(cash_taken or 0))

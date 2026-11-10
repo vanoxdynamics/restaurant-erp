@@ -53,7 +53,7 @@ class KOTItem(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     kot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("kots.id"), nullable=False, index=True)
     order_item_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("order_items.id"), nullable=False, index=True)
     item_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(10, 3), default=Decimal("1"))
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default=KOTStatus.QUEUED.value)
 

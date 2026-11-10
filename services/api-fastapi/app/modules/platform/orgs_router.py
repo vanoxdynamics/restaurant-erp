@@ -9,8 +9,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.business import CATEGORY_LABELS, PRESETS, SETTING_LABELS
 from app.core.database import get_db
-from app.core.enums import BillingTerm, PlatformRole
+from app.core.enums import BillingTerm, BusinessCategory, PlatformRole
 from app.core.idempotency import IdempotencyGuard
 from app.core.redis import get_redis
 from app.modules.platform import approvals_service, module_service, org_service
@@ -29,6 +30,7 @@ from app.schemas.platform_orgs import (
     ActivateResult,
     BulkModuleBody,
     BulkModuleResult,
+    BusinessCategories,
     CancelBody,
     ChangePreviewRead,
     Dashboard,
@@ -165,9 +167,19 @@ async def bulk_modules(body: BulkModuleBody, request: Request, actor: PlatformPr
 # --- subscribers -----------------------------------------------------------------------------------------------------
 
 
+@router.get("/business-categories", response_model=BusinessCategories, dependencies=[Depends(any_role)])
+async def business_categories():
+    """The categories a subscriber can be, with the workflow settings each one presets."""
+    return BusinessCategories(
+        categories=[{"key": c.value, "name": CATEGORY_LABELS[c.value], "settings": PRESETS[c.value]} for c in BusinessCategory],
+        setting_labels=SETTING_LABELS,
+    )
+
+
 @router.get("/organizations", response_model=Page[OrganizationSummary], dependencies=[Depends(any_role)])
 async def list_organizations(
     q: Optional[str] = Query(None, max_length=100), org_status: Optional[str] = Query(None, alias="status"),
+    category: Optional[BusinessCategory] = None,
     plan_id: Optional[uuid.UUID] = None, term: Optional[BillingTerm] = None,
     subscription_status: Optional[str] = Query(None, max_length=20),
     expiring_within_days: Optional[int] = Query(None, ge=0, le=3650),
@@ -175,7 +187,7 @@ async def list_organizations(
 ):
     items, total = await org_service.list_organizations(
         db, q_text=q, status=org_status, plan_id=plan_id, term=term.value if term else None, sub_status=subscription_status,
-        expiring_within_days=expiring_within_days, limit=limit, offset=offset)
+        expiring_within_days=expiring_within_days, limit=limit, offset=offset, category=category.value if category else None)
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 

@@ -15,13 +15,19 @@ from sqlalchemy.orm import selectinload
 
 from app.core.audit import record_audit
 from app.core.auth import CurrentUser, require_branch_access, resolve_approver, resolve_branch_id
+from app.core.business import KITCHEN_TICKETS
 from app.core.clock import utcnow
+from app.core.entitlements import get_entitlements
+from app.core.modules import ModuleKey
 from app.core.config import settings
 from app.core.enums import (
     AuditAction,
     BillStatus,
+    Fulfilment,
+    KOTStatus,
     OrderItemStatus,
     OrderStatus,
+    OrderType,
     PaymentMode,
     PaymentStatus,
     TableStatus,
@@ -34,11 +40,14 @@ from app.core.money import ZERO, q
 from app.core.numbering import next_document_number
 from app.core.pagination import PageParams, paginate
 from app.models.billing import Bill, Payment
+from app.models.kots import KOT
 from app.models.floor import Branch, DiningTable
 from app.models.orders import Order, OrderItem
 from app.models.staff import StaffUser
 from app.modules.billing import receipt as receipts
 from app.modules.billing.tax import TaxLine, compute_bill
+from app.modules.business.service import bill_name, load_with_logo, logo_data_url
+from app.modules.kots.service import make_kots
 from app.modules.orders.service import load_order, set_table_status, set_table_vacant
 from app.modules.staff.service import get_open_shift
 from app.schemas.billing import (
@@ -92,10 +101,18 @@ async def generate_bill(
     lines = [i for i in order.items if i.status != OrderItemStatus.CANCELLED.value]
     if not lines:
         raise Conflict("Order has no billable items", code="empty_order")
-    unfired = [str(i.id) for i in lines if i.status == OrderItemStatus.ORDERED.value]
+    unfired = [i for i in lines if i.status == OrderItemStatus.ORDERED.value]
+    fired_kots = []
     if unfired:
-        raise Conflict("Fire all items to the kitchen before billing", code="unfired_items",
-                       details={"order_item_ids": unfired})
+        ent = await get_entitlements(db, user.organization_id, redis_client)
+        if not ent.setting(KITCHEN_TICKETS):
+            pass  # a shop without a kitchen: nothing is sent anywhere, items are billed as they are
+        elif order.order_type == OrderType.COUNTER_SALE.value:
+            # A café's counter sale: billing it also sends it to the kitchen, in one action at the counter.
+            fired_kots = await make_kots(db, user, order, unfired, kds=ent.has_module(ModuleKey.KDS))
+        else:
+            raise Conflict("Fire all items to the kitchen before billing", code="unfired_items",
+                           details={"order_item_ids": [str(i.id) for i in unfired]})
 
     breakdown = compute_bill([TaxLine(i.line_total, i.tax_rate_snapshot) for i in lines], payload.discount_amount)
 
@@ -142,6 +159,8 @@ async def generate_bill(
         )
     queue_event(db, order.branch_id, Topic.BILLING, "bill.created", bill.id,
                 {"bill_number": bill.bill_number, "grand_total": str(bill.grand_total), "order_id": str(order.id)})
+    if fired_kots:
+        queue_event(db, order.branch_id, Topic.ORDERS, "order.items_fired", order.id)
     if order.table_id:
         queue_event(db, order.branch_id, Topic.TABLES, "table.status_changed", order.table_id,
                     {"status": TableStatus.BILLED.value})
@@ -165,6 +184,7 @@ async def _settle_if_paid(db: AsyncSession, bill: Bill, background: Optional[Bac
     bill.settled_at = utcnow()
     order = await load_order(db, bill.order_id, for_update=True)
     order.status = OrderStatus.COMPLETED.value
+    await _close_paper_kots(db, order.id)
     table = await set_table_vacant(db, order.table_id)
     queue_event(db, bill.branch_id, Topic.BILLING, "bill.settled", bill.id, {"bill_number": bill.bill_number})
     queue_event(db, bill.branch_id, Topic.ORDERS, "order.completed", order.id)
@@ -173,6 +193,24 @@ async def _settle_if_paid(db: AsyncSession, bill: Bill, background: Optional[Bac
                     {"status": TableStatus.VACANT.value})
     if background is not None:
         background.add_task(deduct_bom_recipe_inventory, order.id)
+
+
+async def _close_paper_kots(db: AsyncSession, order_id: uuid.UUID) -> None:
+    """
+    A paid order's printed KOTs are done. Paper KOTs have no kitchen stages and nobody marks them served, so they would
+    otherwise stay open forever on lists of open tickets. KOTs never printed stay in the print queue untouched.
+    """
+    kots = (await db.scalars(
+        select(KOT).where(KOT.order_id == order_id, KOT.fulfilment == Fulfilment.SLIP.value,
+                          KOT.status.in_([KOTStatus.QUEUED.value, KOTStatus.PREPARING.value, KOTStatus.READY.value]),
+                          KOT.print_count > 0)
+        .options(selectinload(KOT.items)).with_for_update(of=KOT)
+    )).all()
+    for kot in kots:
+        kot.status = KOTStatus.SERVED.value
+        for item in kot.items:
+            if item.status != KOTStatus.VOIDED.value:
+                item.status = KOTStatus.SERVED.value
 
 
 async def _new_payment(
@@ -495,7 +533,9 @@ async def build_receipt(db: AsyncSession, user: CurrentUser, bill_id: uuid.UUID)
         select(OrderItem).where(OrderItem.order_id == order.id, OrderItem.status != OrderItemStatus.CANCELLED.value)
         .order_by(OrderItem.created_at)
     )).all()
+    business = await load_with_logo(db, branch.organization_id)
     return receipts.Receipt(
+        business_name=bill_name(business), logo_data_url=logo_data_url(business),
         branch_name=branch.name, branch_code=branch.code, address=branch.address, phone=branch.phone, gstin=branch.gstin,
         bill_number=bill.bill_number, order_number=order.order_number, order_type=order.order_type,
         table_number=table.table_number if table else None, guest_count=order.guest_count,
@@ -504,7 +544,8 @@ async def build_receipt(db: AsyncSession, user: CurrentUser, bill_id: uuid.UUID)
         lines=[receipts.ReceiptLine(
             quantity=i.quantity,
             name=f"{i.name_snapshot} ({i.variant_name_snapshot})" if i.variant_name_snapshot else i.name_snapshot,
-            amount=i.line_total) for i in items],
+            amount=i.line_total, unit=i.unit_snapshot, unit_price=i.unit_price_snapshot, hsn=i.hsn_snapshot) for i in items],
+        token=order.token_number,
         subtotal=bill.subtotal, discount=bill.discount_amount, discount_reason=bill.discount_reason,
         cgst=bill.tax_cgst, sgst=bill.tax_sgst, grand_total=bill.grand_total,
         payments=[receipts.ReceiptPayment(mode=p.payment_mode, amount=p.amount, reference=p.reference_id)

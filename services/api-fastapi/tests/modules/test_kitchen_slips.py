@@ -337,3 +337,12 @@ async def test_slip_print_rows_fit_the_paper(client, db, go_slip, waiter, table)
             assert len(row["text"]) <= (cols // 2 if row["style"] == "big" else cols), row
         texts = [r["text"] for r in s["rows"]]
         assert "[ GRILL ]" in texts and "  - less oil" in texts and texts[0].strip() == "** NEW ORDER **"
+
+
+async def test_paper_kots_are_not_sent_for_remote_approval(client, db, go_slip, waiter, table):
+    """Without the kitchen screen there is nobody to ask: a paper KOT is cancelled at the till with a manager's PIN."""
+    item = await factories.make_menu_item(db, name="Dal")
+    order = await create_order(client, waiter, table, items=[line(item)])
+    kot = (await fire(client, waiter, order["id"]))[0]
+    r = await client.post(f"{API}/kots/{kot['id']}/void-requests", json={"reason": "guest left"}, headers=auth_headers(waiter))
+    assert r.status_code == 409 and r.json()["error"]["code"] == "manager_pin_required"

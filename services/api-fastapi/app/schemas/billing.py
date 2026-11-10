@@ -80,6 +80,7 @@ class ReceiptRead(BaseModel):
     paper_mm: int
     rows: List[PrintRowRead]
     text: str
+    logo_data_url: Optional[str] = None  # the business's logo, for printers that can print an image above the rows
 
 
 class BillCreate(BaseModel):

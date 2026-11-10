@@ -81,6 +81,24 @@ class OrderType(StrEnum):
     DINE_IN = "dine_in"
     TAKEAWAY = "takeaway"
     DELIVERY = "delivery"
+    COUNTER_SALE = "counter_sale"  # a quick sale at the counter (cafés, shops): no table, billed straight away
+
+
+class BusinessCategory(StrEnum):
+    """What kind of shop a subscriber is. It presets which workflow steps the apps show (see app.core.business)."""
+    RESTAURANT = "restaurant"
+    CAFE = "cafe"  # café, QSR, bakery
+    GROCERY = "grocery"  # grocery, kirana
+    RETAIL = "retail"  # general retail
+
+
+class ItemUnit(StrEnum):
+    """The unit an item is priced and sold in. Quantities are decimals (3 places), so 0.750 kg is a normal quantity."""
+    PIECE = "pcs"
+    KG = "kg"
+    G = "g"
+    LITRE = "l"
+    ML = "ml"
 
 
 class OrderItemStatus(StrEnum):

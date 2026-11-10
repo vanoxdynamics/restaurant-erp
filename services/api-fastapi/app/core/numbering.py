@@ -10,6 +10,25 @@ from app.models.floor import Branch
 DocType = Literal["order", "kot", "bill"]
 
 
+async def next_daily_value(db: AsyncSession, branch: Branch, counter: str) -> int:
+    """Next value of a per-branch counter that restarts every business day (e.g. "token"), inside the caller's transaction."""
+    period = business_date(branch.timezone).strftime("%Y%m%d")
+    return await _bump(db, branch, counter, period)
+
+
+async def _bump(db: AsyncSession, branch: Branch, counter: str, period: str) -> int:
+    stmt = (
+        insert(DocumentCounter)
+        .values(branch_id=branch.id, doc_type=counter, period=period, value=1)
+        .on_conflict_do_update(
+            index_elements=[DocumentCounter.branch_id, DocumentCounter.doc_type, DocumentCounter.period],
+            set_={"value": DocumentCounter.value + 1},
+        )
+        .returning(DocumentCounter.value)
+    )
+    return (await db.execute(stmt)).scalar_one()
+
+
 async def next_document_number(db: AsyncSession, branch: Branch, doc_type: DocType) -> str:
     """
     Allocate the next document number inside the caller's transaction.
@@ -23,16 +42,7 @@ async def next_document_number(db: AsyncSession, branch: Branch, doc_type: DocTy
     today = business_date(branch.timezone)
     period = financial_year(today) if doc_type == "bill" else today.strftime("%Y%m%d")
 
-    stmt = (
-        insert(DocumentCounter)
-        .values(branch_id=branch.id, doc_type=doc_type, period=period, value=1)
-        .on_conflict_do_update(
-            index_elements=[DocumentCounter.branch_id, DocumentCounter.doc_type, DocumentCounter.period],
-            set_={"value": DocumentCounter.value + 1},
-        )
-        .returning(DocumentCounter.value)
-    )
-    value = (await db.execute(stmt)).scalar_one()
+    value = await _bump(db, branch, doc_type, period)
 
     if doc_type == "bill":
         return f"{branch.code}/{period}/{value:06d}"

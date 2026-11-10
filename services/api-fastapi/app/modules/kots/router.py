@@ -172,7 +172,7 @@ def slip_read(slip: slips.Slip, kot, width: int) -> SlipRead:
         marker=slip.marker, branch_name=slip.branch_name, branch_code=slip.branch_code, kot_number=slip.kot_number,
         order_number=slip.order_number, station=slip.station, order_type=slip.order_type, table_number=slip.table_number,
         guest_count=slip.guest_count, fired_at=slip.fired_at.isoformat(), fired_by=slip.fired_by, round=slip.round,
-        print_count=slip.print_count, status=kot.status, fulfilment=kot.fulfilment, order_notes=slip.order_notes,
+        print_count=slip.print_count, status=kot.status, fulfilment=kot.fulfilment, order_notes=slip.order_notes, token=slip.token,
         lines=[SlipLineRead(quantity=i.quantity, name=slips.clean(i.name), notes=slips.clean(i.notes) or None, cancelled=i.cancelled,
                             station=i.station) for i in slip.lines],
         text=slips.render_text(slip, 80), warnings=warnings, paper_mm=width,

@@ -6,7 +6,7 @@ from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr, field_validator
 
-from app.core.enums import BillingTerm
+from app.core.enums import BillingTerm, BusinessCategory
 from app.core.modules import ModuleKey
 from app.schemas.common import Pin, Reason
 
@@ -71,9 +71,37 @@ class OwnerSeed(BaseModel):
     branch_name: str = Field(default="Main Branch", min_length=2, max_length=100)
 
 
+class BusinessSettings(BaseModel):
+    """Workflow settings overridden for one business. Leave a key out (null) to follow the category's preset."""
+    model_config = ConfigDict(extra="forbid")
+
+    table_service: Optional[bool] = None
+    kitchen_tickets: Optional[bool] = None
+    quick_sale: Optional[bool] = None
+    barcode: Optional[bool] = None
+    weighed_items: Optional[bool] = None
+    tokens: Optional[bool] = None
+
+    def overrides(self) -> Dict[str, bool]:
+        return {k: v for k, v in self.model_dump().items() if v is not None}
+
+
+class BusinessCategoryRead(BaseModel):
+    key: str
+    name: str
+    settings: Dict[str, bool]
+
+
+class BusinessCategories(BaseModel):
+    categories: List[BusinessCategoryRead]
+    setting_labels: Dict[str, str]
+
+
 class OrganizationCreate(BaseModel):
     name: str = Field(min_length=2, max_length=150)
     slug: Slug
+    category: BusinessCategory = BusinessCategory.RESTAURANT
+    settings: Optional[BusinessSettings] = None
     legal_name: Optional[str] = Field(default=None, max_length=200)
     billing_email: Optional[EmailStr] = None
     country: Optional[str] = Field(default=None, pattern=r"^[A-Z]{2}$")
@@ -94,6 +122,8 @@ class OrganizationCreate(BaseModel):
 
 class OrganizationUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=150)
+    category: Optional[BusinessCategory] = None
+    settings: Optional[BusinessSettings] = None  # replaces all overrides; {} goes back to the category's preset
     legal_name: Optional[str] = Field(default=None, max_length=200)
     billing_email: Optional[EmailStr] = None
     country: Optional[str] = Field(default=None, pattern=r"^[A-Z]{2}$")
@@ -131,6 +161,7 @@ class OrganizationSummary(BaseModel):
     name: str
     slug: str
     status: str
+    category: str = "restaurant"
     billing_email: Optional[str]
     created_at: datetime
     plan_code: Optional[str]
@@ -156,6 +187,9 @@ class OrganizationDetail(BaseModel):
     billing_email: Optional[str]
     country: Optional[str]
     status: str
+    category: str = "restaurant"
+    settings: Dict[str, bool] = {}  # effective (preset + overrides)
+    settings_overrides: Dict[str, bool] = {}
     suspended_at: Optional[datetime]
     suspension_reason: Optional[str]
     created_at: datetime

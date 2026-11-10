@@ -12,7 +12,7 @@ an operator changes an organization, so a change takes effect on the next reques
 
 import json
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, FrozenSet, Optional
@@ -21,6 +21,7 @@ import redis.asyncio as aioredis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.business import effective_settings
 from app.core.config import settings
 from app.core.enums import BillingTerm, OrgStatus, SubscriptionStatus
 from app.core.errors import Forbidden
@@ -57,9 +58,14 @@ class Entitlements:
     max_branches: Optional[int] = None
     max_staff: Optional[int] = None
     valid_until: Optional[datetime] = None  # next instant at which this result may change by itself
+    category: str = "restaurant"  # business category (app.core.business)
+    settings: Dict[str, bool] = field(default_factory=lambda: effective_settings(None))  # effective workflow settings
 
     def has_module(self, key: str) -> bool:
         return self.access != BLOCKED and key in self.modules
+
+    def setting(self, key: str) -> bool:
+        return bool(self.settings.get(key, False))
 
     def to_json(self) -> str:
         data: Dict[str, Any] = asdict(self)
@@ -115,11 +121,12 @@ async def compute_entitlements(db: AsyncSession, org_id: uuid.UUID) -> Entitleme
             organization_id=str(org_id), org_status=org.status if org else OrgStatus.SUSPENDED.value,
             access=BLOCKED, modules=frozenset(),
         )
+    business = {"category": org.category, "settings": effective_settings(org.category, org.settings)}
 
     sub = await db.scalar(select(Subscription).where(Subscription.organization_id == org_id))
     if sub is None:  # no subscription on record: fail closed to core, read-only
         return Entitlements(
-            organization_id=str(org_id), org_status=org.status, access=READ_ONLY, modules=CORE_MODULES,
+            organization_id=str(org_id), org_status=org.status, access=READ_ONLY, modules=CORE_MODULES, **business,
         )
 
     plan = await db.get(Plan, sub.plan_id)
@@ -155,6 +162,7 @@ async def compute_entitlements(db: AsyncSession, org_id: uuid.UUID) -> Entitleme
         max_branches=sub.max_branches_override if sub.max_branches_override is not None else (plan.max_branches if plan else None),
         max_staff=sub.max_staff_override if sub.max_staff_override is not None else (plan.max_staff if plan else None),
         valid_until=_earliest(change_at, *expiries),
+        **business,
     )
 
 

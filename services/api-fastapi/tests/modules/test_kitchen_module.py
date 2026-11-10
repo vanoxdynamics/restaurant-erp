@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core.entitlements import invalidate_entitlements
-from app.models import KOT, Organization, Payment, Plan, PlanModule, Subscription
+from app.models import KOT, Organization, OrganizationModule, Payment, Plan, PlanModule, Subscription
 from tests import factories
 from tests.factories import auth_headers, idem
 from tests.flows import API, bill, create_order, fire, line, pay
@@ -268,3 +268,48 @@ async def test_operators_pick_screen_or_slip_through_plans_and_overrides(client,
     assert (await new_ticket())["fulfilment"] == "screen"  # live, no re-login
     r = await client.delete(f"{P}/organizations/{org['id']}/modules/kds", params={"reason": "pilot ended"}, headers=ops)
     assert (await new_ticket())["fulfilment"] == "slip"
+
+
+async def test_new_business_from_the_command_line_starts_without_the_kitchen_display(db):
+    """The kitchen display is an add-on switched on from the platform console; a new business starts with printed KOTs."""
+    from app.cli import create_owner
+    from app.core.entitlements import compute_entitlements
+
+    await create_owner("cli_owner", "Cli Owner", "CLI1", "Main", "cli-owner-password", "1234", "cli-biz", "Cli Biz")
+    org_id = (await db.scalar(select(Organization).where(Organization.slug == "cli-biz"))).id
+    ent = await compute_entitlements(db, org_id)
+    assert "pos" in ent.modules and "kds" not in ent.modules
+
+    # A second owner for the same business does not touch what the console set since.
+    override = await db.get(OrganizationModule, (org_id, "kds"))
+    override.enabled = True
+    await db.commit()
+    await create_owner("cli_owner2", "Cli Owner Two", "CLI1", "Main", "cli-owner-password", "5678", "cli-biz", "Cli Biz")
+    db.expire_all()
+    assert "kds" in (await compute_entitlements(db, org_id)).modules
+
+
+async def test_paying_closes_the_orders_printed_paper_kots(client, db, redis_client, branch, waiter, cashier, table):
+    """Nobody marks a paper KOT served, so paying the bill closes the printed ones; an unprinted one stays in the print queue."""
+    await set_modules(db, redis_client, branch.organization_id, SLIP)
+    item = await factories.make_menu_item(db, name="Dal", price="200.00")
+    order = await create_order(client, waiter, table, items=[line(item)])
+    printed = (await fire(client, waiter, order["id"]))[0]
+    r = await client.post(f"{API}/kots/{printed['id']}/slip/printed", headers=idem(cashier))
+    assert r.status_code == 200, r.text
+
+    b = await bill(client, cashier, order["id"])
+    assert (await pay(client, cashier, b["id"], b["grand_total"])).status_code == 200
+    kot = await db.get(KOT, uuid.UUID(printed["id"]), populate_existing=True)
+    assert kot.status == "served"
+    open_kots = (await client.get(f"{API}/kots", headers=auth_headers(cashier))).json()
+    assert printed["id"] not in {k["id"] for k in open_kots}
+
+
+async def test_kitchen_tickets_name_the_waiter_who_took_the_order(client, db, branch, waiter, kitchen, table):
+    """The waiter's phone uses this to announce only their own food as ready."""
+    item = await factories.make_menu_item(db, name="Dal", price="200.00")
+    order = await create_order(client, waiter, table, items=[line(item)])
+    await fire(client, waiter, order["id"])
+    board = (await client.get(f"{API}/kots", headers=auth_headers(kitchen))).json()
+    assert [t["waiter_id"] for t in board if t["order_id"] == order["id"]] == [str(waiter.id)]

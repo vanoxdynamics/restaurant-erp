@@ -185,7 +185,7 @@ async def test_roster_needs_a_device_token_and_shows_only_this_branch(
     ids = {e["id"] for e in r.json()}
     assert {str(waiter.id), str(kitchen.id), str(manager.id)} <= ids
     assert str(outsider.id) not in ids and str(inactive.id) not in ids
-    assert set(r.json()[0]) == {"id", "full_name", "role"}  # no PIN, username or other details
+    assert set(r.json()[0]) == {"id", "full_name", "role", "pin_length"}  # no PIN, username or other details
 
     assert (await client.get(f"{API}/staff/auth/roster")).status_code == 401
     assert (await client.get(f"{API}/staff/auth/roster", headers={"X-Device-Token": "garbage"})).status_code == 401
@@ -236,3 +236,74 @@ async def test_lockout_follows_the_person_not_the_device(client, db, branch, wai
                               json={"pin": "9005", "branch_id": str(branch.id), "staff_id": str(kitchen.id),
                                     "device_id": "brand-new"})
     assert other.status_code == 200
+
+
+async def test_roster_tells_the_pad_how_many_digits_each_pin_has(client, branch, manager):
+    token = await _link_device(client, manager, branch)
+    body = {"username": "sixdigit", "full_name": "Six Digit", "role": "waiter", "pin": "246813"}
+    created = await client.post(f"{API}/staff", json=body, headers=auth_headers(manager))
+    assert created.status_code == 201, created.text
+    lengths = lambda r: {e["id"]: e["pin_length"] for e in r.json()}  # noqa: E731
+
+    roster = await client.get(f"{API}/staff/auth/roster", headers={"X-Device-Token": token})
+    assert lengths(roster)[created.json()["id"]] == 6
+    assert lengths(roster)[str(manager.id)] is None  # set before lengths were kept: the pad grows as before
+
+    r = await client.post(f"{API}/staff/{created.json()['id']}/reset-pin", json={"pin": "1357"}, headers=auth_headers(manager))
+    assert r.status_code == 200, r.text
+    roster = await client.get(f"{API}/staff/auth/roster", headers={"X-Device-Token": token})
+    assert lengths(roster)[created.json()["id"]] == 4
+
+
+# --- Cash day (one per branch, opened and closed at the counter) ----------------
+
+
+async def test_cash_day_is_shared_by_the_branch_and_counts_everyones_cash(client, db, branch, cashier, manager, waiter):
+    url = f"{API}/staff/cash-day"
+    assert (await client.get(url, headers=auth_headers(cashier))).json()["status"] == "not_open"
+    assert (await client.post(f"{url}/close", json={"counted_cash": "0"}, headers=auth_headers(cashier))).json()["error"]["code"] == "day_not_open"
+
+    opened = await client.post(f"{url}/open", json={"opening_cash": "500.00"}, headers=auth_headers(cashier))
+    assert opened.status_code == 201, opened.text
+    assert opened.json()["status"] == "open" and opened.json()["opened_by"] == cashier.full_name and not opened.json()["stale"]
+    # One day per branch: the manager sees the same day and cannot open a second one.
+    again = await client.post(f"{url}/open", json={"opening_cash": "0"}, headers=auth_headers(manager))
+    assert again.status_code == 409 and again.json()["error"]["code"] == "day_already_open"
+    assert (await client.get(url, headers=auth_headers(manager))).json()["id"] == opened.json()["id"]
+
+    # Cash taken by two different people both count towards the day.
+    item = await factories.make_menu_item(db, price="100.00", tax_rate="0.00")
+    for taker in (cashier, manager):
+        order = await create_order(client, waiter, items=[line(item)])
+        await fire(client, waiter, order["id"])
+        b = await bill(client, taker, order["id"])
+        assert (await pay(client, taker, b["id"], b["grand_total"])).status_code == 200
+
+    # The count is blind for the cashier; the manager sees expected cash and the difference.
+    closed = await client.post(f"{url}/close", json={"counted_cash": "690.00"}, headers=auth_headers(cashier))
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["status"] == "closed" and "expected_cash" not in {k for k, v in closed.json().items() if v is not None}
+    assert (await client.get(url, headers=auth_headers(manager))).json()["status"] == "not_open"
+    history = (await client.get(f"{API}/staff/shifts", headers=auth_headers(manager))).json()["items"]
+    day = next(h for h in history if h["id"] == opened.json()["id"])
+    assert Decimal(day["expected_cash"]) == Decimal("700.00") and Decimal(day["cash_variance"]) == Decimal("-10.00")
+
+
+async def test_cash_day_left_open_from_yesterday_is_flagged(client, db, branch, cashier):
+    import uuid
+    from datetime import timedelta
+
+    from app.models import Shift
+    r = await client.post(f"{API}/staff/cash-day/open", json={"opening_cash": "0"}, headers=auth_headers(cashier))
+    shift = await db.get(Shift, uuid.UUID(r.json()["id"]))
+    shift.start_time = shift.start_time - timedelta(days=1)
+    await db.commit()
+    assert (await client.get(f"{API}/staff/cash-day", headers=auth_headers(cashier))).json()["stale"] is True
+
+
+async def test_waiters_handle_the_cash_day_only_without_a_kitchen_screen(client, db, redis_client, branch, waiter):
+    from tests.modules.test_kitchen_module import SLIP, set_modules
+    url = f"{API}/staff/cash-day"
+    assert (await client.get(url, headers=auth_headers(waiter))).status_code == 403
+    await set_modules(db, redis_client, branch.organization_id, SLIP)
+    assert (await client.get(url, headers=auth_headers(waiter))).status_code == 200

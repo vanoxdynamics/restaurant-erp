@@ -1,14 +1,16 @@
 import hashlib
 import uuid
+from enum import StrEnum
 from typing import List, Optional, Sequence
 
 from sqlalchemy import func, select, union_all
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.auth import CurrentUser
 from app.core.enums import Station, Topic
-from app.core.errors import NotFound
+from app.core.errors import Conflict, NotFound
 from app.core.events import commit, queue_event
 from app.core.lookups import get_or_404
 from app.models.catalog import Category, ItemVariant, MenuItem, ModifierGroup, ModifierItem
@@ -103,12 +105,28 @@ async def create_item(db: AsyncSession, org_id: uuid.UUID, payload: MenuItemCrea
 
     data = payload.model_dump(exclude={"variants", "modifier_group_ids"})
     data["station"] = payload.station.value
+    data["unit"] = payload.unit.value
     item = MenuItem(organization_id=org_id, **data)
     item.variants = [ItemVariant(**v.model_dump()) for v in payload.variants]
     item.modifier_groups = await _load_modifier_groups(db, org_id, payload.modifier_group_ids)
     db.add(item)
+    await _flush_item_codes(db)
     await commit(db)
     return await get_item(db, org_id, item.id)
+
+
+async def _flush_item_codes(db: AsyncSession) -> None:
+    """Flush, turning a clash on the per-business barcode/SKU unique indexes into a readable 409."""
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        text = str(exc.orig)
+        if "uq_menu_items_org_barcode" in text:
+            raise Conflict("Another item already has this barcode", code="duplicate_barcode") from exc
+        if "uq_menu_items_org_sku" in text:
+            raise Conflict("Another item already has this SKU", code="duplicate_sku") from exc
+        raise
 
 
 async def update_item(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID, payload: MenuItemUpdate) -> MenuItem:
@@ -120,9 +138,10 @@ async def update_item(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID, p
         if category is None or category.organization_id != org_id or not category.is_active:
             raise NotFound("Category not found")
     for field, value in changes.items():
-        setattr(item, field, value.value if isinstance(value, Station) else value)
+        setattr(item, field, value.value if isinstance(value, StrEnum) else value)
     if group_ids is not None:
         item.modifier_groups = await _load_modifier_groups(db, org_id, group_ids)
+    await _flush_item_codes(db)
     await commit(db)
     return await get_item(db, org_id, item.id)
 
@@ -200,3 +219,4 @@ async def get_menu(db: AsyncSession, user: CurrentUser) -> List[dict]:
          "items": by_category.get(cat.id, [])}
         for cat in categories
     ]
+

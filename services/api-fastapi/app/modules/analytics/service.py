@@ -242,7 +242,7 @@ async def sales_breakdown(db: AsyncSession, branch_id: uuid.UUID) -> SalesBreakd
         .limit(5)
     )).all()
     top_items = [
-        TopItem(name=name, category=category, quantity=int(qty), total=q(Decimal(total)))
+        TopItem(name=name, category=category, quantity=Decimal(qty), total=q(Decimal(total)))
         for name, category, qty, total in top_rows
     ]
 

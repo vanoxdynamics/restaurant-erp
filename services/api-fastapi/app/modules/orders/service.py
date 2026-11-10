@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.audit import record_audit
+from app.core.business import TOKENS
+from app.core.entitlements import get_entitlements
 from app.core.auth import CurrentUser, require_branch_access, resolve_approver, resolve_branch_id
 from app.core.clock import business_date
 from app.core.enums import (
@@ -23,7 +25,7 @@ from app.core.errors import Conflict, InvalidTransition, NotFound, ValidationFai
 from app.core.events import commit, queue_event
 from app.core.lookups import get_or_404
 from app.core.money import ZERO, q
-from app.core.numbering import next_document_number
+from app.core.numbering import next_daily_value, next_document_number
 from app.core.pagination import PageParams, paginate
 from app.models.catalog import MenuItem, ModifierGroup
 from app.models.floor import Branch, DiningTable, Floor
@@ -151,6 +153,10 @@ async def _build_order_items(
             raise ValidationFailed("Modifier does not apply to this item", code="invalid_modifiers",
                                    details={"modifier_ids": sorted(str(m) for m in selected - matched)})
 
+        if not item.sold_by_weight and req.quantity != req.quantity.to_integral_value():
+            raise ValidationFailed(f"{item.name} is sold in whole numbers", code="whole_quantity_required",
+                                   details={"item_id": str(item.id), "quantity": str(req.quantity)})
+
         unit_price = variant.price if variant else item.base_price
         modifier_total = sum((m.price for m in modifiers), ZERO)
         line = OrderItem(
@@ -161,6 +167,8 @@ async def _build_order_items(
             station_snapshot=item.station,
             unit_price_snapshot=unit_price,
             tax_rate_snapshot=item.tax_rate,
+            unit_snapshot=item.unit,
+            hsn_snapshot=item.hsn_code,
             quantity=req.quantity,
             line_total=q((unit_price + modifier_total) * req.quantity),
             status=OrderItemStatus.ORDERED.value,
@@ -192,9 +200,15 @@ async def _lock_table_for_seating(db: AsyncSession, table_id: uuid.UUID, branch_
     return table
 
 
-async def create_order(db: AsyncSession, user: CurrentUser, payload: OrderCreate) -> Order:
+async def create_order(db: AsyncSession, user: CurrentUser, payload: OrderCreate, redis_client=None) -> Order:
     branch_id = resolve_branch_id(user, payload.branch_id)
     branch = await get_or_404(db, Branch, branch_id)
+
+    token = None
+    if payload.order_type == OrderType.COUNTER_SALE:
+        ent = await get_entitlements(db, user.organization_id, redis_client)
+        if ent.setting(TOKENS):
+            token = await next_daily_value(db, branch, "token")
 
     table = None
     if payload.order_type == OrderType.DINE_IN and payload.table_id is not None:
@@ -212,6 +226,7 @@ async def create_order(db: AsyncSession, user: CurrentUser, payload: OrderCreate
         status=OrderStatus.ACTIVE.value,
         guest_count=payload.guest_count,
         notes=payload.notes,
+        token_number=token,
         business_date=business_date(branch.timezone),
     )
     order.items = await _build_order_items(db, user.organization_id, payload.items)

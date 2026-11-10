@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Optional
 
@@ -60,6 +60,7 @@ class RosterEntry(BaseModel):
     id: uuid.UUID
     full_name: str
     role: Role
+    pin_length: Optional[int] = None  # 4, 5 or 6; unknown for older PINs
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -148,3 +149,27 @@ class ShiftReadManager(ShiftRead):
 class ShiftHistoryRead(ShiftReadManager):
     user_name: str
     cash_sales: Optional[Decimal] = None
+
+
+class CashDayOpen(BaseModel):
+    opening_cash: Money = Decimal("0.00")
+
+
+class CashDayClose(BaseModel):
+    counted_cash: Money  # counted without seeing the expected amount
+
+
+class CashDayRead(BaseModel):
+    """The branch's cash day. `expected_cash` and `cash_variance` are only sent to managers and owners (blind count)."""
+    status: str  # not_open | open | closed
+    business_date: date
+    id: Optional[uuid.UUID] = None
+    opened_at: Optional[datetime] = None
+    opened_on: Optional[date] = None
+    opened_by: Optional[str] = None
+    opening_cash: Optional[Decimal] = None
+    closed_at: Optional[datetime] = None
+    counted_cash: Optional[Decimal] = None
+    expected_cash: Optional[Decimal] = None
+    cash_variance: Optional[Decimal] = None
+    stale: bool = False

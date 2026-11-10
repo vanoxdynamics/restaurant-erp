@@ -2,11 +2,11 @@ import uuid
 from decimal import Decimal
 from typing import List, Optional
 
-from sqlalchemy import Boolean, CheckConstraint, Column, ForeignKey, Integer, Numeric, String, Table, Text
+from sqlalchemy import Boolean, CheckConstraint, Column, ForeignKey, Index, Integer, Numeric, String, Table, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.enums import Station
+from app.core.enums import ItemUnit, Station
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_check
 
 menu_item_modifier_groups = Table(
@@ -39,6 +39,11 @@ class MenuItem(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         CheckConstraint("base_price >= 0", name="ck_menu_items_base_price"),
         CheckConstraint("tax_rate >= 0 AND tax_rate <= 28", name="ck_menu_items_tax_rate"),
         enum_check("menu_items", "station", Station),
+        enum_check("menu_items", "unit", ItemUnit),
+        # A barcode or SKU identifies one item within a business (scanning and CSV import rely on it).
+        Index("uq_menu_items_org_barcode", "organization_id", "barcode", unique=True,
+              postgresql_where=text("barcode IS NOT NULL")),
+        Index("uq_menu_items_org_sku", "organization_id", "sku", unique=True, postgresql_where=text("sku IS NOT NULL")),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
@@ -52,6 +57,12 @@ class MenuItem(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     image_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     station: Mapped[str] = mapped_column(String(50), default=Station.KITCHEN.value, server_default=Station.KITCHEN.value)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    barcode: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    sku: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    hsn_code: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)  # GST HSN/SAC code, printed on the bill
+    unit: Mapped[str] = mapped_column(String(10), default=ItemUnit.PIECE.value, server_default=ItemUnit.PIECE.value, nullable=False)
+    # Loose items (0.750 kg of onions): the quantity may have decimals. Other items sell in whole numbers.
+    sold_by_weight: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
 
     category: Mapped["Category"] = relationship("Category", back_populates="items", lazy="raise")
     variants: Mapped[List["ItemVariant"]] = relationship(

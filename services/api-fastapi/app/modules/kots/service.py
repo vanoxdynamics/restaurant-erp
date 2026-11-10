@@ -45,18 +45,18 @@ KITCHEN_STAGE_ROLES = {Role.OWNER, Role.MANAGER, Role.KITCHEN}
 
 
 async def annotate_kots(db: AsyncSession, kots: Sequence[KOT]) -> Sequence[KOT]:
-    """Attach order and table numbers (not columns on KOT) so listings can show them."""
+    """Attach order and table numbers and the order's waiter (not columns on KOT) so listings can show them."""
     order_ids = {k.order_id for k in kots}
     if not order_ids:
         return kots
     rows = await db.execute(
-        select(Order.id, Order.order_number, DiningTable.table_number)
+        select(Order.id, Order.order_number, DiningTable.table_number, Order.waiter_id)
         .outerjoin(DiningTable, DiningTable.id == Order.table_id)
         .where(Order.id.in_(order_ids))
     )
-    labels = {order_id: (number, table) for order_id, number, table in rows}
+    labels = {order_id: (number, table, waiter) for order_id, number, table, waiter in rows}
     for kot in kots:
-        kot.order_number, kot.table_number = labels.get(kot.order_id, (None, None))
+        kot.order_number, kot.table_number, kot.waiter_id = labels.get(kot.order_id, (None, None, None))
     return kots
 OPEN_KOT_STATUSES = [KOTStatus.QUEUED.value, KOTStatus.PREPARING.value, KOTStatus.READY.value]
 
@@ -107,7 +107,6 @@ async def fire_kots(db: AsyncSession, user: CurrentUser, payload: KOTFireRequest
     that station's screen. Without it the send becomes a single slip for the whole table (`fulfilment`), so one piece of
     paper goes to the kitchen; its lines are grouped by station on the paper.
     """
-    fulfilment = Fulfilment.SCREEN if kds else Fulfilment.SLIP
     order = await get_or_404(db, Order, payload.order_id, for_update=True, populate_existing=True)
     require_branch_access(user, order.branch_id)
     if order.status != OrderStatus.ACTIVE.value:
@@ -127,7 +126,15 @@ async def fire_kots(db: AsyncSession, user: CurrentUser, payload: KOTFireRequest
     pending = (await db.scalars(stmt)).all()
     if not pending:
         raise Conflict("No pending items to fire", code="nothing_to_fire")
+    kots = await make_kots(db, user, order, pending, kds=kds)
+    queue_event(db, order.branch_id, Topic.ORDERS, "order.items_fired", order.id)
+    await commit(db)
+    return [await load_kot(db, kot.id) for kot in kots]
 
+
+async def make_kots(db: AsyncSession, user: CurrentUser, order: Order, pending: Sequence[OrderItem], *, kds: bool) -> List[KOT]:
+    """Turn locked, pending order lines into KOTs (marking the lines fired). Flushes and queues kot events; does not commit."""
+    fulfilment = Fulfilment.SCREEN if kds else Fulfilment.SLIP
     branch = await get_or_404(db, Branch, order.branch_id)
     by_station: Dict[str, List[OrderItem]] = defaultdict(list)
     for item in pending:
@@ -165,9 +172,7 @@ async def fire_kots(db: AsyncSession, user: CurrentUser, payload: KOTFireRequest
     for kot in kots:
         queue_event(db, order.branch_id, Topic.KOTS, "kot.fired", kot.id,
                     {"kot_number": kot.kot_number, "station": kot.station, "order_id": str(order.id)})
-    queue_event(db, order.branch_id, Topic.ORDERS, "order.items_fired", order.id)
-    await commit(db)
-    return [await load_kot(db, kot.id) for kot in kots]
+    return kots
 
 
 async def _sync_order_items(db: AsyncSession, kot: KOT, status: OrderItemStatus) -> None:
@@ -344,7 +349,7 @@ async def build_slip(db: AsyncSession, user: CurrentUser, kot_id: uuid.UUID) -> 
         marker=marker, branch_name=branch.name, branch_code=branch.code, kot_number=kot.kot_number, order_number=order.order_number,
         station=kot.station, order_type=order.order_type, table_number=table.table_number if table else None,
         guest_count=order.guest_count, fired_at=fired_at, fired_by=fired_by.full_name if fired_by else None,
-        round=earlier + 1, print_count=kot.print_count, lines=lines, order_notes=order.notes,
+        round=earlier + 1, print_count=kot.print_count, lines=lines, order_notes=order.notes, token=order.token_number,
     )
     return slip, kot
 

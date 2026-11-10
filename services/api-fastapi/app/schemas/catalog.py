@@ -5,11 +5,14 @@ from typing import Annotated, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from app.core.enums import Station
+from app.core.enums import ItemUnit, Station
 from app.schemas.common import Money, TaxRate
 
 ItemName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
 Name100 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+# Printable codes only: barcodes and SKUs are typed by scanners and people, compared exactly.
+Code = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64, pattern=r"^[!-~]+$")]
+HSN = Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^\d{4,8}$")]
 
 
 class ModifierItemBase(BaseModel):
@@ -78,6 +81,11 @@ class MenuItemBase(BaseModel):
     is_available_86: bool = True
     image_url: Optional[str] = Field(default=None, max_length=255, pattern=r"^https?://")
     sort_order: int = 0
+    barcode: Optional[Code] = None
+    sku: Optional[Code] = None
+    hsn_code: Optional[HSN] = None
+    unit: ItemUnit = ItemUnit.PIECE
+    sold_by_weight: bool = False
 
 
 class MenuItemCreate(MenuItemBase):
@@ -98,6 +106,11 @@ class MenuItemUpdate(BaseModel):
     image_url: Optional[str] = Field(default=None, max_length=255, pattern=r"^https?://")
     sort_order: Optional[int] = None
     modifier_group_ids: Optional[List[uuid.UUID]] = Field(default=None, max_length=20)
+    barcode: Optional[Code] = None
+    sku: Optional[Code] = None
+    hsn_code: Optional[HSN] = None
+    unit: Optional[ItemUnit] = None
+    sold_by_weight: Optional[bool] = None
 
 
 class Toggle86Request(BaseModel):
@@ -144,3 +157,4 @@ class MenuCategoryRead(CategoryRead):
 
 class MenuRead(BaseModel):
     categories: List[MenuCategoryRead]
+
