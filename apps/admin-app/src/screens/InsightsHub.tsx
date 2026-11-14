@@ -3,10 +3,11 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, fonts, radii, spacing } from '@repo/shared-ui';
 import { InsightsScreen } from './InsightsScreen';
 import { ZReportsScreen } from './ZReports';
+import { CustomersScreen } from './CustomersScreen';
 
-export type InsightsView = 'overview' | 'reports';
+export type InsightsView = 'overview' | 'reports' | 'customers';
 
-/** Insights: the business over time (Overview) and the end-of-day reports (Daily reports), one switch apart. */
+/** Insights: the business over time (Overview), the end-of-day reports (Daily reports) and who buys (Customers), one switch apart. */
 export const InsightsHub: React.FC<{ view: InsightsView; onChangeView: (view: InsightsView) => void }> = ({ view, onChangeView }) => (
   <View style={styles.container}>
     <View style={styles.segmentWrapper}>
@@ -14,6 +15,7 @@ export const InsightsHub: React.FC<{ view: InsightsView; onChangeView: (view: In
         {([
           ['overview', 'Overview'],
           ['reports', 'Daily reports'],
+          ['customers', 'Customers'],
         ] as const).map(([key, label]) => (
           <Pressable
             key={key}
@@ -27,7 +29,7 @@ export const InsightsHub: React.FC<{ view: InsightsView; onChangeView: (view: In
         ))}
       </View>
     </View>
-    <View style={{ flex: 1 }}>{view === 'overview' ? <InsightsScreen /> : <ZReportsScreen />}</View>
+    <View style={{ flex: 1 }}>{view === 'overview' ? <InsightsScreen /> : view === 'reports' ? <ZReportsScreen /> : <CustomersScreen />}</View>
   </View>
 );
 

@@ -40,6 +40,7 @@ from app.core.money import ZERO, q
 from app.core.numbering import next_document_number
 from app.core.pagination import PageParams, paginate
 from app.models.billing import Bill, Payment
+from app.models.customers import Customer
 from app.models.kots import KOT
 from app.models.floor import Branch, DiningTable
 from app.models.orders import Order, OrderItem
@@ -47,6 +48,7 @@ from app.models.staff import StaffUser
 from app.modules.billing import receipt as receipts
 from app.modules.billing.tax import TaxLine, compute_bill
 from app.modules.business.service import bill_name, load_with_logo, logo_data_url
+from app.modules.inventory.service import deduct_for_order
 from app.modules.kots.service import make_kots
 from app.modules.orders.service import load_order, set_table_status, set_table_vacant
 from app.modules.staff.service import get_open_shift
@@ -185,6 +187,7 @@ async def _settle_if_paid(db: AsyncSession, bill: Bill, background: Optional[Bac
     order = await load_order(db, bill.order_id, for_update=True)
     order.status = OrderStatus.COMPLETED.value
     await _close_paper_kots(db, order.id)
+    await deduct_for_order(db, order)  # tracked items leave stock with the paid bill
     table = await set_table_vacant(db, order.table_id)
     queue_event(db, bill.branch_id, Topic.BILLING, "bill.settled", bill.id, {"bill_number": bill.bill_number})
     queue_event(db, bill.branch_id, Topic.ORDERS, "order.completed", order.id)
@@ -534,7 +537,10 @@ async def build_receipt(db: AsyncSession, user: CurrentUser, bill_id: uuid.UUID)
         .order_by(OrderItem.created_at)
     )).all()
     business = await load_with_logo(db, branch.organization_id)
+    customer = await db.get(Customer, order.customer_id) if order.customer_id else None
     return receipts.Receipt(
+        customer_name=customer.name if customer else None, customer_phone=customer.phone if customer else None,
+        customer_gstin=customer.gstin if customer else None,
         business_name=bill_name(business), logo_data_url=logo_data_url(business),
         branch_name=branch.name, branch_code=branch.code, address=branch.address, phone=branch.phone, gstin=branch.gstin,
         bill_number=bill.bill_number, order_number=order.order_number, order_type=order.order_type,

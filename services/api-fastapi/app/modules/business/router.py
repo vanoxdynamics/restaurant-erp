@@ -1,16 +1,27 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser, get_current_user, require_roles
+from app.core.auth import CurrentUser, get_current_user, module_flag, require_roles
 from app.core.database import get_db
 from app.core.enums import Role
+from app.core.lookups import get_or_404
+from app.core.modules import ModuleKey
+from app.models.organization import Organization
 from app.modules.business import service
-from app.schemas.business import BusinessProfileRead, BusinessProfileUpdate, LogoUpload
+from app.schemas.business import (
+    BusinessProfileRead,
+    BusinessProfileUpdate,
+    LogoUpload,
+    OfflineSettingsRead,
+    OfflineSettingsUpdate,
+)
 
 router = APIRouter(prefix="/business", tags=["Business profile"], dependencies=[Depends(get_current_user)])
 
 # The business's own staff in charge decide how it presents itself; the platform's registered name is not touched.
 editors = require_roles(Role.OWNER, Role.MANAGER)
+owners = require_roles(Role.OWNER)
+has_offline_module = module_flag(ModuleKey.OFFLINE_BILLING.value)
 
 
 @router.get("/profile", response_model=BusinessProfileRead)
@@ -35,3 +46,28 @@ async def upload_logo(payload: LogoUpload, user: CurrentUser = Depends(editors),
 async def remove_logo(user: CurrentUser = Depends(editors), db: AsyncSession = Depends(get_db)):
     """Remove the logo from bills."""
     return await service.set_logo(db, user.organization_id, None)
+
+
+@router.get("/offline", response_model=OfflineSettingsRead)
+async def get_offline_settings(
+    user: CurrentUser = Depends(editors),
+    module_enabled: bool = Depends(has_offline_module),
+    db: AsyncSession = Depends(get_db),
+):
+    """Whether the business allows offline billing, and the limits of each device's offline lease (owners and managers)."""
+    return service.offline_settings(await get_or_404(db, Organization, user.organization_id), module_enabled)
+
+
+@router.patch("/offline", response_model=OfflineSettingsRead)
+async def update_offline_settings(
+    payload: OfflineSettingsUpdate,
+    user: CurrentUser = Depends(owners),
+    module_enabled: bool = Depends(has_offline_module),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Owners only. Only the fields sent change. Turning `offline_allowed` on without the `offline_billing` module is 403
+    `module_disabled`; changing the limits or turning it off is always allowed.
+    """
+    changes = payload.model_dump(exclude_unset=True)
+    return await service.update_offline_settings(db, user.organization_id, changes, module_enabled)

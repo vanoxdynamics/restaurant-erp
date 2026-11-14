@@ -20,7 +20,7 @@ import { colors, radii, spacing, typography, fonts } from '@repo/shared-ui';
 import { Icon } from './components/Icon';
 import { LivePulseScreen } from './screens/LivePulse';
 import { FloorObserverScreen } from './screens/FloorObserverScreen';
-import { MenuBuilderScreen } from './screens/MenuBuilder';
+import { CatalogHub } from './screens/CatalogHub';
 import { VoidApprovalsScreen } from './screens/VoidApprovals';
 import { StaffPINsScreen } from './screens/StaffPINs';
 import { SettingsScreen } from './screens/SettingsScreen';
@@ -98,7 +98,7 @@ export function AdminAppMain(): React.JSX.Element {
       case 'FloorObserver':
         return <FloorObserverScreen />;
       case 'MenuBuilder':
-        return <MenuBuilderScreen />;
+        return <CatalogHub />;
       case 'VoidApprovals':
         return hasKitchenScreen ? <VoidApprovalsScreen /> : <LivePulseScreen onNavigateToTab={handleNavigateFromScreen} hasKitchenScreen={false} />;
       case 'StaffPINs':

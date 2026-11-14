@@ -28,6 +28,15 @@ import {
   RosterEntry,
   ShiftClosureAudit,
   StaffUser,
+  Customer,
+  CustomerBill,
+  CustomerInput,
+  StockAdjustment,
+  StockItem,
+  StockMovement,
+  StockPurchase,
+  StockPurchaseInput,
+  StockSettings,
   VoidApprovalItem,
   ZReport,
 } from './types';
@@ -43,6 +52,9 @@ export const QUERY_KEYS = {
   livePulse: (branchId: string) => ['livePulse', branchId] as const,
   todayPayments: (branchId: string) => ['todayPayments', branchId] as const,
   zReport: (branchId: string, date?: string) => ['zReport', branchId, date ?? 'today'] as const,
+  stock: (branchId: string) => ['stock', branchId] as const,
+  stockPurchases: (branchId: string) => ['stockPurchases', branchId] as const,
+  stockMovements: (branchId: string, itemId?: string) => ['stockMovements', branchId, itemId ?? 'all'] as const,
 };
 
 // ---- Sign-in -----------------------------------------------------------------------
@@ -133,6 +145,62 @@ export function useImportItems() {
       if (!result.dry_run) queryClient.invalidateQueries({ queryKey: QUERY_KEYS.catalog });
     },
   });
+}
+
+// ---- Inventory -------------------------------------------------------------------
+
+/**
+ * Stock on hand for the branch's tracked items. Off (`enabled`) for a business without the `inventory` module. Sales at other
+ * counters change it, so it is re-read every half minute.
+ */
+export function useStock(branchId: string | undefined, enabled = true) {
+  return useQuery<StockItem[]>({
+    queryKey: QUERY_KEYS.stock(branchId ?? ''),
+    queryFn: () => apiClient.getStock(branchId!),
+    enabled: enabled && !!branchId,
+    refetchInterval: 30000,
+  });
+}
+
+export function useStockPurchases(branchId: string | undefined, enabled = true) {
+  return useQuery<StockPurchase[]>({
+    queryKey: QUERY_KEYS.stockPurchases(branchId ?? ''),
+    queryFn: () => apiClient.getStockPurchases(branchId!),
+    enabled: enabled && !!branchId,
+  });
+}
+
+export function useStockMovements(branchId: string | undefined, itemId?: string, enabled = true) {
+  return useQuery<StockMovement[]>({
+    queryKey: QUERY_KEYS.stockMovements(branchId ?? '', itemId),
+    queryFn: () => apiClient.getStockMovements(branchId!, itemId),
+    enabled: enabled && !!branchId,
+  });
+}
+
+function useStockMutation<V, R>(branchId: string | undefined, mutationFn: (branchId: string, vars: V) => Promise<R>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: V) => mutationFn(branchId!, vars),
+    onSuccess: () => {
+      for (const key of ['stock', 'stockPurchases', 'stockMovements']) queryClient.invalidateQueries({ queryKey: [key, branchId] });
+    },
+  });
+}
+
+export function useReceiveStock(branchId: string | undefined) {
+  return useStockMutation(branchId, (b, v: { purchase: StockPurchaseInput; idempotencyKey?: string }) =>
+    apiClient.receiveStock(b, v.purchase, v.idempotencyKey));
+}
+
+export function useAdjustStock(branchId: string | undefined) {
+  return useStockMutation(branchId, (b, v: { adjustment: StockAdjustment; idempotencyKey?: string }) =>
+    apiClient.adjustStock(b, v.adjustment, v.idempotencyKey));
+}
+
+export function useUpdateStockSettings(branchId: string | undefined) {
+  return useStockMutation(branchId, (b, v: { itemId: string; settings: StockSettings }) =>
+    apiClient.updateStockSettings(b, v.itemId, v.settings));
 }
 
 export function useUpdateMenuItem() {
@@ -588,5 +656,63 @@ export function useRecordPayment() {
   >({
     mutationFn: ({ billId, payment, idempotencyKey }) => apiClient.recordPayment(billId, payment, idempotencyKey),
     onSettled: (_data, _error, vars) => invalidate(vars.orderId),
+  });
+}
+
+// ---- Customers -------------------------------------------------------------------
+
+/** Customers matching `search` (a name, or digits of a phone number); all of them, by name, when it is empty. */
+export function useCustomers(search = '', options: { includeInactive?: boolean; enabled?: boolean } = {}) {
+  return useQuery<Customer[]>({
+    queryKey: ['customers', 'list', search.trim(), !!options.includeInactive],
+    queryFn: () => apiClient.getCustomers({ search, includeInactive: options.includeInactive }),
+    enabled: options.enabled ?? true,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useCustomer(customerId: string | undefined) {
+  return useQuery<Customer>({
+    queryKey: ['customers', 'one', customerId ?? ''],
+    queryFn: () => apiClient.getCustomer(customerId!),
+    enabled: !!customerId,
+  });
+}
+
+export function useCustomerBills(customerId: string | undefined) {
+  return useQuery<CustomerBill[]>({
+    queryKey: ['customers', 'bills', customerId ?? ''],
+    queryFn: () => apiClient.getCustomerBills(customerId!),
+    enabled: !!customerId,
+  });
+}
+
+export function useCreateCustomer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CustomerInput) => apiClient.createCustomer(input),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['customers'] }),
+  });
+}
+
+export function useUpdateCustomer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ customerId, changes }: { customerId: string; changes: Partial<CustomerInput> & { is_active?: boolean } }) =>
+      apiClient.updateCustomer(customerId, changes),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['customers'] }),
+  });
+}
+
+/** Put a customer on an order, or take them off (`customerId: null`). */
+export function useSetOrderCustomer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orderId, customerId }: { orderId: string; customerId: string | null }) =>
+      apiClient.setOrderCustomer(orderId, customerId),
+    onSuccess: (order) => {
+      queryClient.setQueryData(ORDER_KEYS.order(order.id), order);
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+    },
   });
 }

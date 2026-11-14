@@ -18,6 +18,9 @@ from app.models.kots import KOT, KOTItem, VoidRequest
 from app.models.billing import Bill, Payment
 from app.models.staff import Shift, StaffUser
 from app.models.audit import AuditLog, DailyReport, DocumentCounter
+from app.models.inventory import StockLevel, StockMovement, StockPurchase
+from app.models.customers import Customer
+from app.models.devices import Device
 
 __all__ = [
     "Base",
@@ -61,4 +64,9 @@ __all__ = [
     "AuditLog",
     "DocumentCounter",
     "DailyReport",
+    "StockLevel",
+    "StockMovement",
+    "StockPurchase",
+    "Customer",
+    "Device",
 ]

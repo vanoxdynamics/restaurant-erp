@@ -324,15 +324,80 @@ export interface RecipeBOM {
   portion_size: string;
 }
 
-export interface InventoryStockItem {
-  id: string;
+/** One tracked item's stock in a branch (the `inventory` module). Cost and value are sent to owners and managers only. */
+export interface StockItem {
+  item_id: string;
   name: string;
-  current_quantity: number;
-  unit: 'g' | 'kg' | 'ml' | 'L' | 'pcs';
-  minimum_threshold: number;
-  is_low_stock: boolean;
-  cost_per_unit_paise: number;
-  last_restocked_at: string;
+  category_id: string;
+  category_name: string;
+  unit: ItemUnit;
+  sku?: string;
+  barcode?: string;
+  /** In the item's unit. May be negative when more was sold than the record had. */
+  quantity: number;
+  low_stock_level?: number;
+  is_low: boolean;
+  is_out: boolean;
+  is_tracked: boolean;
+  cost_price_paise?: number;
+  stock_value_paise?: number;
+  updated_at: string;
+}
+
+export interface StockSettings {
+  is_tracked?: boolean;
+  /** null clears the alert. */
+  low_stock_level?: number | null;
+  cost_price_paise?: number;
+}
+
+export interface StockPurchaseLineInput {
+  item_id: string;
+  quantity: number;
+  unit_cost_paise?: number;
+}
+
+export interface StockPurchaseInput {
+  supplier_name?: string;
+  invoice_number?: string;
+  notes?: string;
+  lines: StockPurchaseLineInput[];
+}
+
+export interface StockPurchase {
+  id: string;
+  supplier_name?: string;
+  invoice_number?: string;
+  received_on: string;
+  notes?: string;
+  total_cost_paise: number;
+  created_by?: string;
+  created_at: string;
+  lines: { item_id: string; name: string; unit: ItemUnit; quantity: number; unit_cost_paise?: number; line_cost_paise?: number }[];
+}
+
+/** Exactly one of `delta` (add or remove) or `counted` (a physical count). */
+export interface StockAdjustment {
+  item_id: string;
+  delta?: number;
+  counted?: number;
+  reason: string;
+}
+
+export type StockMovementKind = 'purchase' | 'sale' | 'adjustment' | 'count';
+
+/** One row of the stock ledger. `quantity` is signed: + in, - out. */
+export interface StockMovement {
+  id: string;
+  item_id: string;
+  name: string;
+  unit: ItemUnit;
+  kind: StockMovementKind;
+  quantity: number;
+  balance_after: number;
+  reason?: string;
+  created_by?: string;
+  created_at: string;
 }
 
 // ==========================================
@@ -491,6 +556,10 @@ export interface OrderDetail {
   token_number?: number;
   status: 'active' | 'billed' | 'completed' | 'cancelled';
   table_id?: string;
+  /** The customer on the order, if any: their name, phone and GSTIN print on the bill. */
+  customer_id?: string;
+  /** The device's own id for the sale (offline billing): the same id sent again returns this order, never a second one. */
+  client_sale_id?: string;
   guest_count: number;
   version: number;
   subtotal_paise: number;
@@ -637,7 +706,7 @@ export const RESTAURANT_SETTINGS: BusinessSettings = {
 export interface Entitlements {
   access: 'full' | 'read_only' | 'blocked';
   plan_code?: string;
-  /** Module keys, e.g. 'pos', 'kds' (kitchen display), 'analytics'. */
+  /** Module keys, e.g. 'pos', 'kds' (kitchen display), 'analytics', 'inventory', 'offline_billing'. */
   modules: string[];
   category: BusinessCategory;
   settings: BusinessSettings;
@@ -767,4 +836,96 @@ export interface PaymentOutcome {
   bill: Bill;
   /** Cash handed over beyond the balance, to be returned to the guest. */
   change_due_paise: number;
+}
+
+// ==========================================
+// CUSTOMERS
+// ==========================================
+
+/** Someone the business sells to. Found by phone or name at the counter; visits and spend come from their paid bills. */
+export interface Customer {
+  id: string;
+  name: string;
+  /** Digits only; Indian mobiles as 10 digits. */
+  phone?: string;
+  email?: string;
+  /** A business buyer's GSTIN, printed on their bill. */
+  gstin?: string;
+  address?: string;
+  notes?: string;
+  is_active: boolean;
+  /** Paid bills. */
+  visits: number;
+  total_spent_paise: number;
+  last_visit_at?: string;
+  created_at: string;
+}
+
+export interface CustomerInput {
+  name: string;
+  phone?: string;
+  email?: string;
+  gstin?: string;
+  address?: string;
+  notes?: string;
+}
+
+export interface CustomerBill {
+  id: string;
+  order_id: string;
+  bill_number: string;
+  business_date: string;
+  grand_total_paise: number;
+  status: Bill['status'];
+  created_at: string;
+}
+
+/** A device linked to a branch, as a record (Staff > Devices). */
+export interface Device {
+  id: string;
+  branch_id: string;
+  /** The id the device chose when it was linked. */
+  device_id: string;
+  name?: string;
+  /** Switch 3 of offline billing: this device may bill offline (it also needs the module and the business's switch). */
+  offline_enabled: boolean;
+  /** The device's own bill series, given once offline is first enabled and never changed: BLR1A/2627/00001. */
+  series_letter?: string;
+  last_seen_at?: string;
+  /** Cut off: its token no longer works anywhere. Final. */
+  revoked_at?: string;
+  revoked_by_id?: string;
+  created_at: string;
+}
+
+/** The business's own offline billing switch and the limits of each device's offline lease. */
+export interface OfflineSettings {
+  offline_allowed: boolean;
+  offline_max_hours: number;
+  offline_max_sales: number;
+  offline_max_cash_paise: number;
+  /** Whether the subscription includes offline billing; without it the switch cannot be turned on. */
+  module_enabled: boolean;
+}
+
+export interface OfflineSettingsUpdate {
+  offline_allowed?: boolean;
+  offline_max_hours?: number;
+  offline_max_sales?: number;
+  offline_max_cash_paise?: number;
+}
+
+/** Permission, signed by the server, for a device to bill offline until `expires_at` within the limits. */
+export interface OfflineLease {
+  /** The signed lease the device keeps. */
+  lease: string;
+  device_id: string;
+  branch_id: string;
+  series_letter: string;
+  issued_at: string;
+  expires_at: string;
+  max_sales: number;
+  max_cash_paise: number;
+  /** The server's clock when the lease was given, to notice a device clock that has moved. */
+  server_time: string;
 }

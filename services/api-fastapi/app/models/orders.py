@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 from typing import List, Optional
 
-from sqlalchemy import CheckConstraint, Date, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Date, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -18,12 +18,19 @@ class Order(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         enum_check("orders", "status", OrderStatus),
         enum_check("orders", "order_type", OrderType),
         CheckConstraint("guest_count >= 1", name="ck_orders_guest_count"),
+        # A sale made on a device carries the id the device gave it; the same sale sent again, by anyone, at any time, finds
+        # the first order instead of making a second one.
+        Index("uq_orders_branch_client_sale", "branch_id", "client_sale_id", unique=True,
+              postgresql_where=text("client_sale_id IS NOT NULL")),
     )
 
     branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False, index=True)
     table_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("dining_tables.id"), nullable=True, index=True)
     waiter_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.id"), nullable=True, index=True)
     opened_by_shift_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("shifts.id"), nullable=True)
+    # Who the sale is to, when known: printed on the bill, and how a customer's visits and spend are counted.
+    customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("customers.id", name="fk_orders_customer_id_customers"), nullable=True, index=True)
     order_number: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
     order_type: Mapped[str] = mapped_column(String(30), default=OrderType.DINE_IN.value)
     status: Mapped[str] = mapped_column(String(30), default=OrderStatus.ACTIVE.value, index=True)
@@ -35,6 +42,8 @@ class Order(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     total_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"))
     # Daily per-branch number called out when a counter order is ready (businesses with token numbers on).
     token_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # The device's own id for this sale (offline billing); unique per branch, see uq_orders_branch_client_sale.
+    client_sale_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False)  # Optimistic concurrency lock
 
     items: Mapped[List["OrderItem"]] = relationship(

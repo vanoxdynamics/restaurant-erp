@@ -98,6 +98,60 @@ their own module (`app/modules/retail`, under `/retail`); catalog, orders, billi
   same SKU, else barcode, else name in the same category; missing categories are created. Bad rows are skipped and reported
   as `errors: [{row, errors, data}]` with the file's line number; good rows are saved together. Up to 10,000 rows.
 
+## Inventory
+
+A paid module (`inventory`, switched on per plan or per subscriber in the platform console). Every endpoint under `/inventory`
+answers `403 module_disabled` without it. Code: `app/modules/inventory`.
+
+- **Stock is per branch and per item.** A branch tracks an item once it has a stock level for it: the first delivery,
+  adjustment or count creates one. Untracked items sell as before. An item's variants share its stock. Quantities are in the
+  item's unit with 3 decimals; items not `sold_by_weight` are counted in whole numbers (`422 whole_quantity_required`).
+- **Sales.** When a bill is fully paid, its order's tracked items leave stock in the same transaction (cancelled lines do
+  not). A sale is never refused for lack of stock: the quantity goes negative and the item shows as out. An order is
+  deducted once, also when a card payment is reversed and collected again. Voiding an unpaid bill changes nothing, because
+  nothing left stock yet.
+- **`GET /inventory/stock`** (any signed-in staff; `branch_id`, `low_only`, `include_untracked`, `search`): `quantity`,
+  `low_stock_level`, `is_low`, `is_out`, and for owners and managers `cost_price` and `stock_value`.
+- **`PUT /inventory/stock/{item_id}`** (managers): `is_tracked`, `low_stock_level` (null clears it), `cost_price`.
+- **`POST /inventory/purchases`** (managers, needs `X-Idempotency-Key`): a delivery with `supplier_name`, `invoice_number`,
+  `received_on` and `lines: [{item_id, quantity, unit_cost}]`. Each line adds to stock; `unit_cost` becomes the item's cost
+  price. Purchases are not edited: correct a mistake with an adjustment. `GET /inventory/purchases`, `GET
+  /inventory/purchases/{id}`.
+- **`POST /inventory/adjustments`** (managers, needs `X-Idempotency-Key`): `item_id`, `reason`, and exactly one of `delta`
+  (add or remove) or `counted` (a physical count; the quantity on record becomes this).
+- **`GET /inventory/movements`** (managers; `item_id`, `kind`): the ledger, newest first. Every change is one row with
+  `kind` (`purchase`, `sale`, `adjustment`, `count`), a signed `quantity` and `balance_after`. Rows are never edited.
+- **Events** on the `catalog` topic: `stock.changed` (`item_ids`) after any change, and `stock.low` once when an item
+  reaches its low-stock level.
+
+Not built yet: suppliers as records, purchase orders, stock transfers between branches, returns to stock (comes with
+returns and credit notes), batches and expiry, recipes for restaurant ingredients.
+
+## Customers
+
+Part of the core product (no module needed). A customer belongs to the business, not a branch, so every branch finds the same
+person. Code: `app/modules/customers`.
+
+- **Fields:** `name` (required), `phone`, `email`, `gstin`, `address`, `notes`, `is_active`. Phone numbers are stored as digits:
+  `+91 98765 43210` and `098765-43210` both become `9876543210`; other countries keep their code. **One phone number, one
+  customer per business**: a second one is refused with `409 customer_phone_taken`, whose `details` (`customer_id`, `name`,
+  `is_active`) let the app offer the existing customer instead.
+- **`GET /customers`** (owner, manager, captain, waiter, cashier; `search`, `include_inactive`, `limit`, `offset`): by name.
+  `search` matches part of a name or an exact GSTIN, or part of the phone number when it is digits. Each row carries `visits`
+  (paid bills), `total_spent` and `last_visit_at`.
+- **`POST /customers`**, **`GET /customers/{id}`**, **`PATCH /customers/{id}`** (same roles). A patch changes only the fields
+  sent; null clears one. Customers are never deleted: `is_active: false` hides one (owners and managers only).
+- **`GET /customers/{id}/bills`** (owners and managers): the customer's bills, newest first, across branches.
+- **On an order:** send `customer_id` with `POST /orders`, or set it later with **`PUT /orders/{id}/customer`**
+  (`{"customer_id": "..."}`; null takes the customer off). It works after billing too, because people ask for their name or
+  GSTIN once they see the bill. `OrderRead.customer_id` returns it. A hidden customer, or one from another business, is
+  refused with `422 customer_not_found`.
+- **On the bill:** the receipt prints `Customer:`, `Ph:` and the customer's `GSTIN:` under the cashier line. The bill reads the
+  customer from its order, so a reprint shows a later correction.
+
+Not built yet: customer credit (khata), loyalty points, sending the bill by SMS or WhatsApp, merging duplicate customers, and a
+snapshot of the buyer's GSTIN on the bill for GST returns (comes with the accountant export).
+
 ## Business name and logo on bills
 
 The business sets how its bills look (owners and managers): `GET/PATCH /business/profile` (`display_name`; null goes back to
@@ -105,6 +159,49 @@ the registered name) and `PUT/DELETE /business/logo` (a PNG or JPEG under 500 KB
 with the branch name under it; the HTML bill shows the logo at the top in black and white, and `GET
 /billing/bills/{id}/receipt` returns `logo_data_url` for printers that can print images. The text rows for line printers (the
 Pine Labs device) do not include the logo yet.
+
+## Devices and offline groundwork
+
+Phase 1 of offline billing ([pos-devices/05-offline-billing-plan.md](pos-devices/05-offline-billing-plan.md), build spec
+[06](pos-devices/06-offline-phase-1-spec.md)): the groundwork only. **Nothing bills offline yet**, and with no switch turned on
+every existing endpoint answers as before (the only new field on an existing response is `OrderRead.client_sale_id`).
+
+- **Module `offline_billing`** (depends on `pos`; the internal all-modules plan has it, other plans do not). It is switch 1 of
+  three: the business's own switch and the device's switch must also be on before a device gets a lease.
+- **Sale ids on orders.** `POST /orders` takes an optional `client_sale_id` (`^[A-Za-z0-9_-]{8,64}$`). The database keeps it
+  unique per branch: the same id sent again, by any cashier, at any time, with any items, returns the first order with `201`
+  (no new number, token or events). Two requests racing with one id also get one order. `X-Idempotency-Key` is still required
+  and works as before; without `client_sale_id` nothing changes.
+- **Devices are records.** Linking (`POST /staff/devices/link`) creates the device's record; a device linked before records
+  existed gets one on its first request. A `device_id` already used by a revoked device or by another branch is refused with
+  `409 device_id_taken`, and the setup code stays usable.
+  - `GET /staff/devices?branch_id=&include_revoked=false`: the branch's devices, newest first (owners and managers with a
+    password session; a branch the caller cannot act on is `403`).
+  - `PATCH /staff/devices/{id}` (`name`, `offline_enabled`; only the fields sent change). Switching offline on needs, in this
+    order: a device that is not revoked (`409 device_revoked`), the module (`403 module_disabled`), and a branch code of at most
+    4 characters (`422 branch_code_too_long`), because a device's bill numbers are `{CODE}{LETTER}/{FY}/{00001}`
+    (`BLR1A/2627/00001`) and GST allows 16 characters. The first time, the device is given a **series letter** `A`–`Z`: the
+    first one no device of the branch has ever had, revoked ones included (`409 no_series_left` after 26). Switching off keeps
+    the letter; it is never changed or reused.
+  - `POST /staff/devices/{id}/revoke`: cuts the device off for good (revoking again returns the record). Its token is then
+    refused with `401 device_revoked` by the sign-in roster, the print-station endpoints and the lease. To use the device again,
+    link it with a new setup code and a new `device_id`.
+  - Another business's device is `404` on patch and revoke and never listed.
+  - Requests from a device update its `last_seen_at` at most every 5 minutes.
+- **The business's switch and limits.** `GET /business/offline` (owners and managers) returns `offline_allowed` (default
+  `false`), `offline_max_hours` (24, 1–72), `offline_max_sales` (300, 1–2000), `offline_max_cash` (`"50000.00"`, above 0 and at
+  most 500000) and `module_enabled`. `PATCH /business/offline` is **owners only** and changes only the fields sent; turning
+  `offline_allowed` on without the module is `403 module_disabled`, while changing limits or turning it off is always allowed.
+  These are not part of `/me/entitlements`.
+- **The lease.** `POST /staff/devices/lease`, authenticated by `X-Device-Token` only. Refused with `403 offline_not_allowed` and
+  `details.reason`, checked in this order: `subscription_inactive` (read-only or suspended), `module_disabled` (also the
+  platform-wide kill switch), `business_disabled`, `device_disabled`. Otherwise it returns `lease` (a signed token: `typ:
+  "offline_lease"`, the device as subject, `branch_id`, `org`, `series`, `max_sales`, `max_cash`; valid for `offline_max_hours`),
+  `device_id`, `branch_id`, `series_letter`, `issued_at`, `expires_at`, `max_sales`, `max_cash` and `server_time`. Each call gives
+  a fresh lease and nothing is stored. A lease is never accepted as a login or as a device token.
+- **Known gap, unchanged in this phase:** `POST /staff/auth/pin` does not look at the device record. A revoked device cannot
+  fetch the staff list, so the app cannot reach its PIN pad, but the endpoint itself still answers anyone who sends a branch, a
+  staff id and a PIN, as before.
 
 ## Subscription billing
 

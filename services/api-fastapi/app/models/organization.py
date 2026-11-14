@@ -1,7 +1,8 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
-from sqlalchemy import DateTime, LargeBinary, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, LargeBinary, Numeric, String
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.core.enums import BusinessCategory, OrgStatus
@@ -15,6 +16,9 @@ class Organization(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __table_args__ = (
         enum_check("organizations", "status", OrgStatus),
         enum_check("organizations", "category", BusinessCategory),
+        CheckConstraint("offline_max_hours BETWEEN 1 AND 72", name="ck_organizations_offline_max_hours"),
+        CheckConstraint("offline_max_sales BETWEEN 1 AND 2000", name="ck_organizations_offline_max_sales"),
+        CheckConstraint("offline_max_cash > 0 AND offline_max_cash <= 500000", name="ck_organizations_offline_max_cash"),
     )
 
     name: Mapped[str] = mapped_column(String(150), nullable=False)
@@ -37,3 +41,10 @@ class Organization(Base, UUIDPrimaryKeyMixin, TimestampMixin):
                                           server_default=BusinessCategory.RESTAURANT.value, nullable=False)
     # Only the settings overridden for this business; everything else comes from the category preset.
     settings: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}", nullable=False)
+    # Offline billing, the business's own switch (the owner's choice) and the limits of each device's offline lease.
+    # Nothing bills offline unless the `offline_billing` module, this switch and the device's own switch are all on.
+    offline_allowed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    offline_max_hours: Mapped[int] = mapped_column(Integer, default=24, server_default="24", nullable=False)
+    offline_max_sales: Mapped[int] = mapped_column(Integer, default=300, server_default="300", nullable=False)
+    offline_max_cash: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("50000.00"),
+                                                      server_default="50000.00", nullable=False)

@@ -9,6 +9,8 @@ class ModuleKey(StrEnum):
     POS = "pos"  # orders, KOTs, billing, floor, menu and staff: the core of the product
     ANALYTICS = "analytics"  # live KPIs, sales breakdowns, Z-reports, audit log
     KDS = "kds"  # kitchen screen, ticket statuses and kitchen staff; without it the kitchen works from printed slips
+    INVENTORY = "inventory"  # stock on hand per branch, purchases, adjustments and low-stock alerts
+    OFFLINE_BILLING = "offline_billing"  # counter devices keep billing in cash while the internet is down
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,15 @@ MODULES: Dict[ModuleKey, ModuleDef] = {
     ),
     ModuleKey.ANALYTICS: ModuleDef(
         ModuleKey.ANALYTICS, "Analytics & reports", "Live KPIs, sales, Z-reports and audit log",
+        depends_on=(ModuleKey.POS,),
+    ),
+    ModuleKey.INVENTORY: ModuleDef(
+        ModuleKey.INVENTORY, "Inventory", "Stock on hand, purchases, adjustments and low-stock alerts",
+        depends_on=(ModuleKey.POS,),
+    ),
+    ModuleKey.OFFLINE_BILLING: ModuleDef(
+        ModuleKey.OFFLINE_BILLING, "Offline billing",
+        "Counter devices keep billing in cash when the internet is down, and send the sales later",
         depends_on=(ModuleKey.POS,),
     ),
 }

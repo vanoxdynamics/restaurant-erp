@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import (
-    CurrentUser, get_current_user, require_device_branch, require_roles, require_roles_by_module, resolve_branch_id,
+    CurrentUser, get_current_user, require_device, require_roles, require_roles_by_module, resolve_branch_id,
 )
 from app.core.database import get_db
 from app.core.enums import Role, ShiftStatus
@@ -15,6 +15,7 @@ from app.core.lookups import get_or_404
 from app.core.modules import ModuleKey
 from app.core.pagination import PageParams, page_params
 from app.core.redis import get_redis
+from app.models.devices import Device
 from app.models.floor import Branch
 from app.models.staff import Shift, StaffUser
 from app.modules.staff import service
@@ -72,11 +73,11 @@ async def login_with_pin(
 
 @router.get("/auth/roster", response_model=List[RosterEntry])
 async def sign_in_roster(
-    branch_id: uuid.UUID = Depends(require_device_branch),
+    device: Device = Depends(require_device),
     db: AsyncSession = Depends(get_db),
 ):
-    """Names and roles for the POS 'who is working' screen. Needs the X-Device-Token a manager issued."""
-    return await service.staff_roster(db, branch_id)
+    """Names and roles for the POS 'who is working' screen. Needs the X-Device-Token a manager issued (401 once revoked)."""
+    return await service.staff_roster(db, device.branch_id)
 
 
 @router.post("/devices/setup-codes", response_model=DeviceSetupCode, status_code=status.HTTP_201_CREATED)

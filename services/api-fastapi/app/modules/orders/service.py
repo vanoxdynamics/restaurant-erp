@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -22,12 +23,13 @@ from app.core.enums import (
     Topic,
 )
 from app.core.errors import Conflict, InvalidTransition, NotFound, ValidationFailed
-from app.core.events import commit, queue_event
+from app.core.events import commit, discard_events, queue_event
 from app.core.lookups import get_or_404
 from app.core.money import ZERO, q
 from app.core.numbering import next_daily_value, next_document_number
 from app.core.pagination import PageParams, paginate
 from app.models.catalog import MenuItem, ModifierGroup
+from app.models.customers import Customer
 from app.models.floor import Branch, DiningTable, Floor
 from app.models.kots import KOT, KOTItem
 from app.models.orders import Order, OrderItem, OrderItemModifier
@@ -200,8 +202,36 @@ async def _lock_table_for_seating(db: AsyncSession, table_id: uuid.UUID, branch_
     return table
 
 
+async def _customer_for_order(db: AsyncSession, user: CurrentUser, customer_id: Optional[uuid.UUID]) -> Optional[Customer]:
+    """The customer to put on an order: one of the caller's own business that has not been hidden."""
+    if customer_id is None:
+        return None
+    customer = await db.scalar(
+        select(Customer).where(Customer.id == customer_id, Customer.organization_id == user.organization_id)
+    )
+    if customer is None or not customer.is_active:
+        raise ValidationFailed("Customer not found", code="customer_not_found", details={"customer_id": str(customer_id)})
+    return customer
+
+
+CLIENT_SALE_INDEX = "uq_orders_branch_client_sale"
+
+
+async def _order_for_client_sale(db: AsyncSession, branch_id: uuid.UUID, client_sale_id: str) -> Optional[Order]:
+    found = await db.scalar(select(Order.id).where(Order.branch_id == branch_id, Order.client_sale_id == client_sale_id))
+    return await load_order(db, found) if found is not None else None
+
+
+def _constraint_name(exc: IntegrityError) -> Optional[str]:
+    return getattr(getattr(exc.orig, "__cause__", None), "constraint_name", None)
+
+
 async def create_order(db: AsyncSession, user: CurrentUser, payload: OrderCreate, redis_client=None) -> Order:
     branch_id = resolve_branch_id(user, payload.branch_id)
+    if payload.client_sale_id is not None:  # a sale already stored is returned as it is: no new number, token or events
+        existing = await _order_for_client_sale(db, branch_id, payload.client_sale_id)
+        if existing is not None:
+            return existing
     branch = await get_or_404(db, Branch, branch_id)
 
     token = None
@@ -215,9 +245,11 @@ async def create_order(db: AsyncSession, user: CurrentUser, payload: OrderCreate
         table = await _lock_table_for_seating(db, payload.table_id, branch.id)
         table.status = TableStatus.OCCUPIED.value
 
+    customer = await _customer_for_order(db, user, payload.customer_id)
     shift = await get_open_shift(db, user.id)
     order = Order(
         branch_id=branch.id,
+        customer_id=customer.id if customer else None,
         table_id=table.id if table else None,
         waiter_id=user.id,
         opened_by_shift_id=shift.id if shift else None,
@@ -227,12 +259,24 @@ async def create_order(db: AsyncSession, user: CurrentUser, payload: OrderCreate
         guest_count=payload.guest_count,
         notes=payload.notes,
         token_number=token,
+        client_sale_id=payload.client_sale_id,
         business_date=business_date(branch.timezone),
     )
     order.items = await _build_order_items(db, user.organization_id, payload.items)
     recompute_totals(order)
     db.add(order)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        # Another request stored the same sale between the check above and now: the first one wins.
+        if payload.client_sale_id is None or _constraint_name(exc) != CLIENT_SALE_INDEX:
+            raise
+        await db.rollback()
+        discard_events(db)
+        existing = await _order_for_client_sale(db, branch_id, payload.client_sale_id)
+        if existing is None:
+            raise
+        return existing
 
     queue_event(db, branch.id, Topic.ORDERS, "order.created", order.id, {"order_number": order.order_number})
     if table is not None:
@@ -255,6 +299,24 @@ async def update_order(db: AsyncSession, user: CurrentUser, order_id: uuid.UUID,
         setattr(order, field, value)
     queue_event(db, order.branch_id, Topic.ORDERS, "order.updated", order.id)
     await commit(db)
+    return await load_order(db, order.id)
+
+
+async def set_order_customer(db: AsyncSession, user: CurrentUser, order_id: uuid.UUID, customer_id: Optional[uuid.UUID]) -> Order:
+    """
+    Put a customer on an order, change it, or take it off. Allowed before and after billing, because people ask for their name
+    or GSTIN on the bill once they see it; the bill reads the customer from its order, so a reprint shows the change.
+    """
+    order = await load_order(db, order_id, for_update=True)
+    require_branch_access(user, order.branch_id)
+    if order.status == OrderStatus.CANCELLED.value:
+        raise InvalidTransition("Order is cancelled", details={"status": order.status})
+    customer = await _customer_for_order(db, user, customer_id)
+    new_id = customer.id if customer else None
+    if order.customer_id != new_id:
+        order.customer_id = new_id
+        queue_event(db, order.branch_id, Topic.ORDERS, "order.updated", order.id)
+        await commit(db)
     return await load_order(db, order.id)
 
 

@@ -83,3 +83,15 @@ def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
         )
     except jwt.PyJWTError:
         return None
+
+
+# A lease lets a device bill offline for a while (offline billing). It is never a login: see resolve_token.
+OFFLINE_LEASE_TYPE = "offline_lease"
+
+
+def decode_offline_lease(token: str) -> Optional[Dict[str, Any]]:
+    """The claims of a valid, unexpired offline lease; None for anything else (a device or staff token included)."""
+    payload = decode_access_token(token)
+    if payload is None or payload.get("typ") != OFFLINE_LEASE_TYPE:
+        return None
+    return payload

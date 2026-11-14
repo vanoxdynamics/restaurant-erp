@@ -17,20 +17,24 @@ Permission matrix (enforced with `require_roles` on each route):
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, FrozenSet, Iterable, Optional
 
 import redis.asyncio as aioredis
 from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.clock import utcnow
 from app.core.database import get_db, scope_session
 from app.core.entitlements import SAFE_METHODS, enforce_access, enforce_module, get_entitlements
 from app.core.enums import MANAGER_ROLES, ROLE_RANK, Role
 from app.core.errors import ApprovalRequired, Forbidden, NotFound, Unauthorized
 from app.core.redis import get_redis
 from app.core.security import DUMMY_HASH, compute_pin_lookup, decode_access_token, verify_pin
+from app.models.devices import Device
 from app.models.floor import Branch
 from app.models.staff import StaffUser
 
@@ -93,7 +97,8 @@ async def resolve_token(db: AsyncSession, token: Optional[str]) -> CurrentUser:
     if not token:
         raise Unauthorized("Missing bearer token")
     payload = decode_access_token(token)
-    if payload is None or payload.get("typ") == DEVICE_TOKEN_TYPE:
+    # Staff sessions carry no `typ`; anything typed (a device token, an offline lease) is never a login.
+    if payload is None or payload.get("typ") is not None:
         raise Unauthorized("Invalid or expired token")
     try:
         user_id = uuid.UUID(payload["sub"])
@@ -138,6 +143,55 @@ async def require_device_branch(x_device_token: Optional[str] = Header(default=N
         raise Unauthorized("This device is not linked to a branch", code="device_not_linked") from exc
 
 
+# How stale `last_seen_at` may get before a request from the device writes it again (a polling device must not write each time).
+LAST_SEEN_RESOLUTION = timedelta(minutes=5)
+
+
+def _device_not_linked() -> Unauthorized:
+    return Unauthorized("This device is not linked to a branch", code="device_not_linked")
+
+
+async def load_device(db: AsyncSession, x_device_token: Optional[str]) -> Device:
+    """
+    The record of the linked device presenting `x_device_token`, refusing a revoked one. A device linked before devices were
+    records has a valid token and no record: its record is made on its first request, the only place one is made besides
+    linking.
+    """
+    branch_id = await require_device_branch(x_device_token)
+    payload = decode_access_token(x_device_token) or {}
+    device_id = str(payload.get("sub") or "")
+    if not device_id:
+        raise _device_not_linked()
+
+    device = await db.scalar(select(Device).where(Device.device_id == device_id))
+    changed = device is None
+    if device is None:
+        if await db.get(Branch, branch_id) is None:
+            raise _device_not_linked()
+        await db.execute(
+            insert(Device).values(id=uuid.uuid4(), branch_id=branch_id, device_id=device_id)
+            .on_conflict_do_nothing(index_elements=[Device.device_id])
+        )
+        device = await db.scalar(
+            select(Device).where(Device.device_id == device_id).execution_options(populate_existing=True))
+    if device is None or device.revoked_at is not None or device.branch_id != branch_id:
+        await db.rollback()
+        raise Unauthorized("This device has been cut off; link it again with a new setup code", code="device_revoked")
+
+    now = utcnow()
+    if device.last_seen_at is None or now - device.last_seen_at > LAST_SEEN_RESOLUTION:
+        device.last_seen_at = now
+        changed = True
+    if changed:
+        await db.commit()
+    return device
+
+
+async def require_device(x_device_token: Optional[str] = Header(default=None), db: AsyncSession = Depends(get_db)) -> Device:
+    """The linked device making this request (X-Device-Token), as a record. 401 `device_revoked` once it has been cut off."""
+    return await load_device(db, x_device_token)
+
+
 async def require_print_station(
     request: Request,
     x_device_token: Optional[str] = Header(default=None),
@@ -148,14 +202,13 @@ async def require_print_station(
     The branch's counter device printing KOTs on its own (X-Device-Token), so printing carries on while no one is signed in
     on it. It acts only within its branch and organization, and only on the print-station endpoints that use this dependency.
     """
-    branch_id = await require_device_branch(x_device_token)
-    payload = decode_access_token(x_device_token) or {}
-    branch = await db.get(Branch, branch_id)
+    device = await load_device(db, x_device_token)
+    branch = await db.get(Branch, device.branch_id)
     if branch is None or not branch.is_active:
-        raise Unauthorized("This device is not linked to a branch", code="device_not_linked")
+        raise _device_not_linked()
     await scope_session(db, branch.organization_id)
     enforce_access(await get_entitlements(db, branch.organization_id, redis_client), request.method)
-    device_id = str(payload.get("sub", ""))
+    device_id = device.device_id
     return CurrentUser(
         id=uuid.uuid5(uuid.NAMESPACE_OID, f"device:{device_id}"),  # stable per device (idempotency); never stored as a person
         branch_id=branch.id,

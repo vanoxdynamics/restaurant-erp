@@ -89,6 +89,10 @@ server access, which is the point), then deactivate the old one if needed.
 **A subscriber must be cut off now (abuse, chargeback, legal).** Subscribers > the subscriber > Suspend (re-authenticate, give a
 reason). Every session is revoked and open connections are closed immediately; nothing works until you reinstate. Their data is untouched.
 
+**A device is lost or stolen.** Revoke it in Staff > Devices (API: `POST /staff/devices/{id}/revoke`). Its token stops working at
+once for the sign-in list, KOT printing and the offline lease. It cannot be undone; a recovered device is linked again with a new
+setup code.
+
 **A module is misbehaving for everyone.** Modules > switch it off platform-wide. With `PLATFORM_FOUR_EYES=true` this needs a second super
 admin's approval (or runs immediately if you are the only one, which raises `approval.unavailable`). Subscribers lose it on their next request.
 

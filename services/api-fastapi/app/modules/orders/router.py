@@ -14,6 +14,7 @@ from app.core.pagination import PageParams, page_params
 from app.core.redis import get_redis
 from app.modules.orders import service
 from app.schemas.common import Page
+from app.schemas.customers import OrderCustomerSet
 from app.schemas.orders import (
     OrderCancelRequest,
     OrderCreate,
@@ -92,6 +93,20 @@ async def update_order(
     Fails with HTTP 409 if the version has changed in the meantime.
     """
     return await service.update_order(db, user, order_id, payload)
+
+
+@router.put("/{order_id}/customer", response_model=OrderRead)
+async def set_order_customer(
+    order_id: uuid.UUID,
+    payload: OrderCustomerSet,
+    user: CurrentUser = Depends(order_roles),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Put a customer on the order (or take them off with `customer_id: null`). Works after billing too: the printed bill shows
+    the customer's name, phone and GSTIN.
+    """
+    return await service.set_order_customer(db, user, order_id, payload.customer_id)
 
 
 @router.post("/{order_id}/items", response_model=OrderRead)

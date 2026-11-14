@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import redis.asyncio as aioredis
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +41,7 @@ from app.core.security import (
     verify_pin,
 )
 from app.models.billing import Bill, Payment
+from app.models.devices import Device
 from app.models.floor import Branch
 from app.models.staff import Shift, StaffUser
 from app.schemas.staff import (
@@ -157,12 +159,34 @@ async def link_device(
     limiter = LoginRateLimiter(redis_client, scope="device-setup", key=client_ip)
     await limiter.check()
 
-    branch_id = await redis_client.getdel(_setup_code_key(payload.code))  # atomic: one use only
+    key = _setup_code_key(payload.code)
+    branch_id = await redis_client.get(key)
     if branch_id is None:
         await limiter.record_failure()
         raise Unauthorized("That setup code is wrong or has expired", code="invalid_setup_code")
 
     branch = await get_or_404(db, Branch, uuid.UUID(branch_id))
+    # The device id names the device's record. One already used by a revoked device or another branch cannot be linked
+    # again; the code is left usable, so the device can try again with a fresh id.
+    device = await db.scalar(select(Device).where(Device.device_id == payload.device_id))
+    if device is not None and (device.revoked_at is not None or device.branch_id != branch.id):
+        raise Conflict("This device id is already in use; link the device with a new id", code="device_id_taken")
+
+    if await redis_client.getdel(key) != branch_id:  # atomic: one use only (another request may have just used it)
+        await limiter.record_failure()
+        raise Unauthorized("That setup code is wrong or has expired", code="invalid_setup_code")
+    if device is None:
+        await db.execute(
+            insert(Device).values(id=uuid.uuid4(), branch_id=branch.id, device_id=payload.device_id)
+            .on_conflict_do_nothing(index_elements=[Device.device_id])
+        )
+        device = await db.scalar(
+            select(Device).where(Device.device_id == payload.device_id).execution_options(populate_existing=True))
+        if device is None or device.revoked_at is not None or device.branch_id != branch.id:
+            await db.rollback()
+            raise Conflict("This device id is already in use; link the device with a new id", code="device_id_taken")
+        await commit(db)
+
     token = create_access_token(
         payload.device_id,
         claims={"typ": DEVICE_TOKEN_TYPE, "branch_id": str(branch.id)},

@@ -56,6 +56,10 @@ class OrderCreate(BaseModel):
     order_type: OrderType = OrderType.DINE_IN
     guest_count: int = Field(default=1, ge=1, le=100)
     notes: Notes = None
+    customer_id: Optional[uuid.UUID] = None  # a customer of the business; can also be set later (PUT /orders/{id}/customer)
+    # The device's own id for this sale. Sending the same id again in the same branch, by anyone and at any time, returns the
+    # first order unchanged instead of making a second one.
+    client_sale_id: Optional[str] = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,64}$")
     items: List[OrderItemCreate] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="after")
@@ -94,12 +98,14 @@ class OrderRead(BaseModel):
     branch_id: uuid.UUID
     table_id: Optional[uuid.UUID] = None
     waiter_id: Optional[uuid.UUID] = None
+    customer_id: Optional[uuid.UUID] = None
     order_number: str
     order_type: OrderType
     status: OrderStatus
     guest_count: int
     notes: Optional[str] = None
     token_number: Optional[int] = None
+    client_sale_id: Optional[str] = None
     business_date: date
     subtotal: Decimal = Field(description="Sum of non-cancelled line totals, before tax.")
     total_amount: Decimal = Field(description="Pre-tax running total; tax is computed on the bill.")

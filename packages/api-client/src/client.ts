@@ -47,12 +47,25 @@ import {
   MenuItemUpdate,
   MenuItemCreate,
   ItemImportResult,
+  Customer,
+  CustomerBill,
+  CustomerInput,
+  StockAdjustment,
+  StockItem,
+  StockMovement,
+  StockPurchase,
+  StockPurchaseInput,
+  StockSettings,
   RESTAURANT_SETTINGS,
   PaymentBreakdown,
   ShiftClosureAudit,
   RosterEntry,
+  Device,
   DeviceLink,
   DeviceSetupCode,
+  OfflineLease,
+  OfflineSettings,
+  OfflineSettingsUpdate,
   StaffUser,
   TopSellingItem,
   VoidApprovalItem,
@@ -322,12 +335,65 @@ function adaptOrder(raw: Raw): OrderDetail {
     token_number: raw.token_number ?? undefined,
     status: raw.status,
     table_id: raw.table_id ?? undefined,
+    customer_id: raw.customer_id ?? undefined,
+    client_sale_id: raw.client_sale_id ?? undefined,
     guest_count: raw.guest_count,
     version: raw.version,
     subtotal_paise: toPaise(raw.subtotal),
     created_at: raw.created_at,
     lines: (raw.items ?? []).map(adaptOrderLine),
   };
+}
+
+function adaptDevice(raw: Raw): Device {
+  return {
+    id: raw.id,
+    branch_id: raw.branch_id,
+    device_id: raw.device_id,
+    name: raw.name ?? undefined,
+    offline_enabled: raw.offline_enabled,
+    series_letter: raw.series_letter ?? undefined,
+    last_seen_at: raw.last_seen_at ?? undefined,
+    revoked_at: raw.revoked_at ?? undefined,
+    revoked_by_id: raw.revoked_by_id ?? undefined,
+    created_at: raw.created_at,
+  };
+}
+
+function adaptOfflineSettings(raw: Raw): OfflineSettings {
+  return {
+    offline_allowed: raw.offline_allowed,
+    offline_max_hours: raw.offline_max_hours,
+    offline_max_sales: raw.offline_max_sales,
+    offline_max_cash_paise: toPaise(raw.offline_max_cash),
+    module_enabled: raw.module_enabled,
+  };
+}
+
+function adaptCustomer(raw: Raw): Customer {
+  return {
+    id: raw.id,
+    name: raw.name,
+    phone: raw.phone ?? undefined,
+    email: raw.email ?? undefined,
+    gstin: raw.gstin ?? undefined,
+    address: raw.address ?? undefined,
+    notes: raw.notes ?? undefined,
+    is_active: raw.is_active,
+    visits: raw.visits ?? 0,
+    total_spent_paise: toPaise(raw.total_spent),
+    last_visit_at: raw.last_visit_at ?? undefined,
+    created_at: raw.created_at,
+  };
+}
+
+/** Empty text boxes are sent as null, which clears the field on an update and is ignored on a new customer. */
+function customerBody(input: Partial<CustomerInput>): Raw {
+  const body: Raw = {};
+  for (const key of ['name', 'phone', 'email', 'gstin', 'address', 'notes'] as const) {
+    if (input[key] !== undefined) body[key] = input[key]!.trim() || null;
+  }
+  return body;
 }
 
 function adaptTicket(raw: Raw): KitchenTicket {
@@ -531,6 +597,47 @@ export function newIdempotencyKey(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
+function adaptStockItem(raw: Raw): StockItem {
+  return {
+    item_id: raw.item_id,
+    name: raw.name,
+    category_id: raw.category_id,
+    category_name: raw.category_name,
+    unit: raw.unit,
+    sku: raw.sku ?? undefined,
+    barcode: raw.barcode ?? undefined,
+    quantity: Number(raw.quantity),
+    low_stock_level: raw.low_stock_level != null ? Number(raw.low_stock_level) : undefined,
+    is_low: raw.is_low,
+    is_out: raw.is_out,
+    is_tracked: raw.is_tracked,
+    cost_price_paise: raw.cost_price != null ? toPaise(raw.cost_price) : undefined,
+    stock_value_paise: raw.stock_value != null ? toPaise(raw.stock_value) : undefined,
+    updated_at: raw.updated_at,
+  };
+}
+
+function adaptStockPurchase(raw: Raw): StockPurchase {
+  return {
+    id: raw.id,
+    supplier_name: raw.supplier_name ?? undefined,
+    invoice_number: raw.invoice_number ?? undefined,
+    received_on: raw.received_on,
+    notes: raw.notes ?? undefined,
+    total_cost_paise: toPaise(raw.total_cost),
+    created_by: raw.created_by ?? undefined,
+    created_at: raw.created_at,
+    lines: (raw.lines ?? []).map((l: Raw) => ({
+      item_id: l.item_id,
+      name: l.name,
+      unit: l.unit,
+      quantity: Number(l.quantity),
+      unit_cost_paise: l.unit_cost != null ? toPaise(l.unit_cost) : undefined,
+      line_cost_paise: l.line_cost != null ? toPaise(l.line_cost) : undefined,
+    })),
+  };
+}
+
 export class RestaurantApiClient {
   private baseUrl: string;
   private token?: string;
@@ -649,6 +756,44 @@ export class RestaurantApiClient {
   /** A new tablet trades its setup code for a device token. No sign-in is involved. */
   async linkDevice(code: string, deviceId: string): Promise<DeviceLink> {
     return this.request<DeviceLink>('POST', '/staff/devices/link', { body: { code, device_id: deviceId } });
+  }
+
+  /** Owners and managers (password session): the branch's linked devices, newest first. */
+  async listDevices(branchId?: string, includeRevoked = false): Promise<Device[]> {
+    const rows = await this.request<Raw[]>('GET', '/staff/devices', {
+      query: { branch_id: branchId, include_revoked: includeRevoked ? 'true' : undefined },
+    });
+    return rows.map(adaptDevice);
+  }
+
+  /** Name a device or switch offline billing on or off for it; only the fields given change. */
+  async updateDevice(id: string, changes: { name?: string | null; offline_enabled?: boolean }): Promise<Device> {
+    return adaptDevice(await this.request<Raw>('PATCH', `/staff/devices/${id}`, { body: changes }));
+  }
+
+  /** Cut a lost or stolen device off. Final: it is linked again with a new setup code. */
+  async revokeDevice(id: string): Promise<Device> {
+    return adaptDevice(await this.request<Raw>('POST', `/staff/devices/${id}/revoke`));
+  }
+
+  /** The device's permission to bill offline for a while. Sent with the device token only, no staff session. */
+  async getOfflineLease(deviceToken: string): Promise<OfflineLease> {
+    const raw = await this.request<Raw>('POST', '/staff/devices/lease', {
+      headers: { 'X-Device-Token': deviceToken },
+      anonymous: true,
+      timeoutMs: 10000,
+    });
+    return {
+      lease: raw.lease,
+      device_id: raw.device_id,
+      branch_id: raw.branch_id,
+      series_letter: raw.series_letter,
+      issued_at: raw.issued_at,
+      expires_at: raw.expires_at,
+      max_sales: raw.max_sales,
+      max_cash_paise: toPaise(raw.max_cash),
+      server_time: raw.server_time,
+    };
   }
 
   /** Staff who can sign in at this branch's tablets, before anyone is signed in. */
@@ -772,6 +917,72 @@ export class RestaurantApiClient {
     return this.request<ItemImportResult>('POST', '/retail/items/import', { body: { csv, dry_run: dryRun }, timeoutMs: 120000 });
   }
 
+  // ---- Inventory (the `inventory` module) ---------------------------------------------
+
+  /** Stock on hand for the branch's tracked items. */
+  async getStock(branchId: string, options: { lowOnly?: boolean } = {}): Promise<StockItem[]> {
+    const rows = await this.request<Raw[]>('GET', '/inventory/stock', {
+      query: { branch_id: branchId, low_only: options.lowOnly ? 'true' : undefined },
+    });
+    return rows.map(adaptStockItem);
+  }
+
+  /** Start or stop tracking an item in a branch, and set its low-stock level and cost price. */
+  async updateStockSettings(branchId: string, itemId: string, settings: StockSettings): Promise<StockItem> {
+    const body: Raw = { branch_id: branchId };
+    if (settings.is_tracked !== undefined) body.is_tracked = settings.is_tracked;
+    if (settings.low_stock_level !== undefined) body.low_stock_level = settings.low_stock_level;
+    if (settings.cost_price_paise !== undefined) body.cost_price = toRupees(settings.cost_price_paise);
+    return adaptStockItem(await this.request<Raw>('PUT', `/inventory/stock/${itemId}`, { body }));
+  }
+
+  /** Record a delivery from a supplier. Pass the same `idempotencyKey` when retrying so it is not received twice. */
+  async receiveStock(branchId: string, purchase: StockPurchaseInput, idempotencyKey?: string): Promise<StockPurchase> {
+    return adaptStockPurchase(
+      await this.request<Raw>('POST', '/inventory/purchases', {
+        idempotent: idempotencyKey ?? true,
+        body: {
+          branch_id: branchId,
+          supplier_name: purchase.supplier_name?.trim() || undefined,
+          invoice_number: purchase.invoice_number?.trim() || undefined,
+          notes: purchase.notes?.trim() || undefined,
+          lines: purchase.lines.map((l) => ({
+            item_id: l.item_id,
+            quantity: l.quantity,
+            unit_cost: l.unit_cost_paise !== undefined ? toRupees(l.unit_cost_paise) : undefined,
+          })),
+        },
+      }),
+    );
+  }
+
+  async getStockPurchases(branchId: string, limit = 30): Promise<StockPurchase[]> {
+    const page = await this.request<Page<Raw>>('GET', '/inventory/purchases', { query: { branch_id: branchId, limit } });
+    return page.items.map(adaptStockPurchase);
+  }
+
+  /** Correct stock by hand: add or remove (`delta`), or set it to a physical count (`counted`). */
+  async adjustStock(branchId: string, adjustment: StockAdjustment, idempotencyKey?: string): Promise<StockItem> {
+    return adaptStockItem(
+      await this.request<Raw>('POST', '/inventory/adjustments', {
+        idempotent: idempotencyKey ?? true,
+        body: { branch_id: branchId, ...adjustment },
+      }),
+    );
+  }
+
+  /** The stock ledger, newest first, optionally for one item. */
+  async getStockMovements(branchId: string, itemId?: string, limit = 50): Promise<StockMovement[]> {
+    const page = await this.request<Page<Raw>>('GET', '/inventory/movements', {
+      query: { branch_id: branchId, item_id: itemId, limit },
+    });
+    return page.items.map((m) => ({
+      id: m.id, item_id: m.item_id, name: m.name, unit: m.unit, kind: m.kind, quantity: Number(m.quantity),
+      balance_after: Number(m.balance_after), reason: m.reason ?? undefined, created_by: m.created_by ?? undefined,
+      created_at: m.created_at,
+    }));
+  }
+
   async updateMenuItem(itemId: string, changes: MenuItemUpdate): Promise<MenuItem> {
     const body: Raw = {};
     if (changes.name !== undefined) body.name = changes.name;
@@ -869,9 +1080,12 @@ export class RestaurantApiClient {
     tableId?: string;
     orderType: 'dine_in' | 'takeaway' | 'counter_sale';
     guestCount: number;
+    customerId?: string;
     /** Lines to add straight away (a quick sale is created with its whole cart). */
     items?: CartLine[];
     idempotencyKey?: string;
+    /** The device's own id for the sale (8-64 of A-Z a-z 0-9 _ -): sent again, it returns the first order. */
+    clientSaleId?: string;
   }): Promise<OrderDetail> {
     return adaptOrder(
       await this.request<Raw>('POST', '/orders', {
@@ -880,10 +1094,56 @@ export class RestaurantApiClient {
           order_type: input.orderType,
           table_id: input.orderType === 'dine_in' ? input.tableId : undefined,
           guest_count: input.guestCount,
+          customer_id: input.customerId,
+          client_sale_id: input.clientSaleId,
           items: (input.items ?? []).map(cartToApi),
         },
       }),
     );
+  }
+
+  /** Put a customer on an order, or take them off with `null`. Works after billing too; the printed bill shows them. */
+  async setOrderCustomer(orderId: string, customerId: string | null): Promise<OrderDetail> {
+    return adaptOrder(await this.request<Raw>('PUT', `/orders/${orderId}/customer`, { body: { customer_id: customerId } }));
+  }
+
+  // ---- Customers --------------------------------------------------------------------------
+
+  /** Customers by name; `search` matches part of a name, or part of a phone number when it is digits. */
+  async getCustomers(options: { search?: string; includeInactive?: boolean; limit?: number } = {}): Promise<Customer[]> {
+    const page = await this.request<Page<Raw>>('GET', '/customers', {
+      query: { search: options.search?.trim(), include_inactive: options.includeInactive ? 'true' : undefined, limit: options.limit ?? 50 },
+    });
+    return page.items.map(adaptCustomer);
+  }
+
+  async getCustomer(customerId: string): Promise<Customer> {
+    return adaptCustomer(await this.request<Raw>('GET', `/customers/${customerId}`));
+  }
+
+  /** Refused with `customer_phone_taken` when the number is already someone's; `details.customer_id` is that customer. */
+  async createCustomer(input: CustomerInput): Promise<Customer> {
+    return adaptCustomer(await this.request<Raw>('POST', '/customers', { body: customerBody(input) }));
+  }
+
+  async updateCustomer(customerId: string, changes: Partial<CustomerInput> & { is_active?: boolean }): Promise<Customer> {
+    const body = customerBody(changes);
+    if (changes.is_active !== undefined) body.is_active = changes.is_active;
+    return adaptCustomer(await this.request<Raw>('PATCH', `/customers/${customerId}`, { body }));
+  }
+
+  /** A customer's bills, newest first (owners and managers). */
+  async getCustomerBills(customerId: string, limit = 30): Promise<CustomerBill[]> {
+    const page = await this.request<Page<Raw>>('GET', `/customers/${customerId}/bills`, { query: { limit } });
+    return page.items.map((b) => ({
+      id: b.id,
+      order_id: b.order_id,
+      bill_number: b.bill_number,
+      business_date: b.business_date,
+      grand_total_paise: toPaise(b.grand_total),
+      status: b.status,
+      created_at: b.created_at,
+    }));
   }
 
   async getOrder(orderId: string): Promise<OrderDetail> {
@@ -1005,6 +1265,22 @@ export class RestaurantApiClient {
 
   async removeBusinessLogo(): Promise<BusinessProfile> {
     return adaptProfile(await this.request<Raw>('DELETE', '/business/logo'));
+  }
+
+  /** Owners and managers: the business's offline billing switch and lease limits. */
+  async getOfflineSettings(): Promise<OfflineSettings> {
+    return adaptOfflineSettings(await this.request<Raw>('GET', '/business/offline'));
+  }
+
+  /** Owners only. Turning offline billing on needs the `offline_billing` module. */
+  async updateOfflineSettings(changes: OfflineSettingsUpdate): Promise<OfflineSettings> {
+    const body: Raw = {
+      offline_allowed: changes.offline_allowed,
+      offline_max_hours: changes.offline_max_hours,
+      offline_max_sales: changes.offline_max_sales,
+      offline_max_cash: changes.offline_max_cash_paise === undefined ? undefined : toRupees(changes.offline_max_cash_paise),
+    };
+    return adaptOfflineSettings(await this.request<Raw>('PATCH', '/business/offline', { body }));
   }
 
   /** The branch's cash day (see CashDay). */

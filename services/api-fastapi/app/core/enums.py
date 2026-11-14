@@ -101,6 +101,14 @@ class ItemUnit(StrEnum):
     ML = "ml"
 
 
+class StockMovementKind(StrEnum):
+    """Why an item's stock changed. Every change is one row in the stock ledger."""
+    PURCHASE = "purchase"  # stock received from a supplier
+    SALE = "sale"  # sold on a paid bill
+    ADJUSTMENT = "adjustment"  # added or removed by hand (damage, expiry, theft, a correction)
+    COUNT = "count"  # a physical count replaced the quantity on record
+
+
 class OrderItemStatus(StrEnum):
     ORDERED = "ordered"
     FIRED = "fired"

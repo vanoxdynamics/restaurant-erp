@@ -2,58 +2,58 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "admin-web",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd apps\\admin-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_API_URL=http://127.0.0.1:8000&& npx expo start --web --port 8090 --clear"],
-      "port": 8090
-    },
-    {
-      "name": "pos-web",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_API_URL=http://127.0.0.1:8000&& npx expo start --web --port 8091 --clear"],
-      "port": 8091
-    },
-    {
       "name": "api",
       "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd services\\api-fastapi && set ALLOWED_ORIGINS=http://localhost:8090,http://localhost:8091,http://localhost:8092,http://localhost:8081&& venv\\Scripts\\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000"],
-      "port": 8000
+      "runtimeArgs": [
+        "/c",
+        "cd services\\api-fastapi && venv\\Scripts\\python -m uvicorn app.main:app --host 127.0.0.1 --port 8010"
+      ],
+      "port": 8010
     },
     {
-      "name": "pos-web-billing",
+      "name": "pos-counter",
       "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_API_URL=http://127.0.0.1:8000&& npx expo start --web --port 8092 --clear"],
-      "port": 8092
+      "runtimeArgs": [
+        "/c",
+        "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_APP_VARIANT=counter&& set EXPO_PUBLIC_PINELABS_SIMULATOR=1&& set EXPO_PUBLIC_API_URL=http://localhost:8010&& npx expo start --web --port 8093 --clear"
+      ],
+      "port": 8093
+    },
+    {
+      "name": "pos-waiter",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_APP_VARIANT=waiter&& set EXPO_PUBLIC_API_URL=http://localhost:8010&& npx expo start --web --port 8094 --clear"
+      ],
+      "port": 8094
+    },
+    {
+      "name": "pos-retail",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_APP_VARIANT=retail&& set EXPO_PUBLIC_PINELABS_SIMULATOR=1&& set EXPO_PUBLIC_API_URL=http://localhost:8010&& npx expo start --web --port 8095 --clear"
+      ],
+      "port": 8095
+    },
+    {
+      "name": "admin-web",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd apps\\admin-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_API_URL=http://localhost:8010&& npx expo start --web --port 8090 --clear"
+      ],
+      "port": 8090
     },
     {
       "name": "platform-console",
       "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd apps\\platform-console && set VITE_API_TARGET=http://127.0.0.1:8010&& npx vite --host 127.0.0.1"],
+      "runtimeArgs": [
+        "/c",
+        "cd apps\\platform-console && set VITE_API_TARGET=http://127.0.0.1:8010&& npx vite --host 127.0.0.1"
+      ],
       "port": 5180
-    },
-    {
-      "name": "platform-api-demo",
-      "runtimeExecutable": "C:\\Users\\arsha\\restaurant-erp\\services\\api-fastapi\\venv\\Scripts\\python.exe",
-      "runtimeArgs": ["C:\\Users\\arsha\\AppData\\Local\\Temp\\claude\\C--Users-arsha-restaurant-erp\\fb33fe48-54de-4854-b5f6-244b194fb06f\\scratchpad\\demo_api.py"],
-      "port": 8010
-    },
-    {
-      "name": "pos-api-demo",
-      "runtimeExecutable": "C:\\Users\\arsha\\restaurant-erp\\services\\api-fastapi\\venv\\Scripts\\python.exe",
-      "runtimeArgs": ["C:\\Users\\arsha\\AppData\\Local\\Temp\\claude\\C--Users-arsha--claude-spares-spare-c1Ive8\\94fcea91-d70f-4641-8581-a68cefa7f0de\\scratchpad\\pos_demo_api.py"],
-      "port": 8000
-    },
-    {
-      "name": "pos-web-counter-sim",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_APP_VARIANT=counter&& set EXPO_PUBLIC_PINELABS_SIMULATOR=1&& set EXPO_PUBLIC_API_URL=http://127.0.0.1:8000&& npx expo start --web --port 8093 --clear"],
-      "port": 8093
-    },
-    {
-      "name": "pos-web-waiter",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_APP_VARIANT=waiter&& set EXPO_PUBLIC_API_URL=http://127.0.0.1:8000&& npx expo start --web --port 8094 --clear"],
-      "port": 8094
     }
   ]
 }

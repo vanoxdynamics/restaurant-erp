@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { Button, colors, fonts, Modal, radii, spacing, typography } from '@repo/shared-ui';
 import { formatPaiseToRupees } from '@repo/shared-utils';
-import { ApiError, apiClient, CartLine, MenuItem, newIdempotencyKey, useCatalog, useCreateOrder, useOpenTakeaways } from '@repo/api-client';
+import { ApiError, apiClient, CartLine, MenuItem, newIdempotencyKey, useCatalog, useCreateOrder, useEntitlements, useOpenTakeaways, useStock } from '@repo/api-client';
 import { formatQuantity, roundQuantity, useBusiness } from '../business';
 import { Icon } from '../components/Icon';
 import { CashDayBanner, cashButtonLabel, useCounterCashDay } from '../components/CashDayBanner';
@@ -49,6 +49,11 @@ export const QuickSaleScreen: React.FC<QuickSaleProps> = ({ onBill, onOpenBills,
   const device = useDeviceStore((s) => s.device)!;
   const { settings, words } = useBusiness();
   const catalogQuery = useCatalog();
+  // With the inventory module, tiles show what is left of tracked items. It informs, it never blocks: the count on record can
+  // be behind the shelf, and the customer is standing there with the goods.
+  const hasInventory = !!useEntitlements().data?.modules.includes('inventory');
+  const stockQuery = useStock(device.branchId, hasInventory);
+  const stockByItem = useMemo(() => new Map((stockQuery.data ?? []).map((s) => [s.item_id, s])), [stockQuery.data]);
   const openQuery = useOpenTakeaways(device.branchId);
   const createOrder = useCreateOrder();
   const failedPrints = usePrintQueueStore((s) => s.jobs.filter((j) => j.state === 'failed').length);
@@ -275,13 +280,15 @@ export const QuickSaleScreen: React.FC<QuickSaleProps> = ({ onBill, onOpenBills,
                 const weighed = item.sold_by_weight && settings.weighed_items;
                 const price = item.variants.length ? Math.min(...item.variants.map((v) => v.price_paise)) : item.base_price_paise;
                 const inCart = cart.filter((l) => l.item_id === item.id).reduce((n, l) => n + (weighed ? 1 : l.quantity), 0);
+                const stock = hasInventory && !soldOut ? stockByItem.get(item.id) : undefined;
+                const stockText = !stock ? null : stock.is_out ? 'Out of stock' : `${formatQuantity(stock.quantity, item.unit)} left`;
                 return (
                   <Pressable
                     key={item.id}
                     onPress={() => pick(item)}
                     disabled={soldOut}
                     accessibilityRole="button"
-                    accessibilityLabel={soldOut ? `${item.name}, sold out` : `Add ${item.name}`}
+                    accessibilityLabel={soldOut ? `${item.name}, sold out` : `Add ${item.name}${stockText ? `, ${stockText}` : ''}`}
                     style={({ pressed }) => [styles.tile, inCart ? styles.tilePicked : null, soldOut ? styles.tileSoldOut : null, pressed ? styles.tilePicked : null]}
                   >
                     <Text style={[styles.tileName, soldOut ? { color: colors.textMuted } : null]} numberOfLines={2}>
@@ -295,6 +302,11 @@ export const QuickSaleScreen: React.FC<QuickSaleProps> = ({ onBill, onOpenBills,
                       </Text>
                       {inCart ? <Text style={styles.tileCount}>{weighed ? '✓' : inCart}</Text> : null}
                     </View>
+                    {stockText ? (
+                      <Text style={[styles.tileStock, stock?.is_out ? { color: colors.danger } : stock?.is_low ? { color: colors.warning } : null]}>
+                        {stockText}
+                      </Text>
+                    ) : null}
                   </Pressable>
                 );
               })}
@@ -378,6 +390,7 @@ const styles = StyleSheet.create({
   tileName: { ...typography.bodyBold, color: colors.text },
   tileFoot: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing.xs },
   tilePrice: { ...typography.caption, color: colors.textSecondary },
+  tileStock: { ...typography.label, color: colors.textMuted, marginTop: 2 },
   tileCount: { ...typography.caption, color: colors.primary, fontFamily: fonts.bold },
   side: { width: 380, borderLeftWidth: 1, borderLeftColor: colors.surfaceBorder, backgroundColor: colors.surface },
   cart: { flex: 1, padding: spacing.lg, gap: spacing.md },

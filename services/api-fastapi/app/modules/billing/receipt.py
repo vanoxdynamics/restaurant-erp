@@ -60,6 +60,9 @@ class Receipt:
     token: Optional[int] = None
     business_name: Optional[str] = None  # the business's own name for bills; the branch name prints under it
     logo_data_url: Optional[str] = None  # printed above everything on the HTML bill
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_gstin: Optional[str] = None  # a business buyer's GSTIN, needed on their copy to claim input credit
 
 
 def money(amount: Decimal) -> str:
@@ -99,6 +102,13 @@ def receipt_rows(receipt: Receipt, paper_mm: int = 80) -> List[PrintRow]:
     rows += [("normal", "left", t) for t in wrap(f"Order: {clean(receipt.order_number)}", width)]
     if receipt.cashier:
         rows += [("normal", "left", t) for t in wrap(f"Cashier: {clean(receipt.cashier)}", width)]
+    if receipt.customer_name:
+        rows.append(rule)
+        rows += [("normal", "left", t) for t in wrap(f"Customer: {clean(receipt.customer_name)}", width, rest="    ")]
+        if receipt.customer_phone:
+            rows += [("normal", "left", t) for t in wrap(f"Ph: {clean(receipt.customer_phone)}", width)]
+        if receipt.customer_gstin:
+            rows += [("normal", "left", t) for t in wrap(f"GSTIN: {clean(receipt.customer_gstin)}", width)]
     rows.append(rule)
 
     for line in receipt.lines:

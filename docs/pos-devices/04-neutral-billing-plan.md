@@ -7,7 +7,10 @@ Draft for review, 2026-11-05. Builds on [01-counter-app-plan.md](01-counter-app-
 item fields, counter sales with tokens, billing without KOT (and auto-KOT for cafés), neutral receipts, the quick-sale screen
 with keyboard-scanner support and weight entry, barcode lookup, CSV import in the admin app, and the category picker and
 per-setting overrides in the console. Not done: the Pine Labs camera scan (call 1009, needs a device to test), the app
-rename and new package/UAT key (D1, needs your decision and a new signing key), returns (phase 6) and inventory (phase 7).
+rename and new package/UAT key (D1, needs your decision and a new signing key) and returns (phase 6).
+
+**Update (2026-11-12).** Phase 7, the inventory module, is built: stock on hand per branch, deliveries, adjustments and counts,
+low-stock alerts, and paid bills taking tracked items out of stock. See [api.md](../api.md#inventory).
 API details: [api.md](../api.md#business-categories-and-shops).
 
 **Goal.** The app on the Pine Labs device becomes a general billing app. Each business picks a **category** (restaurant, café,

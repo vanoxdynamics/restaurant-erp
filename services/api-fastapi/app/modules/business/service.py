@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
 from app.core.clock import utcnow
-from app.core.errors import NotFound, ValidationFailed
+from app.core.errors import Forbidden, NotFound, ValidationFailed
 from app.core.events import commit
 from app.models.organization import Organization
 
@@ -72,3 +72,26 @@ async def set_logo(db: AsyncSession, org_id, image_base64: Optional[str]) -> dic
     await db.execute(update(Organization).where(Organization.id == org_id).values(**values))
     await commit(db)
     return profile(await load_with_logo(db, org_id))
+
+
+# --- offline billing: the business's own switch and the lease limits ----------------------------------------------------------
+
+OFFLINE_FIELDS = ("offline_allowed", "offline_max_hours", "offline_max_sales", "offline_max_cash")
+
+
+def offline_settings(org: Organization, module_enabled: bool) -> dict:
+    return {**{name: getattr(org, name) for name in OFFLINE_FIELDS}, "module_enabled": module_enabled}
+
+
+async def update_offline_settings(db: AsyncSession, org_id, changes: dict, module_enabled: bool) -> dict:
+    """Turning offline billing on needs the module; changing the limits or turning it off is always allowed."""
+    if changes.get("offline_allowed") and not module_enabled:
+        raise Forbidden("Offline billing is not part of your subscription", code="module_disabled",
+                        details={"module": "offline_billing"})
+    if changes:
+        await db.execute(update(Organization).where(Organization.id == org_id).values(**changes))
+        await commit(db)
+    org = await db.scalar(select(Organization).where(Organization.id == org_id).execution_options(populate_existing=True))
+    if org is None:
+        raise NotFound("Organization not found")
+    return offline_settings(org, module_enabled)

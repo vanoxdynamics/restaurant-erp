@@ -11,15 +11,18 @@ import {
   toPaise,
   toRupees,
   useCompleteTerminalPayment,
+  useCustomer,
   useGenerateBill,
   useOrder,
   useOrderBill,
   useRecordPayment,
   useReverseTerminalPayment,
+  useSetOrderCustomer,
   useStartTerminalPayment,
 } from '@repo/api-client';
 import { useBusiness } from '../business';
 import { Choice } from '../components/Choice';
+import { CustomerSheet, customerSummary } from '../components/CustomerSheet';
 import { QueryState } from '../components/QueryState';
 import { TopBar } from '../components/TopBar';
 import { printerKind } from '../device';
@@ -83,6 +86,9 @@ export const BillScreen: React.FC<BillScreenProps> = ({ orderId, title, onBack, 
 
   const order = orderQuery.data;
   const bill = billQuery.data ?? undefined;
+  const customer = useCustomer(order?.customer_id).data;
+  const setCustomer = useSetOrderCustomer();
+  const [customerOpen, setCustomerOpen] = useState(false);
   const balance = bill?.balance_due_paise ?? 0;
   const payable = bill?.status === 'unpaid' || bill?.status === 'partially_paid';
   const pending = (bill?.payments ?? []).filter((p) => p.status === 'pending');
@@ -300,6 +306,17 @@ export const BillScreen: React.FC<BillScreenProps> = ({ orderId, title, onBack, 
     }
   };
 
+  const pickCustomer = async (picked: { id: string } | null) => {
+    setError(null);
+    try {
+      await setCustomer.mutateAsync({ orderId, customerId: picked?.id ?? null });
+      setCustomerOpen(false);
+    } catch (e) {
+      setCustomerOpen(false);
+      setError(errorText(e));
+    }
+  };
+
   const reversible = (p: BillPayment) =>
     onTerminal && p.status === 'success' && p.provider !== 'manual' && !!p.terminal?.InvoiceNumber && bill?.status !== 'voided';
 
@@ -311,6 +328,25 @@ export const BillScreen: React.FC<BillScreenProps> = ({ orderId, title, onBack, 
           {error ? <Text style={styles.error}>{error}</Text> : null}
           {notice ? <Text style={styles.notice}>{notice}</Text> : null}
           {busy ? <Text style={styles.busy}>{busy}</Text> : null}
+
+          {order && order.status !== 'cancelled' ? (
+            <View style={[styles.card, styles.customerCard]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sectionTitle} numberOfLines={1}>
+                  {order.customer_id ? customer?.name ?? 'Customer' : 'Customer'}
+                </Text>
+                <Text style={styles.hint} numberOfLines={1}>
+                  {order.customer_id ? (customer ? customerSummary(customer) : ' ') : 'Add a name, phone or GSTIN to the bill'}
+                </Text>
+              </View>
+              <Button
+                title={order.customer_id ? 'Change' : 'Add customer'}
+                variant="secondary"
+                size="sm"
+                onPress={() => setCustomerOpen(true)}
+              />
+            </View>
+          ) : null}
 
           {!bill ? (
             <View style={styles.card}>
@@ -471,6 +507,13 @@ export const BillScreen: React.FC<BillScreenProps> = ({ orderId, title, onBack, 
         onClose={() => setReversing(null)}
         onSubmit={reversePayment}
       />
+      <CustomerSheet
+        visible={customerOpen}
+        current={order?.customer_id ? customer : undefined}
+        onClose={() => setCustomerOpen(false)}
+        onPick={pickCustomer}
+        busy={setCustomer.isPending}
+      />
     </View>
   );
 };
@@ -530,6 +573,7 @@ const styles = StyleSheet.create({
   },
   pendingCard: { borderColor: colors.billed },
   headRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  customerCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   sectionTitle: { ...typography.bodyBold, color: colors.text },
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
   rowLabel: { ...typography.body, color: colors.textSecondary, flexShrink: 1 },
