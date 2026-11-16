@@ -94,6 +94,12 @@ class BusinessCategory(StrEnum):
     HARDWARE = "hardware"  # hardware and electrical shops: their own module (app.modules.hardware)
 
 
+class ApparelTaxMode(StrEnum):
+    """How a dress shop product's GST rate is chosen."""
+    SLAB = "slab"  # by the price of the piece (the module's settings)
+    FIXED = "fixed"  # its own rate (belts, bags, accessories)
+
+
 class ItemUnit(StrEnum):
     """The unit an item is priced and sold in. Quantities are decimals (3 places), so 0.750 kg is a normal quantity."""
     PIECE = "pcs"

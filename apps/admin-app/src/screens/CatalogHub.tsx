@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, fonts, radii, spacing } from '@repo/shared-ui';
 import { useEntitlements } from '@repo/api-client';
+import { ProductsScreen as ApparelProductsScreen } from './apparel/ProductsScreen';
 import { MenuBuilderScreen } from './MenuBuilder';
 import { StockScreen } from './StockScreen';
 
@@ -15,9 +16,8 @@ export const CatalogHub: React.FC = () => {
   const entitlements = useEntitlements().data;
   const [view, setView] = useState<CatalogView>('items');
   // Dress and hardware shops keep their catalogue and stock in their own modules.
-  if (entitlements?.category === 'apparel' || entitlements?.category === 'hardware') {
-    return <ShopModulePlaceholder kind={entitlements.category} />;
-  }
+  if (entitlements?.category === 'apparel') return <ApparelProductsScreen />;
+  if (entitlements?.category === 'hardware') return <ShopModulePlaceholder kind="hardware" />;
   if (!entitlements?.modules.includes('inventory')) return <MenuBuilderScreen />;
   const shop = entitlements.category !== 'restaurant' && !entitlements.settings.kitchen_tickets;
 

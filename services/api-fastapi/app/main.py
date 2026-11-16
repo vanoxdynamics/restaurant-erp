@@ -15,6 +15,7 @@ from app.core.logging import RequestIdMiddleware, configure_logging
 from app.core.platform_middleware import PlatformGuardMiddleware
 from app.core.redis import close_redis_pool, redis_client
 from app.modules.analytics import router as analytics_router
+from app.modules.apparel.router import router as apparel_router
 from app.modules.approvals import router as approvals_router
 from app.modules.billing import router as billing_router
 from app.modules.business.router import router as business_router
@@ -135,6 +136,7 @@ async def readiness_check():
 app.include_router(catalog_router, prefix=settings.API_V1_STR)
 app.include_router(retail_router, prefix=settings.API_V1_STR)
 app.include_router(inventory_router, prefix=settings.API_V1_STR)
+app.include_router(apparel_router, prefix=settings.API_V1_STR)
 app.include_router(customers_router, prefix=settings.API_V1_STR)
 app.include_router(entitlements_router, prefix=settings.API_V1_STR)
 app.include_router(floor_router, prefix=settings.API_V1_STR)

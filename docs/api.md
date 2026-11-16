@@ -117,6 +117,38 @@ the cash day, customers, the audit log, idempotency and realtime events.
 - **Apps.** The `retail` build of the POS app opens the module's own counter for these categories; the admin app's Menu tab opens
   the module's catalogue and stock screens.
 
+### Dress shops (`/apparel`)
+
+A **product** is a style ("Oxford Shirt"); a **variant** is one size and colour of it and is what is scanned, sold and counted.
+Reads are open to any signed-in staff; every write below is owners and managers only.
+
+- **Settings.** `GET /apparel/settings` (made with the defaults on first read), `PUT /apparel/settings`: `prices_include_tax`,
+  `round_to_rupee`, `low_rate` (5.00), `slab_price` (2500.00), `high_rate` (18.00), `return_days` (7). The GST values are
+  settings because the government changes them; the owner should confirm them with an accountant.
+- **Categories.** `GET`, `POST /apparel/categories`, `PATCH /apparel/categories/{id}` (`name` unique per business ignoring case:
+  `409 duplicate_category`; `is_active` to hide).
+- **Products.** `GET /apparel/products` (paged; `search`, `category_id`, `include_inactive`), `POST /apparel/products`,
+  `GET|PATCH /apparel/products/{id}` (`?branch_id=` adds `on_hand` per variant). A product is created with `sizes` x `colours`
+  at one `price` (and `mrp`), or an explicit `variants` list. `tax_mode` is `slab` (the rate follows the price of the piece) or
+  `fixed` with `tax_rate` (belts, bags). `style_code` is unique per business (`409 duplicate_style_code`). Products are never
+  deleted: `is_active: false`.
+- **Variants.** `POST /apparel/products/{id}/variants` adds sizes or colours (a grid skips combinations the style has; a list must
+  be new, `409 duplicate_variant`). `PATCH /apparel/variants/{id}` changes price, MRP, SKU, barcode, size, colour or `is_active`
+  (`422 price_above_mrp`; `409 duplicate_barcode|duplicate_sku`). Variants list colour by colour, each in the size order typed.
+- **Barcodes.** A variant saved without a barcode gets an in-store EAN-13: `29` + a 10-digit counter + check digit
+  (`2900000000018`, `2900000000025`, ...). Manufacturer barcodes are kept as typed.
+- **Scanner lookup.** `GET /apparel/variants/lookup?code=&branch_id=` returns `{variant, product}` for the active variant with that
+  barcode, else SKU (`404 barcode_not_found`).
+- **Counter search.** `GET /apparel/catalog/search?q=&category_id=&branch_id=&limit=` (at most 50): active products matching name,
+  brand or style code, or a variant's exact SKU or barcode, with stock per variant when `branch_id` is given.
+- **CSV import.** `POST /apparel/import` with `{"csv", "dry_run", "branch_id"}`: one row per variant. Columns `style_code`, `name`,
+  `category`, `brand`, `hsn`, `size`, `colour`, `mrp`, `price`, `barcode`, `sku`, `gst_rate`, `opening_stock`; required `name`,
+  `category`, `size`, `price`. Rows with the same `style_code` (or, without one, the same category and name) are one product;
+  `gst_rate` blank means the slab rate, a number a fixed rate (all rows of a product must agree). A row updates the variant with
+  the same SKU, else barcode, else size and colour; a code may not move to another variant. Bad rows come back as
+  `errors: [{row, errors, data}]`; good rows are saved together; up to 10,000 rows. `opening_stock` is refused until the stock
+  stage of the module (A2).
+
 ## Inventory
 
 A paid module (`inventory`, switched on per plan or per subscriber in the platform console). Every endpoint under `/inventory`
