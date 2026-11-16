@@ -17,6 +17,6 @@ class EntitlementsRead(BaseModel):
     modules: List[str]
     max_branches: Optional[int]
     max_staff: Optional[int]
-    category: str = "restaurant"  # restaurant | cafe | grocery | retail
+    category: str = "restaurant"  # restaurant | cafe | grocery | retail | apparel | hardware
     settings: Dict[str, bool] = {}  # effective workflow settings: table_service, kitchen_tickets, quick_sale, barcode, ...
     impersonation: bool = False  # true when a platform operator is viewing this account (read-only)

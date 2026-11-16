@@ -659,7 +659,8 @@ export class RestaurantApiClient {
     this.token = token;
   }
 
-  private async request<T>(
+  /** Public so each shop module's own client file (apparel.ts, hardware.ts) can call its endpoints. */
+  async request<T>(
     method: string,
     path: string,
     options: { body?: unknown; query?: Record<string, string | number | undefined>;

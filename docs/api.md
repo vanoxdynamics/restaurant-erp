@@ -43,6 +43,8 @@ Stale optimistic-lock versions return `409` with `details.current_version`.
 Allocated transactionally in Postgres (`document_counters`), per branch:
 `ORD-BLR1-20261028-0001`, `KOT-BLR1-20261028-0001` (daily, branch-local date) and bills
 `BLR1/2627/000001` (per Indian financial year, ≤16 characters for GST).
+Dress and hardware shops also number credit notes `CN/BLR1/2627/000001` and estimates `EST/BLR1/2627/000001`, each its own
+series per financial year.
 
 ## WebSockets
 
@@ -97,6 +99,23 @@ their own module (`app/modules/retail`, under `/retail`); catalog, orders, billi
   `category`, `price` (required), `gst_rate`, `hsn`, `unit`, `barcode`, `sku`, `sold_by_weight`. Rows update the item with the
   same SKU, else barcode, else name in the same category; missing categories are created. Bad rows are skipped and reported
   as `errors: [{row, errors, data}]` with the file's line number; good rows are saved together. Up to 10,000 rows.
+
+## Dress and hardware shops (shop modules)
+
+Two more categories run their **own** backend modules instead of the shared orders, bills and stock: `apparel` (Dress / footwear
+shop, `/apparel`, `app/modules/apparel`) and `hardware` (Hardware / electrical shop, `/hardware`, `app/modules/hardware`). Plan:
+[retail-modules/00-foundation.md](retail-modules/00-foundation.md). They reuse sign-in, organizations, branches, staff, shifts and
+the cash day, customers, the audit log, idempotency and realtime events.
+
+- **Category guard.** Every route of a shop module answers `404 wrong_business_category` to an organization of another category.
+- **Settings.** The six workflow settings have presets for both categories but are not read by their modules; the platform
+  console does not offer overrides for them.
+- **Cash day.** Shift and cash-day close add each module's net cash (cash taken minus cash refunded) to the expected cash.
+- **Audit actions.** `audit_logs.action_type` adds `sale_return`, `price_override` and `credit_limit_override`. Voids, high
+  discounts and payment reversals on shop sales use `bill_void`, `high_discount` and `payment_reverse` with `entity_type`
+  `apparel_sale` or `hardware_sale`.
+- **Apps.** The `retail` build of the POS app opens the module's own counter for these categories; the admin app's Menu tab opens
+  the module's catalogue and stock screens.
 
 ## Inventory
 

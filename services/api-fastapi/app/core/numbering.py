@@ -7,7 +7,10 @@ from app.core.clock import business_date, financial_year
 from app.models.audit import DocumentCounter
 from app.models.floor import Branch
 
-DocType = Literal["order", "kot", "bill"]
+DocType = Literal["order", "kot", "bill", "credit_note", "estimate"]
+
+# Documents numbered per Indian financial year, with their printed prefix ("" for bills).
+YEARLY_PREFIX = {"bill": "", "credit_note": "CN/", "estimate": "EST/"}
 
 
 async def next_daily_value(db: AsyncSession, branch: Branch, counter: str) -> int:
@@ -37,14 +40,16 @@ async def next_document_number(db: AsyncSession, branch: Branch, doc_type: DocTy
     as GST requires a unique consecutive invoice series. A rollback releases the number,
     so the bill series has no gaps from failed requests.
 
-    Formats: ORD-{CODE}-{YYYYMMDD}-{0001}, KOT-{CODE}-{YYYYMMDD}-{0001}, {CODE}/{FY}/{000001}.
+    Formats: ORD-{CODE}-{YYYYMMDD}-{0001}, KOT-{CODE}-{YYYYMMDD}-{0001}, {CODE}/{FY}/{000001}. Credit notes and estimates
+    (the shop modules) run per financial year too, each in its own series: CN/{CODE}/{FY}/{000001}, EST/{CODE}/{FY}/{000001}.
     """
     today = business_date(branch.timezone)
-    period = financial_year(today) if doc_type == "bill" else today.strftime("%Y%m%d")
+    yearly = doc_type in YEARLY_PREFIX
+    period = financial_year(today) if yearly else today.strftime("%Y%m%d")
 
     value = await _bump(db, branch, doc_type, period)
 
-    if doc_type == "bill":
-        return f"{branch.code}/{period}/{value:06d}"
+    if yearly:
+        return f"{YEARLY_PREFIX[doc_type]}{branch.code}/{period}/{value:06d}"
     prefix = "ORD" if doc_type == "order" else "KOT"
     return f"{prefix}-{branch.code}-{period}-{value:04d}"

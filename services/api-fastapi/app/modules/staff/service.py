@@ -21,6 +21,7 @@ from app.core.auth import (
     resolve_branch_id,
     token_claims,
 )
+from app.core.cash import extra_cash
 from app.core.clock import business_date, utcnow
 from app.core.config import settings
 from app.core.enums import AuditAction, PaymentMode, PaymentStatus, Role, ShiftStatus
@@ -455,6 +456,7 @@ async def _close(db: AsyncSession, actor: CurrentUser, shift: Shift, blind_drop_
                 Payment.status == PaymentStatus.SUCCESS.value,
             )
         )
+        cash_taken = Decimal(cash_taken or 0) + await extra_cash(db, branch_id=shift.branch_id, shift_id=shift.id)
     expected = shift.opening_cash + Decimal(cash_taken or 0)
     shift.end_time = utcnow()
     shift.blind_drop_cash = blind_drop_cash
@@ -589,4 +591,6 @@ async def close_cash_day(db: AsyncSession, actor: CurrentUser, branch_id: uuid.U
             Payment.created_at >= shift.start_time,
         )
     )
-    return await _close(db, actor, shift, counted_cash, Decimal(cash_taken or 0))
+    # Shop modules with their own payment tables (dress, hardware) add their net cash here.
+    cash_taken = Decimal(cash_taken or 0) + await extra_cash(db, branch_id=branch_id, since=shift.start_time)
+    return await _close(db, actor, shift, counted_cash, cash_taken)

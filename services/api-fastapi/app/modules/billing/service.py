@@ -377,7 +377,7 @@ TERMINAL_DETAIL_KEYS = {
 }
 
 
-def _terminal_ref() -> str:
+def terminal_ref() -> str:
     return "".join(secrets.choice(TERMINAL_REF_ALPHABET) for _ in range(TERMINAL_REF_LENGTH))
 
 
@@ -419,7 +419,7 @@ async def start_terminal_payment(
         shift_id=shift.id if shift else None,
         idempotency_key=idempotency_key,
         provider=payload.provider,
-        provider_meta={"billing_ref_no": _terminal_ref(), "started_by": str(user.id)},
+        provider_meta={"billing_ref_no": terminal_ref(), "started_by": str(user.id)},
     )
     bill.payments.append(record)
     try:

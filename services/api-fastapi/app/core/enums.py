@@ -90,6 +90,8 @@ class BusinessCategory(StrEnum):
     CAFE = "cafe"  # café, QSR, bakery
     GROCERY = "grocery"  # grocery, kirana
     RETAIL = "retail"  # general retail
+    APPAREL = "apparel"  # dress, garment and footwear shops: their own module (app.modules.apparel)
+    HARDWARE = "hardware"  # hardware and electrical shops: their own module (app.modules.hardware)
 
 
 class ItemUnit(StrEnum):
@@ -192,6 +194,9 @@ class AuditAction(StrEnum):
     CASH_VARIANCE = "cash_variance"
     KOT_REPRINT = "kot_reprint"  # a kitchen slip was printed again
     PAYMENT_REVERSE = "payment_reverse"  # a card/UPI terminal payment was voided
+    SALE_RETURN = "sale_return"  # goods came back against a shop sale (credit note)
+    PRICE_OVERRIDE = "price_override"  # a shop sale line was priced below what the cashier may give alone
+    CREDIT_LIMIT_OVERRIDE = "credit_limit_override"  # a sale was charged to an account beyond its credit limit
 
 
 class VoidRequestStatus(StrEnum):

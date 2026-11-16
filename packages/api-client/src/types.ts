@@ -682,7 +682,7 @@ export interface BusinessProfile {
   logo_data_url?: string;
 }
 
-export type BusinessCategory = 'restaurant' | 'cafe' | 'grocery' | 'retail';
+export type BusinessCategory = 'restaurant' | 'cafe' | 'grocery' | 'retail' | 'apparel' | 'hardware';
 
 /** Workflow steps a business uses. Its category presets them; the platform can override each one per business. */
 export interface BusinessSettings {

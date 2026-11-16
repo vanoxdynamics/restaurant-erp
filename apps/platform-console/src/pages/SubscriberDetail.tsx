@@ -55,8 +55,10 @@ export function SubscriberDetailPage() {
               <strong>{categories.data?.categories.find((c) => c.key === org.category)?.name ?? label(org.category)}</strong>
               {can.manageBilling && <> <button className="btn small ghost" onClick={() => setDialog('business')}>Change…</button></>}
               <div className="muted">
-                {(Object.keys(org.settings) as SettingKey[]).filter((k) => org.settings[k]).map((k) => categories.data?.setting_labels[k] ?? label(k)).join(' · ') || 'Basic billing only'}
-                {Object.keys(org.settings_overrides).length > 0 && ' (customised)'}
+                {OWN_MODULE.includes(org.category) ? 'Runs its own shop module' : <>
+                  {(Object.keys(org.settings) as SettingKey[]).filter((k) => org.settings[k]).map((k) => categories.data?.setting_labels[k] ?? label(k)).join(' · ') || 'Basic billing only'}
+                  {Object.keys(org.settings_overrides).length > 0 && ' (customised)'}
+                </>}
               </div>
             </dd>
             <dt>Legal name</dt><dd>{org.legal_name ?? '—'}</dd>
@@ -323,6 +325,12 @@ function ExtendDialog({ org, onClose }: { org: OrgDetail; onClose: () => void })
 }
 
 /**
+ * Business types that run their own module (dress and hardware shops). The six workflow settings have no effect on them, so
+ * they are not offered.
+ */
+const OWN_MODULE = ['apparel', 'hardware'];
+
+/**
  * The business type and its workflow settings. Each setting follows the type's preset unless overridden here; changing the type
  * keeps the overrides. Devices pick the change up straight away (their entitlements are refreshed).
  */
@@ -350,7 +358,9 @@ function BusinessDialog({ org, catalog, onClose }: { org: OrgDetail; catalog: No
           {catalog.categories.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
         </select>
       </Field>
-      <table style={{ marginBottom: 12 }}>
+      {OWN_MODULE.includes(category) ? (
+        <p className="muted" style={{ marginBottom: 12 }}>This type runs its own shop module; the workflow settings do not apply to it.</p>
+      ) : <table style={{ marginBottom: 12 }}>
         <thead><tr><th>Setting</th><th>Preset</th><th>For this business</th></tr></thead>
         <tbody>
           {keys.map((k) => (
@@ -367,7 +377,7 @@ function BusinessDialog({ org, catalog, onClose }: { org: OrgDetail; catalog: No
             </tr>
           ))}
         </tbody>
-      </table>
+      </table>}
     </ReasonDialog>
   );
 }

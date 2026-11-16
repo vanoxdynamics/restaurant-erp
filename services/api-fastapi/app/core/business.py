@@ -34,6 +34,8 @@ CATEGORY_LABELS: Dict[str, str] = {
     BusinessCategory.CAFE.value: "Café / QSR / Bakery",
     BusinessCategory.GROCERY.value: "Grocery / Kirana",
     BusinessCategory.RETAIL.value: "General retail",
+    BusinessCategory.APPAREL.value: "Dress / footwear shop",
+    BusinessCategory.HARDWARE.value: "Hardware / electrical shop",
 }
 
 PRESETS: Dict[str, Dict[str, bool]] = {
@@ -45,6 +47,12 @@ PRESETS: Dict[str, Dict[str, bool]] = {
                                      WEIGHED_ITEMS: True, TOKENS: False},
     BusinessCategory.RETAIL.value: {TABLE_SERVICE: False, KITCHEN_TICKETS: False, QUICK_SALE: True, BARCODE: True,
                                     WEIGHED_ITEMS: False, TOKENS: False},
+    # Dress and hardware shops run their own modules, which do not read these settings; the presets exist only so that every
+    # category has one.
+    BusinessCategory.APPAREL.value: {TABLE_SERVICE: False, KITCHEN_TICKETS: False, QUICK_SALE: True, BARCODE: True,
+                                     WEIGHED_ITEMS: False, TOKENS: False},
+    BusinessCategory.HARDWARE.value: {TABLE_SERVICE: False, KITCHEN_TICKETS: False, QUICK_SALE: True, BARCODE: True,
+                                      WEIGHED_ITEMS: False, TOKENS: False},
 }
 
 

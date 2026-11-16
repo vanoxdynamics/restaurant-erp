@@ -647,7 +647,7 @@ async def test_tenant_tokens_cannot_use_the_platform_api(client, db, ops, pro, o
 
 async def test_category_on_create_override_and_filter(client, db, redis_client, ops, pro):
     cats = (await client.get(f"{P}/business-categories", headers=ops)).json()
-    assert [c["key"] for c in cats["categories"]] == ["restaurant", "cafe", "grocery", "retail"]
+    assert [c["key"] for c in cats["categories"]] == ["restaurant", "cafe", "grocery", "retail", "apparel", "hardware"]
     assert cats["setting_labels"]["tokens"] == "Token numbers"
 
     org = await create_org(client, ops, pro, category="grocery", settings={"tokens": True})

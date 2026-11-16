@@ -14,6 +14,10 @@ type CatalogView = 'items' | 'stock';
 export const CatalogHub: React.FC = () => {
   const entitlements = useEntitlements().data;
   const [view, setView] = useState<CatalogView>('items');
+  // Dress and hardware shops keep their catalogue and stock in their own modules.
+  if (entitlements?.category === 'apparel' || entitlements?.category === 'hardware') {
+    return <ShopModulePlaceholder kind={entitlements.category} />;
+  }
   if (!entitlements?.modules.includes('inventory')) return <MenuBuilderScreen />;
   const shop = entitlements.category !== 'restaurant' && !entitlements.settings.kitchen_tickets;
 
@@ -42,7 +46,16 @@ export const CatalogHub: React.FC = () => {
   );
 };
 
+const ShopModulePlaceholder: React.FC<{ kind: 'apparel' | 'hardware' }> = ({ kind }) => (
+  <View style={[styles.container, styles.placeholder]}>
+    <Text style={styles.placeholderTitle}>{kind === 'apparel' ? 'Products, sizes and stock' : 'Products, units and stock'}</Text>
+    <Text style={styles.segmentText}>Coming soon</Text>
+  </View>
+);
+
 const styles = StyleSheet.create({
+  placeholder: { alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl },
+  placeholderTitle: { fontSize: 18, fontFamily: fonts.semibold, color: colors.text },
   container: { flex: 1, backgroundColor: colors.background },
   segmentWrapper: { paddingHorizontal: spacing.xl, paddingTop: spacing.md },
   segmented: { flexDirection: 'row', backgroundColor: colors.surfaceLight, borderRadius: radii.md, padding: 3 },

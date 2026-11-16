@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.clock import utcnow
 from app.core.database import get_db, scope_session
 from app.core.entitlements import SAFE_METHODS, enforce_access, enforce_module, get_entitlements
-from app.core.enums import MANAGER_ROLES, ROLE_RANK, Role
+from app.core.enums import MANAGER_ROLES, ROLE_RANK, BusinessCategory, Role
 from app.core.errors import ApprovalRequired, Forbidden, NotFound, Unauthorized
 from app.core.redis import get_redis
 from app.core.security import DUMMY_HASH, compute_pin_lookup, decode_access_token, verify_pin
@@ -245,6 +245,22 @@ def require_module(module_key: str) -> Callable[..., Coroutine[Any, Any, Current
         redis_client: aioredis.Redis = Depends(get_redis),
     ) -> CurrentUser:
         enforce_module(await get_entitlements(db, user.organization_id, redis_client), str(module_key))
+        return user
+
+    return dependency
+
+
+def require_category(*categories: BusinessCategory) -> Callable[..., Coroutine[Any, Any, CurrentUser]]:
+    """The caller's organization must be one of these business categories (404 otherwise, so other shops cannot probe)."""
+    allowed = {c.value for c in categories}
+
+    async def dependency(
+        user: CurrentUser = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+        redis_client: aioredis.Redis = Depends(get_redis),
+    ) -> CurrentUser:
+        if (await get_entitlements(db, user.organization_id, redis_client)).category not in allowed:
+            raise NotFound("Resource not found", code="wrong_business_category")
         return user
 
     return dependency

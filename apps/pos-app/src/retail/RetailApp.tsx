@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { View } from 'react-native';
+import { ApparelApp } from '../apparel/ApparelApp';
 import { useBusiness } from '../business';
 import { WrongApp } from '../components/WrongApp';
 import { BillScreen } from '../screens/BillScreen';
 import { DayEndScreen } from '../screens/DayEndScreen';
+import { HardwareApp } from '../hardware/HardwareApp';
 import { KotPrinterScreen } from '../screens/KotPrinterScreen';
 import { OpenSalesScreen } from './OpenSalesScreen';
 import { QuickSaleScreen } from './QuickSaleScreen';
@@ -26,6 +28,9 @@ export function RetailMain(): React.JSX.Element {
 
   if (!business.ready) return <View style={{ flex: 1 }} />;
   if (business.category === 'restaurant') return <WrongApp expected="restaurant" />;
+  // Dress and hardware shops run their own modules, with their own counter screens.
+  if (business.category === 'apparel') return <ApparelApp />;
+  if (business.category === 'hardware') return <HardwareApp />;
 
   switch (route.name) {
     case 'bill':

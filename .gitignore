@@ -69,3 +69,6 @@ Thumbs.db
 .docker/
 .coverage
 htmlcov/
+
+# Local preview console operator key (scripts/seed_platform_admin.py)
+.preview-platform-totp
