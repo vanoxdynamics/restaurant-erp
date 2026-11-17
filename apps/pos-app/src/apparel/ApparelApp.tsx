@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { DayEndScreen } from '../screens/DayEndScreen';
 import { KotPrinterScreen } from '../screens/KotPrinterScreen';
+import { DayScreen } from './DayScreen';
 import { PayScreen } from './PayScreen';
 import { ReturnsScreen } from './ReturnsScreen';
 import { SaleScreen } from './SaleScreen';
@@ -15,13 +16,14 @@ type ApparelRoute =
   | { name: 'sale' }
   | { name: 'pay'; saleId: string }
   | { name: 'returns' }
+  | { name: 'today' }
   | { name: 'printer' }
   | { name: 'dayend' };
 
 /**
  * The dress shop counter: sell, pay, take goods back, printer settings and day end. The cash day and printer screens are the
  * shared ones. An exchange is a return to store credit followed by a sale; the credit is carried from the one to the other here.
- * The day report arrives in stage A6.
+ * Managers also see today's report.
  */
 export function ApparelApp(): React.JSX.Element {
   const [route, setRoute] = useState<ApparelRoute>({ name: 'sale' });
@@ -51,6 +53,8 @@ export function ApparelApp(): React.JSX.Element {
           }}
         />
       );
+    case 'today':
+      return <DayScreen onBack={sale} />;
     case 'printer':
       return <KotPrinterScreen onBack={sale} />;
     case 'dayend':
@@ -62,6 +66,7 @@ export function ApparelApp(): React.JSX.Element {
           onDropCredit={() => setCredit(null)}
           onSale={(saleId) => setRoute({ name: 'pay', saleId })}
           onReturns={() => setRoute({ name: 'returns' })}
+          onToday={() => setRoute({ name: 'today' })}
           onPrinter={() => setRoute({ name: 'printer' })}
           onDayEnd={() => setRoute({ name: 'dayend' })}
         />

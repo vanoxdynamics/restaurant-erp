@@ -818,3 +818,90 @@ export function useCreateApparelReturn() {
   return useApparelMutation(({ input, idempotencyKey }: { input: ApparelReturnInput; idempotencyKey: string }) =>
     apparelReturnsApi.create(input, idempotencyKey));
 }
+
+// ---- Labels and reports (stage A6) ------------------------------------------------------------------------------------------
+
+export interface ApparelDayReport {
+  date: string;
+  sales: { count: number; units: number; subtotal_paise: number; discount_paise: number; taxable_paise: number; cgst_paise: number;
+    sgst_paise: number; round_off_paise: number; total_paise: number };
+  tax_by_rate: { rate_percent: number; taxable_paise: number; tax_paise: number }[];
+  payments: { mode: string; count: number; amount_paise: number }[];
+  returns: { count: number; total_paise: number; cash_paise: number; store_credit_paise: number };
+  net_cash_paise: number;
+  top_products: { name: string; units: number; value_paise: number }[];
+  units_by_size: { size: string; units: number }[];
+}
+
+export interface ApparelProductSalesRow {
+  name: string;
+  units: number;
+  value_paise: number;
+  sizes: { size: string; units: number; value_paise: number }[];
+}
+
+export interface ApparelProductSales {
+  date_from: string;
+  date_to: string;
+  units: number;
+  value_paise: number;
+  products: ApparelProductSalesRow[];
+}
+
+export interface ApparelLabelItem {
+  variant_id: string;
+  copies: number;
+}
+
+export function adaptApparelDayReport(raw: Raw): ApparelDayReport {
+  const s = raw.sales;
+  return {
+    date: raw.date,
+    sales: { count: s.count, units: s.units, subtotal_paise: toPaise(s.subtotal), discount_paise: toPaise(s.discount_amount),
+      taxable_paise: toPaise(s.taxable_value), cgst_paise: toPaise(s.tax_cgst), sgst_paise: toPaise(s.tax_sgst),
+      round_off_paise: toPaise(s.round_off), total_paise: toPaise(s.grand_total) },
+    tax_by_rate: raw.tax_by_rate.map((t: Raw) => ({ rate_percent: Number(t.rate), taxable_paise: toPaise(t.taxable_value), tax_paise: toPaise(t.tax) })),
+    payments: raw.payments.map((p: Raw) => ({ mode: p.mode, count: p.count, amount_paise: toPaise(p.amount) })),
+    returns: { count: raw.returns.count, total_paise: toPaise(raw.returns.total), cash_paise: toPaise(raw.returns.cash_total),
+      store_credit_paise: toPaise(raw.returns.store_credit_total) },
+    net_cash_paise: toPaise(raw.net_cash),
+    top_products: raw.top_products.map((p: Raw) => ({ name: p.name, units: p.units, value_paise: toPaise(p.value) })),
+    units_by_size: raw.units_by_size.map((z: Raw) => ({ size: z.size, units: z.units })),
+  };
+}
+
+export const apparelReportsApi = {
+  async day(params: { date?: string; branch_id?: string } = {}): Promise<ApparelDayReport> {
+    return adaptApparelDayReport(await apiClient.request<Raw>('GET', `${P}/reports/day`, { query: { ...params } }));
+  },
+  async salesByProduct(params: { from: string; to: string; branch_id?: string }): Promise<ApparelProductSales> {
+    const raw = await apiClient.request<Raw>('GET', `${P}/reports/sales-by-product`, { query: { ...params } });
+    return {
+      date_from: raw.date_from, date_to: raw.date_to, units: raw.units, value_paise: toPaise(raw.value),
+      products: raw.products.map((p: Raw): ApparelProductSalesRow => ({
+        name: p.name, units: p.units, value_paise: toPaise(p.value),
+        sizes: p.sizes.map((z: Raw) => ({ size: z.size, units: z.units, value_paise: toPaise(z.value) })),
+      })),
+    };
+  },
+  /** The label sheet as a printable HTML page: open it in a window and print (A4 sticker sheets). */
+  labelsHtml(items: ApparelLabelItem[], options: { columns?: number; label_height_mm?: number } = {}): Promise<string> {
+    return apiClient.request<string>('POST', `${P}/labels`, { body: { items, ...options }, text: true });
+  },
+  async customerSales(customerId: string): Promise<ApparelPage<ApparelSale>> {
+    const raw = await apiClient.request<Raw>('GET', `${P}/customers/${customerId}/sales`, { query: { limit: 50 } });
+    return { items: raw.items.map(adaptApparelSale), total: raw.total };
+  },
+};
+
+export function useApparelDayReport(params: { date?: string; branch_id?: string }, enabled = true) {
+  return useQuery({ queryKey: ['apparel', 'report', 'day', params], queryFn: () => apparelReportsApi.day(params), enabled, refetchInterval: 60000 });
+}
+
+export function useApparelSalesByProduct(params: { from: string; to: string; branch_id?: string }, enabled = true) {
+  return useQuery({ queryKey: ['apparel', 'report', 'products', params], queryFn: () => apparelReportsApi.salesByProduct(params), enabled });
+}
+
+export function useApparelCustomerSales(customerId: string | undefined) {
+  return useQuery({ queryKey: ['apparel', 'customer-sales', customerId], queryFn: () => apparelReportsApi.customerSales(customerId!), enabled: !!customerId });
+}

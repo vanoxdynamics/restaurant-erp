@@ -538,3 +538,94 @@ class ApparelStoreCreditRead(ORM):
     balance: Decimal
     status: StoreCreditStatus
     created_at: datetime
+
+
+# --- labels and reports (A6) --------------------------------------------------------------------------------------------------
+
+
+class ApparelLabelItem(BaseModel):
+    variant_id: uuid.UUID
+    copies: int = Field(default=1, ge=1, le=200)
+
+
+class ApparelLabelsRequest(BaseModel):
+    items: List[ApparelLabelItem] = Field(min_length=1, max_length=200)
+    columns: int = Field(default=3, ge=1, le=6)
+    label_height_mm: int = Field(default=30, ge=15, le=80)
+
+
+class ReportSales(BaseModel):
+    count: int
+    units: int
+    subtotal: Decimal
+    discount_amount: Decimal
+    taxable_value: Decimal
+    tax_cgst: Decimal
+    tax_sgst: Decimal
+    tax_igst: Decimal
+    round_off: Decimal
+    grand_total: Decimal
+
+
+class ReportTaxRate(BaseModel):
+    rate: Decimal
+    taxable_value: Decimal
+    tax: Decimal
+
+
+class ReportPayment(BaseModel):
+    mode: str
+    count: int
+    amount: Decimal
+
+
+class ReportReturns(BaseModel):
+    count: int
+    total: Decimal
+    cash_total: Decimal
+    store_credit_total: Decimal
+
+
+class ReportProduct(BaseModel):
+    name: str
+    units: int
+    value: Decimal
+
+
+class ReportSize(BaseModel):
+    size: str
+    units: int
+
+
+class ApparelDayReport(BaseModel):
+    branch_id: uuid.UUID
+    date: date
+    sales: ReportSales
+    tax_by_rate: List[ReportTaxRate]
+    payments: List[ReportPayment]
+    returns: ReportReturns
+    net_cash: Decimal
+    top_products: List[ReportProduct]
+    units_by_size: List[ReportSize]
+
+
+class ReportProductSize(BaseModel):
+    size: str
+    units: int
+    value: Decimal
+
+
+class ReportProductRow(BaseModel):
+    name: str
+    units: int
+    value: Decimal
+    sizes: List[ReportProductSize]
+
+
+class ApparelProductSales(BaseModel):
+    branch_id: uuid.UUID
+    date_from: date
+    date_to: date
+    units: int
+    value: Decimal
+    products: List[ReportProductRow]

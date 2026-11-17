@@ -190,6 +190,17 @@ Reads are open to any signed-in staff; every write below is owners and managers 
   Two sales cannot overspend one credit. Store credit cannot be part of a split payment. An **exchange** is a return to store
   credit followed by a new sale paid with it.
 - **Finding the sale.** `GET /apparel/sales?search=` (invoice number) or `?phone=` (the customer's phone).
+- **Labels.** `POST /apparel/labels` (managers) `{items: [{variant_id, copies}], columns (1-6, default 3), label_height_mm (15-80,
+  default 30)}` returns a printable HTML page for A4 sticker sheets (at most 1,000 labels): shop name, style, size / colour, MRP
+  (struck through when the price is lower) and price, and the barcode as inline SVG: EAN-13 when the code is 13 digits with a valid
+  check digit, Code 128 otherwise. `404 variant_not_found`, `422 variant_without_barcode | too_many_labels`.
+- **Day report.** `GET /apparel/reports/day?branch_id=&date=` (managers; defaults to today in the branch's timezone), computed
+  live (replaces the Z-report): paid invoices (count, units, subtotal, discounts, taxable value, CGST, SGST, round-off, total), GST
+  by rate, successful payments by mode (including `credit_note`), returns (count, total, cash, store credit), `net_cash` (cash
+  taken minus cash refunds), the top 10 products by value and pieces by size.
+- **Sales by product.** `GET /apparel/reports/sales-by-product?from=&to=&branch_id=` (managers): paid sales over the range, per
+  product with its units and value, split by size, dearest first (`422 invalid_range` when `to` is before `from`).
+- **A customer's purchases.** `GET /apparel/customers/{id}/sales`, newest first (owners see every branch, others their own).
 - **Receipt.** `GET /apparel/sales/{id}/receipt?format=rows|text|html&paper_mm=58|80`.
 - **Cash day.** The module's successful cash payments are added to the shift and cash-day expected cash.
 

@@ -2,12 +2,13 @@ import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, fonts, radii, spacing } from '@repo/shared-ui';
 import { useEntitlements } from '@repo/api-client';
+import { LabelsScreen as ApparelLabelsScreen } from './apparel/LabelsScreen';
 import { ProductsScreen as ApparelProductsScreen } from './apparel/ProductsScreen';
 import { StockScreen as ApparelStockScreen } from './apparel/StockScreen';
 import { MenuBuilderScreen } from './MenuBuilder';
 import { StockScreen } from './StockScreen';
 
-type CatalogView = 'items' | 'stock';
+type CatalogView = 'items' | 'stock' | 'labels';
 
 /**
  * The Menu tab. A business with the `inventory` module gets a switch between its items and their stock; everyone else sees the
@@ -30,6 +31,7 @@ export const CatalogHub: React.FC = () => {
           {([
             ['items', apparel ? 'Products' : shop ? 'Items' : 'Menu'],
             ['stock', 'Stock'],
+            ...(apparel ? ([['labels', 'Labels']] as const) : []),
           ] as const).map(([key, label]) => (
             <Pressable
               key={key}
@@ -45,7 +47,7 @@ export const CatalogHub: React.FC = () => {
       </View>
       <View style={{ flex: 1 }}>
         {apparel
-          ? view === 'items' ? <ApparelProductsScreen /> : <ApparelStockScreen />
+          ? view === 'items' ? <ApparelProductsScreen /> : view === 'stock' ? <ApparelStockScreen /> : <ApparelLabelsScreen />
           : view === 'items' ? <MenuBuilderScreen /> : <StockScreen />}
       </View>
     </View>

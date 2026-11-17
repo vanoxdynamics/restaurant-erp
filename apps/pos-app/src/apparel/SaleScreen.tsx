@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import { Button, colors, fonts, Input, Modal, radii, spacing, typography } from '@repo/shared-ui';
-import { formatPaiseToRupees } from '@repo/shared-utils';
+import { formatPaiseToRupees, StaffRole } from '@repo/shared-utils';
 import {
   ApiError,
   apparelApi,
@@ -29,6 +29,7 @@ import { StepButton } from '../components/ItemOptionsSheet';
 import { QueryState } from '../components/QueryState';
 import { TopBar } from '../components/TopBar';
 import { useDeviceStore } from '../stores/deviceStore';
+import { useSessionStore } from '../stores/sessionStore';
 import { ApparelCartLine, cartTotals, hasDiscount, lineNet, useApparelCartStore } from './apparelCartStore';
 import { VariantPickerSheet } from './VariantPickerSheet';
 
@@ -41,6 +42,8 @@ export interface SaleScreenProps {
   /** The invoice was made: take it to payment. */
   onSale: (saleId: string) => void;
   onReturns: () => void;
+  /** Today's report: shown to managers and owners only. */
+  onToday: () => void;
   onPrinter: () => void;
   onDayEnd: () => void;
 }
@@ -52,7 +55,8 @@ type DiscountTarget = { kind: 'line'; line: ApparelCartLine } | { kind: 'bill' }
  * and colour. Typing a name lists styles; tapping one opens the size and colour grid. "Make invoice" sends the whole cart; the
  * totals shown here are an estimate and the server's invoice is what is paid.
  */
-export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, onSale, onReturns, onPrinter, onDayEnd }) => {
+export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, onSale, onReturns, onToday, onPrinter, onDayEnd }) => {
+  const role = useSessionStore((s) => s.user?.role);
   const device = useDeviceStore((s) => s.device)!;
   const cashDay = useCounterCashDay();
   const createSale = useCreateApparelSale();
@@ -240,6 +244,7 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
         right={
           <View style={styles.topActions}>
             <Button title="Returns" variant="secondary" size="sm" onPress={onReturns} />
+            {role === StaffRole.OWNER || role === StaffRole.MANAGER ? <Button title="Today" variant="secondary" size="sm" onPress={onToday} /> : null}
             {wide ? <Button title="Printer" variant="secondary" size="sm" onPress={onPrinter} icon={<Icon name="printer" size={14} color={colors.text} />} /> : null}
             <Button title={cashButtonLabel(cashDay?.status)} variant="secondary" size="sm" onPress={onDayEnd} />
           </View>

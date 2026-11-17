@@ -4,6 +4,7 @@ import { Card, colors, fonts, spacing, typography } from '@repo/shared-ui';
 import { useEntitlements } from '@repo/api-client';
 import { StaffRole } from '@repo/shared-utils';
 import { BusinessProfileCard } from '../components/BusinessProfileCard';
+import { SettingsCard as ApparelSettingsCard } from './apparel/SettingsCard';
 import { useAuthStore } from '../stores/authStore';
 
 const CATEGORY_NAMES: Record<string, string> = {
@@ -24,6 +25,13 @@ export const SettingsScreen: React.FC = () => {
 
       <Text style={styles.sectionTitle}>Name and logo on bills</Text>
       <BusinessProfileCard canEdit={currentUser?.role === StaffRole.OWNER || currentUser?.role === StaffRole.MANAGER} />
+
+      {business?.category === 'apparel' ? (
+        <>
+          <Text style={styles.sectionTitle}>Dress shop</Text>
+          <ApparelSettingsCard canEdit={currentUser?.role === StaffRole.OWNER || currentUser?.role === StaffRole.MANAGER} />
+        </>
+      ) : null}
 
       {business ? (
         <>

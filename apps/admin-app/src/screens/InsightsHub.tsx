@@ -1,6 +1,8 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, fonts, radii, spacing } from '@repo/shared-ui';
+import { useEntitlements } from '@repo/api-client';
+import { ReportsScreen as ApparelReportsScreen } from './apparel/ReportsScreen';
 import { InsightsScreen } from './InsightsScreen';
 import { ZReportsScreen } from './ZReports';
 import { CustomersScreen } from './CustomersScreen';
@@ -8,7 +10,10 @@ import { CustomersScreen } from './CustomersScreen';
 export type InsightsView = 'overview' | 'reports' | 'customers';
 
 /** Insights: the business over time (Overview), the end-of-day reports (Daily reports) and who buys (Customers), one switch apart. */
-export const InsightsHub: React.FC<{ view: InsightsView; onChangeView: (view: InsightsView) => void }> = ({ view, onChangeView }) => (
+export const InsightsHub: React.FC<{ view: InsightsView; onChangeView: (view: InsightsView) => void }> = ({ view, onChangeView }) => {
+  // A dress shop's day report is its own (it replaces the Z-report, which counts restaurant bills).
+  const apparel = useEntitlements().data?.category === 'apparel';
+  return (
   <View style={styles.container}>
     <View style={styles.segmentWrapper}>
       <View style={styles.segmented} accessibilityRole="tablist">
@@ -29,9 +34,10 @@ export const InsightsHub: React.FC<{ view: InsightsView; onChangeView: (view: In
         ))}
       </View>
     </View>
-    <View style={{ flex: 1 }}>{view === 'overview' ? <InsightsScreen /> : view === 'reports' ? <ZReportsScreen /> : <CustomersScreen />}</View>
+    <View style={{ flex: 1 }}>{view === 'overview' ? <InsightsScreen /> : view === 'reports' ? (apparel ? <ApparelReportsScreen /> : <ZReportsScreen />) : <CustomersScreen />}</View>
   </View>
-);
+  );
+};
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },

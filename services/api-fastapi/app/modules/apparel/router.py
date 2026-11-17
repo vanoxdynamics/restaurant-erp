@@ -18,19 +18,22 @@ from app.core.idempotency import IdempotencyGuard, idempotent
 from app.core.pagination import PageParams, page_params
 from app.core.redis import get_redis
 from app.models.apparel import ApparelStoreCredit
-from app.modules.apparel import catalog, importer, returns, sales, stock
+from app.modules.apparel import catalog, importer, reports, returns, sales, stock
 from app.modules.kots.slip import COLUMNS
 from app.modules.retailkit import receipt as receipts
 from app.schemas.apparel import (
     ApparelCategoryCreate,
     ApparelCategoryRead,
     ApparelCategoryUpdate,
+    ApparelDayReport,
     ApparelImportRequest,
     ApparelImportResult,
+    ApparelLabelsRequest,
     ApparelMovementRead,
     ApparelPaymentCreate,
     ApparelPaymentRead,
     ApparelPaymentResult,
+    ApparelProductSales,
     ApparelPaymentReverse,
     ApparelReceiptRead,
     ApparelReturnCreate,
@@ -514,3 +517,39 @@ async def get_return_receipt(
 async def get_store_credit(code: str, user: CurrentUser = Depends(cashiers), db: AsyncSession = Depends(get_db)):
     """The balance of a credit note, at the counter. Codes contain slashes (the credit note number)."""
     return await returns.get_store_credit(db, user, code)
+
+
+# --- labels and reports --------------------------------------------------------------------------------------------------------
+
+
+@router.post("/labels", response_class=Response, responses={200: {"content": {"text/html": {}}}})
+async def print_labels(payload: ApparelLabelsRequest, user: CurrentUser = Depends(managers), db: AsyncSession = Depends(get_db)):
+    """A printable HTML page of barcode labels for A4 sticker sheets (the admin app opens it in the print dialog)."""
+    page = await reports.labels_page(db, user, payload)
+    return Response(page, media_type="text/html; charset=utf-8", headers={
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'self'",
+        "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+
+
+@router.get("/reports/day", response_model=ApparelDayReport)
+async def day_report(branch_id: Optional[uuid.UUID] = None, on_date: Optional[date] = Query(None, alias="date"),
+                     user: CurrentUser = Depends(managers), db: AsyncSession = Depends(get_db)):
+    """The day's sales, tax by rate, payments, returns and net cash for one branch (replaces the Z-report)."""
+    return await reports.day_report(db, user, branch_id, on_date)
+
+
+@router.get("/reports/sales-by-product", response_model=ApparelProductSales)
+async def sales_by_product(
+    date_from: date = Query(..., alias="from"), date_to: date = Query(..., alias="to"), branch_id: Optional[uuid.UUID] = None,
+    user: CurrentUser = Depends(managers), db: AsyncSession = Depends(get_db),
+):
+    """Units and value by product and by size over a date range, paid sales only."""
+    return await reports.sales_by_product(db, user, branch_id, date_from, date_to)
+
+
+@router.get("/customers/{customer_id}/sales", response_model=Page[ApparelSaleRead])
+async def customer_sales(customer_id: uuid.UUID, params: PageParams = Depends(page_params), user: CurrentUser = Depends(cashiers),
+                         db: AsyncSession = Depends(get_db)):
+    """What a customer bought here, newest first."""
+    items, total = await reports.customer_sales(db, user, customer_id, params)
+    return Page(items=items, total=total, limit=params.limit, offset=params.offset)
