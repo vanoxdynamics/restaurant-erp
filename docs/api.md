@@ -161,6 +161,22 @@ Reads are open to any signed-in staff; every write below is owners and managers 
   `kind` (`purchase`, `sale`, `sale_void`, `return`, `adjustment`, `count`), signed `quantity` and `balance_after`; rows are
   stamped when written, so time order is the order stock changed in. `apparel.stock.changed` and `apparel.stock.low` go out on
   the `catalog` topic.
+- **Sales.** `POST /apparel/sales` (owner, manager, cashier; `X-Idempotency-Key`): `{lines: [{variant_id, quantity, unit_price?,
+  line_discount?}], bill_discount?, discount_reason?, customer_id?, salesperson_id?, client_sale_id?, approver_pin?, notes?}` makes
+  the numbered tax invoice and takes the pieces out of stock in one transaction (`sale` ledger rows, `apparel.sale.created`).
+  GST is chosen per piece (slab by price, or the product's fixed rate) after the bill discount is spread over the lines; totals
+  round to the rupee when the setting says so. Any price other than the variant's needs a manager PIN (`403 approval_required`)
+  and may not exceed MRP (`422 price_above_mrp`); a total discount above the threshold needs a manager PIN too. A repeated
+  `client_sale_id` returns the first sale. `GET /apparel/sales` (`branch_id`, `on_date`, `status`, `customer_id`, `search`),
+  `GET /apparel/sales/{id}`.
+- **Paying.** `POST /apparel/sales/{id}/payments` (`{payment_mode: cash|card|upi, amount, reference_id}`; cash may exceed the
+  balance and returns `change_due`), `POST .../payments/split` (must add up to the balance), `POST .../payments/terminal` then
+  `POST /apparel/payments/{id}/terminal/complete`, `POST /apparel/payments/{id}/reverse` (manager approval, audited). Same rules as
+  restaurant bills. Settling announces `apparel.sale.settled`; stock does not move again.
+- **Voiding.** `POST /apparel/sales/{id}/void` `{reason, approver_pin?}`: only an unpaid sale with nothing paid
+  (`409 refund_required` otherwise); the pieces go back (`sale_void`). A paid sale is undone with a return (stage A5).
+- **Receipt.** `GET /apparel/sales/{id}/receipt?format=rows|text|html&paper_mm=58|80`.
+- **Cash day.** The module's successful cash payments are added to the shift and cash-day expected cash.
 
 ## Inventory
 

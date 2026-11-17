@@ -110,6 +110,13 @@ class ApparelMovementKind(StrEnum):
     COUNT = "count"
 
 
+class ApparelPaymentMode(StrEnum):
+    """How a dress shop sale is paid. Store credit (`credit_note`) arrives with returns, stage A5."""
+    CASH = "cash"
+    CARD = "card"
+    UPI = "upi"
+
+
 class ItemUnit(StrEnum):
     """The unit an item is priced and sold in. Quantities are decimals (3 places), so 0.750 kg is a normal quantity."""
     PIECE = "pcs"

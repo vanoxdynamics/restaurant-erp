@@ -23,8 +23,11 @@ from app.models.customers import Customer
 from app.models.devices import Device
 from app.models.apparel import (
     ApparelCategory,
+    ApparelPayment,
     ApparelProduct,
     ApparelPurchase,
+    ApparelSale,
+    ApparelSaleLine,
     ApparelSettings,
     ApparelStock,
     ApparelStockMovement,
@@ -33,6 +36,9 @@ from app.models.apparel import (
 
 __all__ = [
     "ApparelCategory",
+    "ApparelPayment",
+    "ApparelSale",
+    "ApparelSaleLine",
     "ApparelProduct",
     "ApparelPurchase",
     "ApparelStock",

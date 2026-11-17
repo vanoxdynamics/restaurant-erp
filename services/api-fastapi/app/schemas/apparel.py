@@ -3,12 +3,13 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from app.core.enums import ApparelMovementKind, ApparelTaxMode
-from app.schemas.common import Money, Reason
+from app.core.enums import ApparelMovementKind, ApparelPaymentMode, ApparelTaxMode, BillStatus, PaymentStatus
+from app.schemas.billing import PaymentReverse, PrintRowRead, TerminalPaymentComplete
+from app.schemas.common import Money, Pin, PositiveMoney, Reason
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
 CategoryName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
@@ -330,3 +331,140 @@ class ApparelMovementRead(BaseModel):
     purchase_id: Optional[uuid.UUID] = None
     created_by: Optional[str] = None
     created_at: datetime
+
+
+# --- sales and payments (A3) --------------------------------------------------------------------------------------------------
+
+
+class ApparelSaleLineIn(BaseModel):
+    variant_id: uuid.UUID
+    quantity: int = Field(gt=0, le=999)
+    unit_price: Optional[Money] = None  # defaults to the variant's price; any other price needs a manager PIN
+    line_discount: Money = Decimal("0.00")
+
+
+class ApparelSaleCreate(BaseModel):
+    branch_id: Optional[uuid.UUID] = None
+    lines: List[ApparelSaleLineIn] = Field(min_length=1, max_length=200)
+    bill_discount: Money = Decimal("0.00")
+    discount_reason: Optional[str] = Field(default=None, max_length=500)
+    customer_id: Optional[uuid.UUID] = None
+    salesperson_id: Optional[uuid.UUID] = None
+    client_sale_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    approver_pin: Optional[Pin] = None
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def check_discount_reason(self) -> "ApparelSaleCreate":
+        discounted = self.bill_discount > 0 or any(line.line_discount > 0 for line in self.lines)
+        if discounted and not (self.discount_reason and self.discount_reason.strip()):
+            raise ValueError("discount_reason is required when a discount is applied")
+        return self
+
+
+class ApparelVoid(BaseModel):
+    reason: Reason
+    approver_pin: Optional[Pin] = None
+
+
+class ApparelSaleLineRead(ORM):
+    id: uuid.UUID
+    variant_id: uuid.UUID
+    name_snapshot: str
+    size_snapshot: str
+    colour_snapshot: str
+    hsn_snapshot: Optional[str] = None
+    barcode_snapshot: Optional[str] = None
+    quantity: int
+    mrp_snapshot: Optional[Decimal] = None
+    unit_price: Decimal
+    line_discount: Decimal
+    discount: Decimal
+    tax_rate: Decimal
+    taxable_value: Decimal
+    cgst: Decimal
+    sgst: Decimal
+    igst: Decimal
+    line_total: Decimal
+    returned_quantity: int
+
+
+class ApparelPaymentCreate(BaseModel):
+    payment_mode: ApparelPaymentMode
+    amount: PositiveMoney
+    reference_id: Optional[str] = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def check_reference(self) -> "ApparelPaymentCreate":
+        if self.payment_mode in (ApparelPaymentMode.UPI, ApparelPaymentMode.CARD) and not self.reference_id:
+            raise ValueError("reference_id is required for upi and card payments")
+        return self
+
+
+class ApparelSplitPayment(BaseModel):
+    payments: List[ApparelPaymentCreate] = Field(min_length=2, max_length=10)
+
+
+class ApparelTerminalStart(BaseModel):
+    payment_mode: Literal[ApparelPaymentMode.CARD, ApparelPaymentMode.UPI]
+    amount: PositiveMoney
+    provider: Literal["pinelabs"] = "pinelabs"
+
+
+ApparelTerminalComplete = TerminalPaymentComplete
+ApparelPaymentReverse = PaymentReverse
+
+
+class ApparelPaymentRead(ORM):
+    id: uuid.UUID
+    sale_id: uuid.UUID
+    payment_mode: ApparelPaymentMode
+    amount: Decimal
+    reference_id: Optional[str] = None
+    status: PaymentStatus
+    provider: str = "manual"
+    provider_meta: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+
+class ApparelSaleRead(ORM):
+    id: uuid.UUID
+    branch_id: uuid.UUID
+    sale_number: str
+    business_date: date
+    customer_id: Optional[uuid.UUID] = None
+    salesperson_id: Optional[uuid.UUID] = None
+    created_by_id: Optional[uuid.UUID] = None
+    subtotal: Decimal
+    discount_amount: Decimal
+    discount_reason: Optional[str] = None
+    taxable_value: Decimal
+    tax_cgst: Decimal
+    tax_sgst: Decimal
+    tax_igst: Decimal
+    round_off: Decimal
+    grand_total: Decimal
+    paid_amount: Decimal
+    balance_due: Decimal
+    status: BillStatus
+    settled_at: Optional[datetime] = None
+    void_reason: Optional[str] = None
+    client_sale_id: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    lines: List[ApparelSaleLineRead] = []
+    payments: List[ApparelPaymentRead] = []
+
+
+class ApparelPaymentResult(BaseModel):
+    payment: ApparelPaymentRead
+    sale: ApparelSaleRead
+    change_due: Decimal = Decimal("0.00")
+
+
+class ApparelReceiptRead(BaseModel):
+    sale_number: str
+    paper_mm: int
+    rows: List[PrintRowRead]
+    text: str
+    logo_data_url: Optional[str] = None

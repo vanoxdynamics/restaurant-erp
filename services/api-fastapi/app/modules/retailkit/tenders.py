@@ -19,11 +19,9 @@ import uuid
 from decimal import Decimal
 from typing import Any, Awaitable, Callable, Dict, Generic, List, Optional, Protocol, Sequence, Tuple, Type, TypeVar
 
-from sqlalchemy import ForeignKey, Numeric, String
-from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Mapped, declared_attr, mapped_column, selectinload
+from sqlalchemy.orm import selectinload
 
 from app.core.audit import record_audit
 from app.core.auth import CurrentUser, require_branch_access, resolve_approver
@@ -34,31 +32,11 @@ from app.core.events import commit, queue_event
 from app.core.lookups import get_or_404
 from app.core.money import ZERO, q
 from app.modules.billing.service import safe_terminal_details, terminal_ref
+from app.models.payment_columns import PaymentColumns  # noqa: F401  (re-exported for the shop modules)
 from app.modules.staff.service import get_open_shift
 
 CASH = "cash"
 PAYABLE = (BillStatus.UNPAID.value, BillStatus.PARTIALLY_PAID.value)
-
-
-class PaymentColumns:
-    """The columns of `payments` without `bill_id`. A module's payment model adds `sale_id`, `branch_id` and its checks."""
-
-    payment_mode: Mapped[str] = mapped_column(String(30), nullable=False)
-    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    reference_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # UPI UTR, card approval code
-    status: Mapped[str] = mapped_column(String(30), default=PaymentStatus.SUCCESS.value, nullable=False)
-    idempotency_key: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    # "manual" (keyed in by the cashier) or a terminal ("pinelabs"), whose masked transaction details go in provider_meta.
-    provider: Mapped[str] = mapped_column(String(30), default="manual", server_default="manual", nullable=False)
-    provider_meta: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
-
-    @declared_attr
-    def received_by_id(cls) -> Mapped[Optional[uuid.UUID]]:
-        return mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.id"), nullable=True)
-
-    @declared_attr
-    def shift_id(cls) -> Mapped[Optional[uuid.UUID]]:
-        return mapped_column(UUID(as_uuid=True), ForeignKey("shifts.id"), nullable=True, index=True)
 
 
 class SaleLike(Protocol):
