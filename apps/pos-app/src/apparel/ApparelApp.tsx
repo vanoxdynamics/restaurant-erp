@@ -1,26 +1,33 @@
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { colors, spacing, typography } from '@repo/shared-ui';
-import { useBusinessProfile } from '@repo/api-client';
-import { TopBar } from '../components/TopBar';
+import React, { useState } from 'react';
+import { DayEndScreen } from '../screens/DayEndScreen';
+import { KotPrinterScreen } from '../screens/KotPrinterScreen';
+import { PayScreen } from './PayScreen';
+import { SaleScreen } from './SaleScreen';
 
-/** The dress shop counter. Its screens arrive in later stages; until then it says so. */
+type ApparelRoute = { name: 'sale' } | { name: 'pay'; saleId: string } | { name: 'printer' } | { name: 'dayend' };
+
+/**
+ * The dress shop counter: sell, pay, printer settings and day end. The cash day and printer screens are the shared ones.
+ * Returns and exchanges arrive in stage A5, the day report in A6.
+ */
 export function ApparelApp(): React.JSX.Element {
-  const profile = useBusinessProfile().data;
-  return (
-    <View style={styles.container}>
-      <TopBar title={profile?.name ?? 'Dress shop'} subtitle="Dress shop" />
-      <View style={styles.body}>
-        <Text style={styles.title}>{profile?.name ?? ' '}</Text>
-        <Text style={styles.text}>Coming soon</Text>
-      </View>
-    </View>
-  );
-}
+  const [route, setRoute] = useState<ApparelRoute>({ name: 'sale' });
+  const sale = () => setRoute({ name: 'sale' });
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  body: { padding: spacing.xl, gap: spacing.md, alignItems: 'center' },
-  title: { ...typography.h3, color: colors.text, textAlign: 'center' },
-  text: { ...typography.body, color: colors.textSecondary, textAlign: 'center' },
-});
+  switch (route.name) {
+    case 'pay':
+      return <PayScreen saleId={route.saleId} onBack={sale} onDone={sale} />;
+    case 'printer':
+      return <KotPrinterScreen onBack={sale} />;
+    case 'dayend':
+      return <DayEndScreen onBack={sale} />;
+    default:
+      return (
+        <SaleScreen
+          onSale={(saleId) => setRoute({ name: 'pay', saleId })}
+          onPrinter={() => setRoute({ name: 'printer' })}
+          onDayEnd={() => setRoute({ name: 'dayend' })}
+        />
+      );
+  }
+}

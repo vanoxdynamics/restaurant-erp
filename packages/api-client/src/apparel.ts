@@ -4,6 +4,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient, toPaise, toRupees } from './client';
+import type { PrintablePage, PrintRow } from './types';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Raw = Record<string, any>;
@@ -519,4 +520,192 @@ export function useAdjustApparelStock() {
 
 export function useApparelMovements(params: { branch_id?: string; variant_id?: string; kind?: ApparelMovementKind }, enabled = true) {
   return useQuery({ queryKey: ['apparel', 'movements', params], queryFn: () => apparelStockApi.movements(params), enabled });
+}
+
+// ---- Sales (stage A3/A4) ----------------------------------------------------------------------------------------------------
+
+export type ApparelSaleStatus = 'unpaid' | 'partially_paid' | 'paid' | 'voided';
+
+export interface ApparelSaleLine {
+  id: string;
+  variant_id: string;
+  name: string;
+  size: string;
+  colour: string;
+  barcode?: string;
+  quantity: number;
+  mrp_paise?: number;
+  unit_price_paise: number;
+  line_discount_paise: number;
+  /** Line discount plus this line's share of the bill discount. */
+  discount_paise: number;
+  tax_rate_percent: number;
+  taxable_paise: number;
+  line_total_paise: number;
+  returned_quantity: number;
+}
+
+export interface ApparelSalePayment {
+  id: string;
+  payment_mode: string;
+  amount_paise: number;
+  status: 'success' | 'pending' | 'failed' | 'reversed';
+  reference_id?: string | null;
+  provider: string;
+  billing_ref_no?: string;
+  terminal?: Record<string, unknown>;
+}
+
+export interface ApparelSale {
+  id: string;
+  number: string;
+  business_date: string;
+  status: ApparelSaleStatus;
+  subtotal_paise: number;
+  discount_paise: number;
+  taxable_paise: number;
+  cgst_paise: number;
+  sgst_paise: number;
+  round_off_paise: number;
+  total_paise: number;
+  paid_paise: number;
+  balance_due_paise: number;
+  lines: ApparelSaleLine[];
+  payments: ApparelSalePayment[];
+  created_at: string;
+}
+
+export interface ApparelSaleLineInput {
+  variant_id: string;
+  quantity: number;
+  /** Only when the price differs from the variant's: needs a manager PIN. */
+  unit_price_paise?: number;
+  line_discount_paise?: number;
+}
+
+export interface ApparelSaleInput {
+  branch_id?: string;
+  lines: ApparelSaleLineInput[];
+  bill_discount_paise?: number;
+  discount_reason?: string;
+  customer_id?: string;
+  salesperson_id?: string;
+  client_sale_id?: string;
+  approver_pin?: string;
+  notes?: string;
+}
+
+export function adaptApparelSale(raw: Raw): ApparelSale {
+  return {
+    id: raw.id,
+    number: raw.sale_number,
+    business_date: raw.business_date,
+    status: raw.status,
+    subtotal_paise: toPaise(raw.subtotal),
+    discount_paise: toPaise(raw.discount_amount),
+    taxable_paise: toPaise(raw.taxable_value),
+    cgst_paise: toPaise(raw.tax_cgst),
+    sgst_paise: toPaise(raw.tax_sgst),
+    round_off_paise: toPaise(raw.round_off),
+    total_paise: toPaise(raw.grand_total),
+    paid_paise: toPaise(raw.paid_amount),
+    balance_due_paise: toPaise(raw.balance_due),
+    lines: (raw.lines ?? []).map((l: Raw): ApparelSaleLine => ({
+      id: l.id, variant_id: l.variant_id, name: l.name_snapshot, size: l.size_snapshot, colour: l.colour_snapshot,
+      barcode: l.barcode_snapshot ?? undefined, quantity: l.quantity, mrp_paise: optPaise(l.mrp_snapshot),
+      unit_price_paise: toPaise(l.unit_price), line_discount_paise: toPaise(l.line_discount), discount_paise: toPaise(l.discount),
+      tax_rate_percent: Number(l.tax_rate), taxable_paise: toPaise(l.taxable_value), line_total_paise: toPaise(l.line_total),
+      returned_quantity: l.returned_quantity,
+    })),
+    payments: (raw.payments ?? []).map((p: Raw): ApparelSalePayment => ({
+      id: p.id, payment_mode: p.payment_mode, amount_paise: toPaise(p.amount), status: p.status,
+      reference_id: p.reference_id ?? null, provider: p.provider,
+      billing_ref_no: p.provider_meta?.billing_ref_no ?? undefined, terminal: p.provider_meta ?? undefined,
+    })),
+    created_at: raw.created_at,
+  };
+}
+
+const adaptSalePayment = (sale: ApparelSale, id: string) => sale.payments.find((p) => p.id === id)!;
+
+export const apparelSalesApi = {
+  /** Makes the invoice and takes the pieces out of stock. Safe to retry with the same key. */
+  async create(input: ApparelSaleInput, idempotencyKey: string): Promise<ApparelSale> {
+    const body: Raw = {
+      branch_id: input.branch_id,
+      lines: input.lines.map((l) => ({
+        variant_id: l.variant_id, quantity: l.quantity,
+        unit_price: l.unit_price_paise === undefined ? undefined : toRupees(l.unit_price_paise),
+        line_discount: toRupees(l.line_discount_paise ?? 0),
+      })),
+      bill_discount: toRupees(input.bill_discount_paise ?? 0),
+      discount_reason: input.discount_reason?.trim() || undefined,
+      customer_id: input.customer_id, salesperson_id: input.salesperson_id, client_sale_id: input.client_sale_id,
+      approver_pin: input.approver_pin || undefined, notes: input.notes?.trim() || undefined,
+    };
+    return adaptApparelSale(await apiClient.request<Raw>('POST', `${P}/sales`, { body, idempotent: idempotencyKey }));
+  },
+  async sale(id: string): Promise<ApparelSale> {
+    return adaptApparelSale(await apiClient.request<Raw>('GET', `${P}/sales/${id}`));
+  },
+  async list(params: { branch_id?: string; on_date?: string; status?: ApparelSaleStatus; search?: string; limit?: number } = {}): Promise<ApparelPage<ApparelSale>> {
+    const raw = await apiClient.request<Raw>('GET', `${P}/sales`, { query: { ...params, limit: params.limit ?? 50 } });
+    return { items: raw.items.map(adaptApparelSale), total: raw.total };
+  },
+  async pay(saleId: string, input: { mode: string; amountPaise: number; reference?: string }, idempotencyKey: string): Promise<{ changePaise: number }> {
+    const raw = await apiClient.request<Raw>('POST', `${P}/sales/${saleId}/payments`, {
+      idempotent: idempotencyKey,
+      body: { payment_mode: input.mode, amount: toRupees(input.amountPaise), reference_id: input.reference },
+    });
+    return { changePaise: toPaise(raw.change_due) };
+  },
+  async split(saleId: string, tenders: { mode: string; amountPaise: number; reference?: string }[], idempotencyKey: string): Promise<void> {
+    await apiClient.request<Raw>('POST', `${P}/sales/${saleId}/payments/split`, {
+      idempotent: idempotencyKey,
+      body: { payments: tenders.map((t) => ({ payment_mode: t.mode, amount: toRupees(t.amountPaise), reference_id: t.reference })) },
+    });
+  },
+  async startTerminal(saleId: string, input: { mode: 'card' | 'upi'; amountPaise: number }, idempotencyKey: string): Promise<ApparelSalePayment> {
+    const raw = await apiClient.request<Raw>('POST', `${P}/sales/${saleId}/payments/terminal`, {
+      idempotent: idempotencyKey,
+      body: { payment_mode: input.mode, amount: toRupees(input.amountPaise), provider: 'pinelabs' },
+    });
+    return adaptSalePayment(adaptApparelSale(raw.sale), raw.payment.id);
+  },
+  async completeTerminal(paymentId: string, outcome: object): Promise<void> {
+    await apiClient.request<Raw>('POST', `${P}/payments/${paymentId}/terminal/complete`, { body: outcome });
+  },
+  async reverse(paymentId: string, body: { reason: string; approver_pin?: string; details?: object; check_only?: boolean }): Promise<void> {
+    await apiClient.request<Raw>('POST', `${P}/payments/${paymentId}/reverse`, { body: { ...body, approver_pin: body.approver_pin || undefined } });
+  },
+  async void(saleId: string, reason: string, approverPin?: string): Promise<ApparelSale> {
+    return adaptApparelSale(await apiClient.request<Raw>('POST', `${P}/sales/${saleId}/void`, {
+      body: { reason, approver_pin: approverPin || undefined },
+    }));
+  },
+  async receiptPrint(saleId: string, paperMm: 58 | 80): Promise<PrintablePage> {
+    const raw = await apiClient.request<Raw>('GET', `${P}/sales/${saleId}/receipt`, { query: { paper_mm: paperMm } });
+    return {
+      reference: raw.sale_number, paper_mm: raw.paper_mm === 58 ? 58 : 80,
+      rows: (raw.rows ?? []).map((r: Raw): PrintRow => ({ style: r.style, align: r.align, text: r.text })), text: raw.text ?? '',
+    };
+  },
+  receiptHtml(saleId: string, paperMm: 58 | 80): Promise<string> {
+    return apiClient.request<string>('GET', `${P}/sales/${saleId}/receipt`, { query: { format: 'html', paper_mm: paperMm }, text: true });
+  },
+};
+
+export function useApparelSale(id: string | undefined) {
+  return useQuery({ queryKey: ['apparel', 'sale', id], queryFn: () => apparelSalesApi.sale(id!), enabled: !!id });
+}
+
+/** Creates a sale. Stock changes, so every apparel query (stock, search) is refreshed. */
+export function useCreateApparelSale() {
+  return useApparelMutation(({ input, idempotencyKey }: { input: ApparelSaleInput; idempotencyKey: string }) =>
+    apparelSalesApi.create(input, idempotencyKey));
+}
+
+export function useVoidApparelSale() {
+  return useApparelMutation(({ saleId, reason, approverPin }: { saleId: string; reason: string; approverPin?: string }) =>
+    apparelSalesApi.void(saleId, reason, approverPin));
 }
