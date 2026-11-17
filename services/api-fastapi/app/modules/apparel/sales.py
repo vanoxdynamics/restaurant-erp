@@ -26,7 +26,7 @@ from app.core.lookups import get_or_404
 from app.core.money import ZERO, q
 from app.core.numbering import next_document_number
 from app.core.pagination import PageParams, paginate
-from app.models.apparel import ApparelPayment, ApparelProduct, ApparelSale, ApparelSaleLine, ApparelVariant
+from app.models.apparel import ApparelPayment, ApparelProduct, ApparelReturn, ApparelSale, ApparelSaleLine, ApparelVariant
 from app.models.customers import Customer
 from app.models.floor import Branch
 from app.models.staff import StaffUser
@@ -74,7 +74,7 @@ async def get_sale(db: AsyncSession, user: CurrentUser, sale_id: uuid.UUID) -> A
 
 async def list_sales(
     db: AsyncSession, user: CurrentUser, params: PageParams, branch_id: Optional[uuid.UUID], *, on_date: Optional[date],
-    status: Optional[BillStatus], customer_id: Optional[uuid.UUID], search: Optional[str],
+    status: Optional[BillStatus], customer_id: Optional[uuid.UUID], search: Optional[str], phone: Optional[str] = None,
 ) -> Tuple[List[ApparelSale], int]:
     branch_id = resolve_branch_id(user, branch_id)
     stmt = (select(ApparelSale).where(ApparelSale.branch_id == branch_id).options(*SALE_LOADERS)
@@ -87,6 +87,11 @@ async def list_sales(
         stmt = stmt.where(ApparelSale.customer_id == customer_id)
     if search and search.strip():
         stmt = stmt.where(ApparelSale.sale_number.ilike(f"%{search.strip().replace('%', '')}%"))
+    if phone and phone.strip():
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        if digits:
+            stmt = stmt.where(ApparelSale.customer_id.in_(
+                select(Customer.id).where(Customer.organization_id == user.organization_id, Customer.phone.ilike(f"%{digits}%"))))
     return await paginate(db, stmt, params)
 
 
@@ -309,13 +314,17 @@ def _local(moment: datetime, tz: str) -> datetime:
 
 async def cash_source(db: AsyncSession, *, branch_id: uuid.UUID, since: Optional[datetime],
                       shift_id: Optional[uuid.UUID]) -> Decimal:
-    """Net cash the dress shop took: successful cash payments (cash refunds on returns are subtracted from stage A5)."""
-    stmt = select(func.coalesce(func.sum(ApparelPayment.amount), 0)).where(
+    """Net cash the dress shop took: successful cash payments minus cash refunds paid out on returns."""
+    taken = select(func.coalesce(func.sum(ApparelPayment.amount), 0)).where(
         ApparelPayment.payment_mode == "cash", ApparelPayment.status == PaymentStatus.SUCCESS.value)
+    refunded = select(func.coalesce(func.sum(ApparelReturn.total_amount), 0)).where(ApparelReturn.refund_mode == "cash")
     if shift_id is not None:
-        stmt = stmt.where(ApparelPayment.shift_id == shift_id)
+        taken = taken.where(ApparelPayment.shift_id == shift_id)
+        refunded = refunded.where(ApparelReturn.shift_id == shift_id)
     else:
-        stmt = stmt.where(ApparelPayment.branch_id == branch_id)
+        taken = taken.where(ApparelPayment.branch_id == branch_id)
+        refunded = refunded.where(ApparelReturn.branch_id == branch_id)
         if since is not None:
-            stmt = stmt.where(ApparelPayment.created_at >= since)
-    return Decimal(await db.scalar(stmt) or 0)
+            taken = taken.where(ApparelPayment.created_at >= since)
+            refunded = refunded.where(ApparelReturn.created_at >= since)
+    return Decimal(await db.scalar(taken) or 0) - Decimal(await db.scalar(refunded) or 0)

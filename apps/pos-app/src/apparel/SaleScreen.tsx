@@ -35,8 +35,12 @@ import { VariantPickerSheet } from './VariantPickerSheet';
 const money = (paise: number) => formatPaiseToRupees(paise);
 
 export interface SaleScreenProps {
+  /** Store credit from an exchange, ready to pay for this sale. */
+  credit?: { code: string; amount_paise: number } | null;
+  onDropCredit: () => void;
   /** The invoice was made: take it to payment. */
   onSale: (saleId: string) => void;
+  onReturns: () => void;
   onPrinter: () => void;
   onDayEnd: () => void;
 }
@@ -48,7 +52,7 @@ type DiscountTarget = { kind: 'line'; line: ApparelCartLine } | { kind: 'bill' }
  * and colour. Typing a name lists styles; tapping one opens the size and colour grid. "Make invoice" sends the whole cart; the
  * totals shown here are an estimate and the server's invoice is what is paid.
  */
-export const SaleScreen: React.FC<SaleScreenProps> = ({ onSale, onPrinter, onDayEnd }) => {
+export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, onSale, onReturns, onPrinter, onDayEnd }) => {
   const device = useDeviceStore((s) => s.device)!;
   const cashDay = useCounterCashDay();
   const createSale = useCreateApparelSale();
@@ -235,12 +239,20 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ onSale, onPrinter, onDay
         subtitle={device.branchName}
         right={
           <View style={styles.topActions}>
+            <Button title="Returns" variant="secondary" size="sm" onPress={onReturns} />
             {wide ? <Button title="Printer" variant="secondary" size="sm" onPress={onPrinter} icon={<Icon name="printer" size={14} color={colors.text} />} /> : null}
             <Button title={cashButtonLabel(cashDay?.status)} variant="secondary" size="sm" onPress={onDayEnd} />
           </View>
         }
       />
       <CashDayBanner onPress={onDayEnd} />
+      {credit ? (
+        <Pressable onPress={onDropCredit} accessibilityRole="button" accessibilityLabel="Forget the store credit for this sale" style={styles.creditBar}>
+          <Text style={styles.creditText}>
+            Exchange: store credit {money(credit.amount_paise)} ({credit.code}) will be offered at payment. Tap to drop it.
+          </Text>
+        </Pressable>
+      ) : null}
 
       <View style={[styles.body, wide ? { flexDirection: 'row' } : null]}>
         <View style={styles.items}>
@@ -349,6 +361,8 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ onSale, onPrinter, onDay
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   topActions: { flexDirection: 'row', gap: spacing.xs, marginRight: spacing.sm },
+  creditBar: { marginHorizontal: spacing.lg, marginTop: spacing.md, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.primaryGlow },
+  creditText: { ...typography.caption, color: colors.primary, fontFamily: fonts.semibold },
   body: { flex: 1 },
   items: { flex: 1, padding: spacing.lg },
   searchBox: {

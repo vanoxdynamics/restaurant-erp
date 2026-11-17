@@ -111,10 +111,23 @@ class ApparelMovementKind(StrEnum):
 
 
 class ApparelPaymentMode(StrEnum):
-    """How a dress shop sale is paid. Store credit (`credit_note`) arrives with returns, stage A5."""
+    """How a dress shop sale is paid. `credit_note` is store credit from an earlier return."""
     CASH = "cash"
     CARD = "card"
     UPI = "upi"
+    CREDIT_NOTE = "credit_note"
+
+
+class ApparelRefundMode(StrEnum):
+    """What the customer gets for returned goods."""
+    CASH = "cash"
+    STORE_CREDIT = "store_credit"
+
+
+class StoreCreditStatus(StrEnum):
+    OPEN = "open"
+    USED = "used"
+    CANCELLED = "cancelled"
 
 
 class ItemUnit(StrEnum):

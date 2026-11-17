@@ -174,7 +174,22 @@ Reads are open to any signed-in staff; every write below is owners and managers 
   `POST /apparel/payments/{id}/terminal/complete`, `POST /apparel/payments/{id}/reverse` (manager approval, audited). Same rules as
   restaurant bills. Settling announces `apparel.sale.settled`; stock does not move again.
 - **Voiding.** `POST /apparel/sales/{id}/void` `{reason, approver_pin?}`: only an unpaid sale with nothing paid
-  (`409 refund_required` otherwise); the pieces go back (`sale_void`). A paid sale is undone with a return (stage A5).
+  (`409 refund_required` otherwise); the pieces go back (`sale_void`). A paid sale is undone with a return.
+- **Returns.** `POST /apparel/returns` (owner, manager, cashier; `X-Idempotency-Key`; `client_return_id` also dedupes):
+  `{sale_id, lines: [{sale_line_id, quantity, restock}], reason, refund_mode: cash | store_credit, approver_pin?}`. The sale must be
+  `paid` (`409 sale_not_paid`); each quantity is at most what is left on its line (`409 return_exceeds_sold`). Amounts come from the
+  stored sale line in proportion, and the last pieces of a line take exactly what is left, so a line's returns add up to the line.
+  A sale older than `return_days` (settings; 0 = no limit) needs a manager PIN. Restocked lines put pieces back (`return` ledger
+  rows); `restock: false` is for damaged goods. Cash refunds are subtracted from the shift and cash-day expected cash. Writes a
+  `sale_return` audit row and announces `apparel.return.created`. `GET /apparel/returns` (`sale_id`, `on_date`),
+  `GET /apparel/returns/{id}`, `GET /apparel/returns/{id}/receipt?format=rows|text|html&paper_mm=58|80` (the credit note).
+- **Store credit.** A `store_credit` return makes a credit note whose code is the return number (`CN/KF1/2627/000001`), valid at
+  every branch of the business. `GET /apparel/store-credits/{code}` gives its balance and status (`open`, `used`). Spend it with
+  `POST /apparel/sales/{id}/payments` `{payment_mode: "credit_note", amount, credit_note_code}`: it pays the least of its balance,
+  the amount and what the sale owes, never gives change, and is `used` at zero (`409 store_credit_unavailable` afterwards).
+  Two sales cannot overspend one credit. Store credit cannot be part of a split payment. An **exchange** is a return to store
+  credit followed by a new sale paid with it.
+- **Finding the sale.** `GET /apparel/sales?search=` (invoice number) or `?phone=` (the customer's phone).
 - **Receipt.** `GET /apparel/sales/{id}/receipt?format=rows|text|html&paper_mm=58|80`.
 - **Cash day.** The module's successful cash payments are added to the shift and cash-day expected cash.
 

@@ -26,17 +26,23 @@ from app.models.apparel import (
     ApparelPayment,
     ApparelProduct,
     ApparelPurchase,
+    ApparelReturn,
+    ApparelReturnLine,
     ApparelSale,
     ApparelSaleLine,
     ApparelSettings,
     ApparelStock,
     ApparelStockMovement,
+    ApparelStoreCredit,
     ApparelVariant,
 )
 
 __all__ = [
     "ApparelCategory",
     "ApparelPayment",
+    "ApparelReturn",
+    "ApparelReturnLine",
+    "ApparelStoreCredit",
     "ApparelSale",
     "ApparelSaleLine",
     "ApparelProduct",

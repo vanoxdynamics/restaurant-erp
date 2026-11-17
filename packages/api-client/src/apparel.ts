@@ -709,3 +709,112 @@ export function useVoidApparelSale() {
   return useApparelMutation(({ saleId, reason, approverPin }: { saleId: string; reason: string; approverPin?: string }) =>
     apparelSalesApi.void(saleId, reason, approverPin));
 }
+
+// ---- Returns and store credit (stage A5) ------------------------------------------------------------------------------------
+
+export type ApparelRefundMode = 'cash' | 'store_credit';
+
+export interface ApparelReturnLine {
+  id: string;
+  sale_line_id: string;
+  quantity: number;
+  amount_paise: number;
+  restock: boolean;
+}
+
+export interface ApparelReturn {
+  id: string;
+  number: string;
+  sale_id: string;
+  business_date: string;
+  reason: string;
+  refund_mode: ApparelRefundMode;
+  total_paise: number;
+  /** The code printed on the credit note, when the customer took store credit. */
+  store_credit_code?: string;
+  lines: ApparelReturnLine[];
+  created_at: string;
+}
+
+export interface ApparelStoreCredit {
+  id: string;
+  code: string;
+  amount_paise: number;
+  balance_paise: number;
+  status: 'open' | 'used' | 'cancelled';
+}
+
+export interface ApparelReturnInput {
+  sale_id: string;
+  lines: { sale_line_id: string; quantity: number; restock: boolean }[];
+  reason: string;
+  refund_mode: ApparelRefundMode;
+  client_return_id?: string;
+  approver_pin?: string;
+}
+
+export function adaptApparelReturn(raw: Raw): ApparelReturn {
+  return {
+    id: raw.id,
+    number: raw.return_number,
+    sale_id: raw.sale_id,
+    business_date: raw.business_date,
+    reason: raw.reason,
+    refund_mode: raw.refund_mode,
+    total_paise: toPaise(raw.total_amount),
+    store_credit_code: raw.store_credit_code ?? undefined,
+    lines: (raw.lines ?? []).map((l: Raw): ApparelReturnLine => ({
+      id: l.id, sale_line_id: l.sale_line_id, quantity: l.quantity, amount_paise: toPaise(l.amount), restock: l.restock,
+    })),
+    created_at: raw.created_at,
+  };
+}
+
+export function adaptApparelStoreCredit(raw: Raw): ApparelStoreCredit {
+  return { id: raw.id, code: raw.code, amount_paise: toPaise(raw.amount), balance_paise: toPaise(raw.balance), status: raw.status };
+}
+
+export const apparelReturnsApi = {
+  /** Safe to retry with the same key (and the same client_return_id). */
+  async create(input: ApparelReturnInput, idempotencyKey: string): Promise<ApparelReturn> {
+    const body = {
+      sale_id: input.sale_id, lines: input.lines, reason: input.reason.trim(), refund_mode: input.refund_mode,
+      client_return_id: input.client_return_id, approver_pin: input.approver_pin || undefined,
+    };
+    return adaptApparelReturn(await apiClient.request<Raw>('POST', `${P}/returns`, { body, idempotent: idempotencyKey }));
+  },
+  async list(params: { branch_id?: string; sale_id?: string; on_date?: string; limit?: number } = {}): Promise<ApparelPage<ApparelReturn>> {
+    const raw = await apiClient.request<Raw>('GET', `${P}/returns`, { query: { ...params, limit: params.limit ?? 50 } });
+    return { items: raw.items.map(adaptApparelReturn), total: raw.total };
+  },
+  /** The sale to take goods back from: by invoice number, or by the customer's phone. Newest first. */
+  async findSales(params: { search?: string; phone?: string; branch_id?: string }): Promise<ApparelSale[]> {
+    const raw = await apiClient.request<Raw>('GET', `${P}/sales`, { query: { ...params, status: 'paid', limit: 20 } });
+    return raw.items.map(adaptApparelSale);
+  },
+  async storeCredit(code: string): Promise<ApparelStoreCredit> {
+    return adaptApparelStoreCredit(await apiClient.request<Raw>('GET', `${P}/store-credits/${encodeURI(code.trim())}`));
+  },
+  /** Spend store credit on a sale: the credit pays what it has, up to `amountPaise` and what the sale owes. */
+  async payWithCredit(saleId: string, code: string, amountPaise: number, idempotencyKey: string): Promise<void> {
+    await apiClient.request<Raw>('POST', `${P}/sales/${saleId}/payments`, {
+      idempotent: idempotencyKey,
+      body: { payment_mode: 'credit_note', amount: toRupees(amountPaise), credit_note_code: code.trim() },
+    });
+  },
+  async receiptPrint(returnId: string, paperMm: 58 | 80): Promise<PrintablePage> {
+    const raw = await apiClient.request<Raw>('GET', `${P}/returns/${returnId}/receipt`, { query: { paper_mm: paperMm } });
+    return {
+      reference: raw.sale_number, paper_mm: raw.paper_mm === 58 ? 58 : 80,
+      rows: (raw.rows ?? []).map((r: Raw): PrintRow => ({ style: r.style, align: r.align, text: r.text })), text: raw.text ?? '',
+    };
+  },
+  receiptHtml(returnId: string, paperMm: 58 | 80): Promise<string> {
+    return apiClient.request<string>('GET', `${P}/returns/${returnId}/receipt`, { query: { format: 'html', paper_mm: paperMm }, text: true });
+  },
+};
+
+export function useCreateApparelReturn() {
+  return useApparelMutation(({ input, idempotencyKey }: { input: ApparelReturnInput; idempotencyKey: string }) =>
+    apparelReturnsApi.create(input, idempotencyKey));
+}

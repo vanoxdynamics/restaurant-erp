@@ -7,7 +7,15 @@ from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from app.core.enums import ApparelMovementKind, ApparelPaymentMode, ApparelTaxMode, BillStatus, PaymentStatus
+from app.core.enums import (
+    ApparelMovementKind,
+    ApparelPaymentMode,
+    ApparelRefundMode,
+    ApparelTaxMode,
+    BillStatus,
+    PaymentStatus,
+    StoreCreditStatus,
+)
 from app.schemas.billing import PaymentReverse, PrintRowRead, TerminalPaymentComplete
 from app.schemas.common import Money, Pin, PositiveMoney, Reason
 
@@ -393,11 +401,15 @@ class ApparelPaymentCreate(BaseModel):
     payment_mode: ApparelPaymentMode
     amount: PositiveMoney
     reference_id: Optional[str] = Field(default=None, max_length=100)
+    # Store credit: the code printed on the credit note. `amount` is at most what the customer wants to spend.
+    credit_note_code: Optional[str] = Field(default=None, max_length=50)
 
     @model_validator(mode="after")
     def check_reference(self) -> "ApparelPaymentCreate":
         if self.payment_mode in (ApparelPaymentMode.UPI, ApparelPaymentMode.CARD) and not self.reference_id:
             raise ValueError("reference_id is required for upi and card payments")
+        if self.payment_mode == ApparelPaymentMode.CREDIT_NOTE and not (self.credit_note_code and self.credit_note_code.strip()):
+            raise ValueError("credit_note_code is required for store credit")
         return self
 
 
@@ -468,3 +480,61 @@ class ApparelReceiptRead(BaseModel):
     rows: List[PrintRowRead]
     text: str
     logo_data_url: Optional[str] = None
+
+
+# --- returns and store credit (A5) --------------------------------------------------------------------------------------------
+
+
+class ApparelReturnLineIn(BaseModel):
+    sale_line_id: uuid.UUID
+    quantity: int = Field(gt=0, le=999)
+    restock: bool = True  # false for damaged goods that do not go back on the shelf
+
+
+class ApparelReturnCreate(BaseModel):
+    sale_id: uuid.UUID
+    lines: List[ApparelReturnLineIn] = Field(min_length=1, max_length=200)
+    reason: Reason
+    refund_mode: ApparelRefundMode
+    client_return_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    approver_pin: Optional[Pin] = None
+
+
+class ApparelReturnLineRead(ORM):
+    id: uuid.UUID
+    sale_line_id: uuid.UUID
+    quantity: int
+    amount: Decimal
+    taxable_value: Decimal
+    cgst: Decimal
+    sgst: Decimal
+    igst: Decimal
+    restock: bool
+
+
+class ApparelReturnRead(ORM):
+    id: uuid.UUID
+    branch_id: uuid.UUID
+    return_number: str
+    sale_id: uuid.UUID
+    business_date: date
+    reason: str
+    refund_mode: ApparelRefundMode
+    total_amount: Decimal
+    taxable_value: Decimal
+    tax_cgst: Decimal
+    tax_sgst: Decimal
+    tax_igst: Decimal
+    created_at: datetime
+    lines: List[ApparelReturnLineRead] = []
+    store_credit_code: Optional[str] = None
+
+
+class ApparelStoreCreditRead(ORM):
+    id: uuid.UUID
+    code: str
+    customer_id: Optional[uuid.UUID] = None
+    amount: Decimal
+    balance: Decimal
+    status: StoreCreditStatus
+    created_at: datetime

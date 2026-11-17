@@ -7,11 +7,14 @@ import { ApiError, apparelSalesApi, ApparelSale, TerminalOutcome, useApparelSale
 import { QueryState } from '../components/QueryState';
 import { TopBar } from '../components/TopBar';
 import { PayPanel, Row, type TenderApi, type TenderSale } from '../retailkit/PayPanel';
+import { StoreCreditTender } from './StoreCreditTender';
 
 const money = (paise: number) => formatPaiseToRupees(paise);
 
 export interface PayScreenProps {
   saleId: string;
+  /** Store credit from an exchange: offered first at payment. */
+  credit?: { code: string; amount_paise: number } | null;
   /** Back to the counter with the sale left as it is (unpaid sales keep their pieces out of stock until voided). */
   onBack: () => void;
   /** Paid (or cancelled): next customer. */
@@ -27,7 +30,7 @@ const asTenderSale = (sale: ApparelSale): TenderSale => ({
 });
 
 /** Payment for a dress shop invoice: the shared pay panel with this module's endpoints, above the invoice's own lines and tax. */
-export const PayScreen: React.FC<PayScreenProps> = ({ saleId, onBack, onDone }) => {
+export const PayScreen: React.FC<PayScreenProps> = ({ saleId, credit, onBack, onDone }) => {
   const query = useApparelSale(saleId);
   const queryClient = useQueryClient();
   const voidSale = useVoidApparelSale();
@@ -86,6 +89,14 @@ export const PayScreen: React.FC<PayScreenProps> = ({ saleId, onBack, onDone }) 
               sale={asTenderSale(sale)}
               api={api}
               onDone={onDone}
+              extraTenders={
+                <StoreCreditTender
+                  saleId={saleId}
+                  balanceDuePaise={sale.balance_due_paise}
+                  initialCode={credit?.code}
+                  onApplied={() => queryClient.invalidateQueries({ queryKey: ['apparel', 'sale', saleId] })}
+                />
+              }
               summary={
                 <View style={styles.summary}>
                   {sale.lines.map((l) => (

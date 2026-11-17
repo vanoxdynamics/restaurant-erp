@@ -29,7 +29,14 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.enums import ApparelMovementKind, ApparelPaymentMode, ApparelTaxMode, BillStatus
+from app.core.enums import (
+    ApparelMovementKind,
+    ApparelPaymentMode,
+    ApparelRefundMode,
+    ApparelTaxMode,
+    BillStatus,
+    StoreCreditStatus,
+)
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_check
 from app.models.payment_columns import PaymentColumns
 
@@ -175,6 +182,8 @@ class ApparelStockMovement(Base, UUIDPrimaryKeyMixin):
         UUID(as_uuid=True), ForeignKey("apparel_purchases.id"), nullable=True, index=True)
     sale_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("apparel_sales.id"), nullable=True, index=True)
+    return_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("apparel_returns.id"), nullable=True, index=True)
     created_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.id"), nullable=True)
     # The moment the row is written (not the transaction's start), so the ledger's time order is the order stock changed in, even
     # when a sale waited on another's lock.
@@ -262,11 +271,85 @@ class ApparelPayment(Base, UUIDPrimaryKeyMixin, TimestampMixin, PaymentColumns):
     __table_args__ = (
         enum_check("apparel_payments", "payment_mode", ApparelPaymentMode),
         CheckConstraint("amount > 0", name="ck_apparel_payments_amount"),
+        CheckConstraint("(credit_note_id IS NOT NULL) = (payment_mode = 'credit_note')", name="ck_apparel_payments_credit_note"),
         Index("uq_apparel_payments_sale_idempotency", "sale_id", "idempotency_key", unique=True,
               postgresql_where=text("idempotency_key IS NOT NULL")),
     )
 
     branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False, index=True)
     sale_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("apparel_sales.id"), nullable=False, index=True)
+    # Set exactly when the tender is store credit: which credit was spent.
+    credit_note_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("apparel_store_credits.id"), nullable=True, index=True)
 
     sale: Mapped[ApparelSale] = relationship("ApparelSale", back_populates="payments", lazy="raise")
+
+
+class ApparelReturn(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Goods back against a paid sale: the credit note. Amounts come from the sale's own stored lines."""
+    __tablename__ = "apparel_returns"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "return_number", name="uq_apparel_returns_branch_number"),
+        Index("uq_apparel_returns_branch_client_return", "branch_id", "client_return_id", unique=True,
+              postgresql_where=text("client_return_id IS NOT NULL")),
+        enum_check("apparel_returns", "refund_mode", ApparelRefundMode),
+        CheckConstraint("total_amount >= 0", name="ck_apparel_returns_total"),
+    )
+
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False, index=True)
+    return_number: Mapped[str] = mapped_column(String(50), nullable=False)
+    sale_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("apparel_sales.id"), nullable=False, index=True)
+    business_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    refund_mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    taxable_value: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    tax_cgst: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    tax_sgst: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    tax_igst: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), nullable=False)
+    created_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.id"), nullable=True)
+    approved_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.id"), nullable=True)
+    shift_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("shifts.id"), nullable=True, index=True)
+    client_return_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    lines: Mapped[List["ApparelReturnLine"]] = relationship(
+        "ApparelReturnLine", back_populates="return_", cascade="all, delete-orphan", order_by="ApparelReturnLine.created_at",
+        lazy="raise")
+
+
+class ApparelReturnLine(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    __tablename__ = "apparel_return_lines"
+    __table_args__ = (CheckConstraint("quantity > 0", name="ck_apparel_return_lines_quantity"),)
+
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False, index=True)
+    return_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("apparel_returns.id", ondelete="CASCADE"), nullable=False, index=True)
+    sale_line_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("apparel_sale_lines.id"), nullable=False, index=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    taxable_value: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    cgst: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    sgst: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    igst: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), nullable=False)
+    restock: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+
+    return_: Mapped[ApparelReturn] = relationship("ApparelReturn", back_populates="lines", lazy="raise")
+
+
+class ApparelStoreCredit(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Value of a return kept by the shop for the customer. Valid at every branch of the business."""
+    __tablename__ = "apparel_store_credits"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "code", name="uq_apparel_store_credits_org_code"),
+        UniqueConstraint("return_id", name="uq_apparel_store_credits_return"),
+        enum_check("apparel_store_credits", "status", StoreCreditStatus),
+        CheckConstraint("balance >= 0 AND balance <= amount", name="ck_apparel_store_credits_balance"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
+    return_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("apparel_returns.id"), nullable=False)
+    code: Mapped[str] = mapped_column(String(50), nullable=False)
+    customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"), nullable=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    balance: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default=StoreCreditStatus.OPEN.value, nullable=False)
