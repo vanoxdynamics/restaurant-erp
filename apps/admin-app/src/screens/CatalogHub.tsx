@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, fonts, radii, spacing } from '@repo/shared-ui';
 import { useEntitlements } from '@repo/api-client';
 import { ProductsScreen as ApparelProductsScreen } from './apparel/ProductsScreen';
+import { StockScreen as ApparelStockScreen } from './apparel/StockScreen';
 import { MenuBuilderScreen } from './MenuBuilder';
 import { StockScreen } from './StockScreen';
 
@@ -16,17 +17,18 @@ export const CatalogHub: React.FC = () => {
   const entitlements = useEntitlements().data;
   const [view, setView] = useState<CatalogView>('items');
   // Dress and hardware shops keep their catalogue and stock in their own modules.
-  if (entitlements?.category === 'apparel') return <ApparelProductsScreen />;
   if (entitlements?.category === 'hardware') return <ShopModulePlaceholder kind="hardware" />;
-  if (!entitlements?.modules.includes('inventory')) return <MenuBuilderScreen />;
-  const shop = entitlements.category !== 'restaurant' && !entitlements.settings.kitchen_tickets;
+  // A dress shop's products and stock are its own module's (stock needs no `inventory` module there).
+  const apparel = entitlements?.category === 'apparel';
+  if (!apparel && !entitlements?.modules.includes('inventory')) return <MenuBuilderScreen />;
+  const shop = entitlements?.category !== 'restaurant' && !entitlements?.settings.kitchen_tickets;
 
   return (
     <View style={styles.container}>
       <View style={styles.segmentWrapper}>
         <View style={styles.segmented} accessibilityRole="tablist">
           {([
-            ['items', shop ? 'Items' : 'Menu'],
+            ['items', apparel ? 'Products' : shop ? 'Items' : 'Menu'],
             ['stock', 'Stock'],
           ] as const).map(([key, label]) => (
             <Pressable
@@ -41,7 +43,11 @@ export const CatalogHub: React.FC = () => {
           ))}
         </View>
       </View>
-      <View style={{ flex: 1 }}>{view === 'items' ? <MenuBuilderScreen /> : <StockScreen />}</View>
+      <View style={{ flex: 1 }}>
+        {apparel
+          ? view === 'items' ? <ApparelProductsScreen /> : <ApparelStockScreen />
+          : view === 'items' ? <MenuBuilderScreen /> : <StockScreen />}
+      </View>
     </View>
   );
 };

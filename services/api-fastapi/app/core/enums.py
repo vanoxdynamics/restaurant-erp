@@ -100,6 +100,16 @@ class ApparelTaxMode(StrEnum):
     FIXED = "fixed"  # its own rate (belts, bags, accessories)
 
 
+class ApparelMovementKind(StrEnum):
+    """Why a dress shop variant's stock changed. Every change is one row in the module's stock ledger."""
+    PURCHASE = "purchase"
+    SALE = "sale"
+    SALE_VOID = "sale_void"  # a voided sale puts its pieces back
+    RETURN = "return"  # goods returned and put back on the shelf
+    ADJUSTMENT = "adjustment"
+    COUNT = "count"
+
+
 class ItemUnit(StrEnum):
     """The unit an item is priced and sold in. Quantities are decimals (3 places), so 0.750 kg is a normal quantity."""
     PIECE = "pcs"

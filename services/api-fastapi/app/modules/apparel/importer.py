@@ -15,9 +15,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, resolve_branch_id
-from app.core.enums import ApparelTaxMode
+from app.core.enums import ApparelMovementKind, ApparelTaxMode
 from app.core.events import commit
 from app.models.apparel import ApparelCategory, ApparelProduct, ApparelVariant
+from app.modules.apparel import stock as stocks
 from app.modules.apparel.catalog import GridOrder, allocate_barcodes, announce, flush_or_conflict
 from app.modules.retailkit import csvimport as kit
 from app.schemas.apparel import ApparelImportResult
@@ -78,9 +79,6 @@ def parse(line: int, raw: Dict[str, str]) -> Tuple[Optional[Row], List[str]]:
     stock = kit.number(raw, "opening_stock", errors, places=0)
     if price is not None and mrp is not None and price > mrp:
         errors.add(f"price {price} is more than the MRP {mrp}")
-    if stock is not None:
-        # Stock arrives with stage A2 of the module; until then a file with opening stock is not half-imported.
-        errors.add("opening_stock cannot be imported yet; leave the column empty")
     if errors:
         return None, errors.errors
     assert name and category and size and price is not None
@@ -114,6 +112,8 @@ async def import_catalogue(db: AsyncSession, user: CurrentUser, text: str, dry_r
             first = seen_combo.setdefault(combo, line)
             if first != line:
                 problems.append(f"size {row.size} in {row.colour} is also on line {first}")
+            if row.opening_stock and branch_id is None:
+                problems.append("opening_stock needs a branch: choose the branch the stock is in")
             lead = first_of_group.setdefault(row.group, row)
             if lead is not row and lead.gst_rate != row.gst_rate:
                 problems.append(f"gst_rate differs from line {lead.line} of the same product")
@@ -143,6 +143,7 @@ async def import_catalogue(db: AsyncSession, user: CurrentUser, text: str, dry_r
     product_for_group: Dict[Tuple[str, ...], ApparelProduct] = {}
     touched_variants: set = set()
     need_barcode: List[ApparelVariant] = []
+    opening: List[Tuple[ApparelVariant, int]] = []  # pieces on the shelf, for variants this import creates
 
     for row in rows:
         category = categories.get(row.category.lower())
@@ -209,6 +210,8 @@ async def import_catalogue(db: AsyncSession, user: CurrentUser, text: str, dry_r
                 db.add(variant)
             if not row.barcode:
                 need_barcode.append(variant)
+            if row.opening_stock:
+                opening.append((variant, row.opening_stock))
             variants_created += 1
             by_combo[(product.id, row.size.lower(), row.colour.lower())] = variant
         else:
@@ -242,6 +245,13 @@ async def import_catalogue(db: AsyncSession, user: CurrentUser, text: str, dry_r
     for variant, code in zip(need_barcode, codes, strict=True):
         variant.barcode = code
     await flush_or_conflict(db)
+    if opening and branch_id is not None:
+        # Opening stock is a count: the shelf held this many when the shop started using the system.
+        levels = await stocks.lock_levels(db, branch_id, [v.id for v, _ in opening])
+        for variant, pieces in opening:
+            stocks.move(db, levels[variant.id], ApparelMovementKind.COUNT, pieces, user_id=user.staff_id,
+                        reason="Opening stock (import)")
+        stocks.announce(db, branch_id, levels)
     await announce(db, org_id, "apparel.catalog.imported",
                    {"products_created": result.products_created, "variants_created": variants_created})
     await commit(db)

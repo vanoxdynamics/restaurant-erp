@@ -344,3 +344,179 @@ export function useApparelImport() {
   return useApparelMutation(({ csv, dryRun, branchId }: { csv: string; dryRun?: boolean; branchId?: string }) =>
     apparelApi.importCatalogue(csv, dryRun, branchId));
 }
+
+// ---- Stock (stage A2) -------------------------------------------------------------------------------------------------------
+
+export interface ApparelStockRow {
+  variant_id: string;
+  product_id: string;
+  product_name: string;
+  category_id: string;
+  category_name: string;
+  size: string;
+  colour: string;
+  sku?: string;
+  barcode?: string;
+  price_paise: number;
+  quantity: number;
+  low_stock_level?: number;
+  is_low: boolean;
+  is_out: boolean;
+  /** Owners and managers only. */
+  cost_price_paise?: number;
+  stock_value_paise?: number;
+}
+
+export interface ApparelPurchaseLine {
+  variant_id: string;
+  product_name: string;
+  size: string;
+  colour: string;
+  quantity: number;
+  unit_cost_paise?: number;
+  line_cost_paise?: number;
+}
+
+export interface ApparelPurchase {
+  id: string;
+  branch_id: string;
+  supplier_name?: string;
+  invoice_number?: string;
+  received_on: string;
+  notes?: string;
+  total_cost_paise: number;
+  created_by?: string;
+  created_at: string;
+  lines: ApparelPurchaseLine[];
+}
+
+export interface ApparelPurchaseInput {
+  branch_id?: string;
+  supplier_name?: string;
+  invoice_number?: string;
+  received_on?: string;
+  notes?: string;
+  lines: { variant_id: string; quantity: number; unit_cost_paise?: number }[];
+}
+
+export type ApparelMovementKind = 'purchase' | 'sale' | 'sale_void' | 'return' | 'adjustment' | 'count';
+
+export interface ApparelMovement {
+  id: string;
+  variant_id: string;
+  product_name: string;
+  size: string;
+  colour: string;
+  kind: ApparelMovementKind;
+  quantity: number;
+  balance_after: number;
+  unit_cost_paise?: number;
+  reason?: string;
+  purchase_id?: string;
+  created_by?: string;
+  created_at: string;
+}
+
+export interface ApparelAdjustInput {
+  branch_id?: string;
+  variant_id: string;
+  /** Add or remove pieces; or `counted`, the physical count. Exactly one. */
+  delta?: number;
+  counted?: number;
+  reason: string;
+}
+
+function adaptStockRow(raw: Raw): ApparelStockRow {
+  return {
+    variant_id: raw.variant_id, product_id: raw.product_id, product_name: raw.product_name, category_id: raw.category_id,
+    category_name: raw.category_name, size: raw.size, colour: raw.colour, sku: raw.sku ?? undefined,
+    barcode: raw.barcode ?? undefined, price_paise: toPaise(raw.price), quantity: raw.quantity,
+    low_stock_level: raw.low_stock_level ?? undefined, is_low: raw.is_low, is_out: raw.is_out,
+    cost_price_paise: optPaise(raw.cost_price), stock_value_paise: optPaise(raw.stock_value),
+  };
+}
+
+function adaptPurchase(raw: Raw): ApparelPurchase {
+  return {
+    id: raw.id, branch_id: raw.branch_id, supplier_name: raw.supplier_name ?? undefined,
+    invoice_number: raw.invoice_number ?? undefined, received_on: raw.received_on, notes: raw.notes ?? undefined,
+    total_cost_paise: toPaise(raw.total_cost), created_by: raw.created_by ?? undefined, created_at: raw.created_at,
+    lines: (raw.lines ?? []).map((l: Raw) => ({
+      variant_id: l.variant_id, product_name: l.product_name, size: l.size, colour: l.colour, quantity: l.quantity,
+      unit_cost_paise: optPaise(l.unit_cost), line_cost_paise: optPaise(l.line_cost),
+    })),
+  };
+}
+
+function adaptMovement(raw: Raw): ApparelMovement {
+  return {
+    id: raw.id, variant_id: raw.variant_id, product_name: raw.product_name, size: raw.size, colour: raw.colour, kind: raw.kind,
+    quantity: raw.quantity, balance_after: raw.balance_after, unit_cost_paise: optPaise(raw.unit_cost),
+    reason: raw.reason ?? undefined, purchase_id: raw.purchase_id ?? undefined, created_by: raw.created_by ?? undefined,
+    created_at: raw.created_at,
+  };
+}
+
+export const apparelStockApi = {
+  async stock(params: { branch_id?: string; search?: string; low_only?: boolean; category_id?: string; product_id?: string } = {}): Promise<ApparelStockRow[]> {
+    const raw = await apiClient.request<Raw[]>('GET', `${P}/stock`, {
+      query: { branch_id: params.branch_id, search: params.search, low_only: params.low_only ? 'true' : undefined,
+        category_id: params.category_id, product_id: params.product_id },
+    });
+    return raw.map(adaptStockRow);
+  },
+  async updateStock(variantId: string, changes: { branch_id?: string; low_stock_level?: number | null; cost_price_paise?: number | null }): Promise<ApparelStockRow> {
+    const body: Raw = { branch_id: changes.branch_id };
+    if (changes.low_stock_level !== undefined) body.low_stock_level = changes.low_stock_level;
+    if (changes.cost_price_paise !== undefined) body.cost_price = optRupees(changes.cost_price_paise);
+    return adaptStockRow(await apiClient.request<Raw>('PUT', `${P}/stock/${variantId}`, { body }));
+  },
+  /** Pass the same `idempotencyKey` when retrying so a delivery is not received twice. */
+  async receive(input: ApparelPurchaseInput, idempotencyKey: string): Promise<ApparelPurchase> {
+    const body = {
+      branch_id: input.branch_id, supplier_name: input.supplier_name?.trim() || undefined,
+      invoice_number: input.invoice_number?.trim() || undefined, received_on: input.received_on, notes: input.notes?.trim() || undefined,
+      lines: input.lines.map((l) => ({ variant_id: l.variant_id, quantity: l.quantity,
+        unit_cost: l.unit_cost_paise === undefined ? undefined : toRupees(l.unit_cost_paise) })),
+    };
+    return adaptPurchase(await apiClient.request<Raw>('POST', `${P}/purchases`, { body, idempotent: idempotencyKey }));
+  },
+  async purchases(branchId?: string): Promise<ApparelPage<ApparelPurchase>> {
+    const raw = await apiClient.request<Raw>('GET', `${P}/purchases`, { query: { branch_id: branchId, limit: 50 } });
+    return { items: raw.items.map(adaptPurchase), total: raw.total };
+  },
+  async adjust(input: ApparelAdjustInput, idempotencyKey: string): Promise<ApparelStockRow> {
+    return adaptStockRow(await apiClient.request<Raw>('POST', `${P}/adjustments`, { body: { ...input, reason: input.reason.trim() }, idempotent: idempotencyKey }));
+  },
+  async movements(params: { branch_id?: string; variant_id?: string; kind?: ApparelMovementKind; limit?: number } = {}): Promise<ApparelPage<ApparelMovement>> {
+    const raw = await apiClient.request<Raw>('GET', `${P}/movements`, { query: { ...params, limit: params.limit ?? 50 } });
+    return { items: raw.items.map(adaptMovement), total: raw.total };
+  },
+};
+
+export function useApparelStock(params: { branch_id?: string; search?: string; low_only?: boolean; category_id?: string; product_id?: string }, enabled = true) {
+  return useQuery({ queryKey: ['apparel', 'stock', params], queryFn: () => apparelStockApi.stock(params), enabled, refetchInterval: 30000 });
+}
+
+export function useUpdateApparelStock() {
+  return useApparelMutation(({ variantId, changes }: { variantId: string; changes: { branch_id?: string; low_stock_level?: number | null; cost_price_paise?: number | null } }) =>
+    apparelStockApi.updateStock(variantId, changes));
+}
+
+export function useReceiveApparelStock() {
+  return useApparelMutation(({ input, idempotencyKey }: { input: ApparelPurchaseInput; idempotencyKey: string }) =>
+    apparelStockApi.receive(input, idempotencyKey));
+}
+
+export function useApparelPurchases(branchId?: string, enabled = true) {
+  return useQuery({ queryKey: ['apparel', 'purchases', branchId ?? ''], queryFn: () => apparelStockApi.purchases(branchId), enabled });
+}
+
+export function useAdjustApparelStock() {
+  return useApparelMutation(({ input, idempotencyKey }: { input: ApparelAdjustInput; idempotencyKey: string }) =>
+    apparelStockApi.adjust(input, idempotencyKey));
+}
+
+export function useApparelMovements(params: { branch_id?: string; variant_id?: string; kind?: ApparelMovementKind }, enabled = true) {
+  return useQuery({ queryKey: ['apparel', 'movements', params], queryFn: () => apparelStockApi.movements(params), enabled });
+}

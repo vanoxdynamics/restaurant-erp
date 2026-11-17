@@ -8,17 +8,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, get_current_user, require_branch_access, require_category, require_roles
 from app.core.database import get_db
-from app.core.enums import BusinessCategory, Role
+from app.core.enums import ApparelMovementKind, BusinessCategory, Role
+from app.core.idempotency import IdempotencyGuard, idempotent
 from app.core.pagination import PageParams, page_params
-from app.modules.apparel import catalog, importer
+from app.modules.apparel import catalog, importer, stock
 from app.schemas.apparel import (
     ApparelCategoryCreate,
     ApparelCategoryRead,
     ApparelCategoryUpdate,
     ApparelImportRequest,
     ApparelImportResult,
+    ApparelMovementRead,
+    ApparelPurchaseCreate,
+    ApparelPurchaseRead,
     ApparelSettingsRead,
     ApparelSettingsUpdate,
+    ApparelStockAdjust,
+    ApparelStockRead,
+    ApparelStockSettings,
     ProductCreate,
     ProductRead,
     ProductUpdate,
@@ -162,3 +169,83 @@ async def import_catalogue(payload: ApparelImportRequest, user: CurrentUser = De
     gst_rate, opening_stock). Good rows are saved together; bad rows are reported by line. `dry_run` saves nothing.
     """
     return await importer.import_catalogue(db, user, payload.csv, payload.dry_run, payload.branch_id)
+
+
+# --- stock -------------------------------------------------------------------------------------------------------------------
+
+
+@router.get("/stock", response_model=List[ApparelStockRead])
+async def list_stock(
+    branch_id: Optional[uuid.UUID] = None, search: Optional[str] = Query(default=None, max_length=100), low_only: bool = False,
+    category_id: Optional[uuid.UUID] = None, product_id: Optional[uuid.UUID] = None,
+    user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    """
+    Pieces on hand of every active variant in the branch (never stocked reads as 0). `low_only` keeps variants at or below
+    their low-stock level or with nothing left. Anyone may read it; cost and value go to owners and managers only.
+    """
+    return await stock.list_stock(db, user, branch_id, search=search, low_only=low_only, category_id=category_id,
+                                  product_id=product_id)
+
+
+@router.put("/stock/{variant_id}", response_model=ApparelStockRead)
+async def update_stock_settings(variant_id: uuid.UUID, payload: ApparelStockSettings, user: CurrentUser = Depends(managers),
+                                db: AsyncSession = Depends(get_db)):
+    """A variant's low-stock level and cost price in a branch."""
+    return await stock.update_settings(db, user, variant_id, payload)
+
+
+@router.post("/purchases", response_model=ApparelPurchaseRead, status_code=status.HTTP_201_CREATED)
+async def receive_purchase(
+    payload: ApparelPurchaseCreate, user: CurrentUser = Depends(managers),
+    guard: IdempotencyGuard = Depends(idempotent("apparel_purchases")), db: AsyncSession = Depends(get_db),
+):
+    """A delivery: every line adds pieces. Requires X-Idempotency-Key so a retry cannot receive it twice."""
+    cached = await guard.begin(payload)
+    if cached:
+        return cached.as_response()
+    try:
+        purchase = await stock.receive_purchase(db, user, payload)
+    except Exception:
+        await guard.release()
+        raise
+    return await guard.complete(status.HTTP_201_CREATED, ApparelPurchaseRead.model_validate(purchase))
+
+
+@router.get("/purchases", response_model=Page[ApparelPurchaseRead])
+async def list_purchases(branch_id: Optional[uuid.UUID] = None, params: PageParams = Depends(page_params),
+                         user: CurrentUser = Depends(managers), db: AsyncSession = Depends(get_db)):
+    items, total = await stock.list_purchases(db, user, params, branch_id)
+    return Page(items=items, total=total, limit=params.limit, offset=params.offset)
+
+
+@router.get("/purchases/{purchase_id}", response_model=ApparelPurchaseRead)
+async def get_purchase(purchase_id: uuid.UUID, user: CurrentUser = Depends(managers), db: AsyncSession = Depends(get_db)):
+    return await stock.get_purchase(db, user, purchase_id)
+
+
+@router.post("/adjustments", response_model=ApparelStockRead)
+async def adjust_stock(
+    payload: ApparelStockAdjust, user: CurrentUser = Depends(managers),
+    guard: IdempotencyGuard = Depends(idempotent("apparel_adjustments")), db: AsyncSession = Depends(get_db),
+):
+    """Add or remove pieces (`delta`) or record a physical count (`counted`), with a reason. Requires X-Idempotency-Key."""
+    cached = await guard.begin(payload)
+    if cached:
+        return cached.as_response()
+    try:
+        row = await stock.adjust(db, user, payload)
+    except Exception:
+        await guard.release()
+        raise
+    return await guard.complete(status.HTTP_200_OK, ApparelStockRead.model_validate(row))
+
+
+@router.get("/movements", response_model=Page[ApparelMovementRead])
+async def list_movements(
+    branch_id: Optional[uuid.UUID] = None, variant_id: Optional[uuid.UUID] = None, kind: Optional[ApparelMovementKind] = None,
+    params: PageParams = Depends(page_params), user: CurrentUser = Depends(managers), db: AsyncSession = Depends(get_db),
+):
+    """The stock ledger, newest first."""
+    items, total = await stock.list_movements(db, user, params, branch_id, variant_id, kind)
+    return Page(items=items, total=total, limit=params.limit, offset=params.offset)

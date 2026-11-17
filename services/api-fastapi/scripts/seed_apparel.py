@@ -252,6 +252,21 @@ async def main() -> None:
             raise SystemExit(f"Import errors: {result['errors'][:3]}")
         print(f"{NAME} ({ent['category']}): {result['products_created']} styles and {result['variants_created']} variants "
               f"created, {result['variants_updated']} variants updated.")
+
+        # Stage A2: one opening delivery the first time, so the shop has stock to sell (some sizes low or out on purpose).
+        purchases = check(await c.get(f"{API}/apparel/purchases", headers=headers))
+        if purchases["total"] == 0:
+            rows = check(await c.get(f"{API}/apparel/stock", headers=headers))
+            lines = []
+            for i, row in enumerate(rows):
+                pieces = (i * 7) % 9  # 0..8: a few sizes start out of stock
+                if pieces:
+                    cost = f"{float(row['price']) * 0.55:.2f}"
+                    lines.append({"variant_id": row["variant_id"], "quantity": pieces, "unit_cost": cost})
+            delivery = check(await c.post(
+                f"{API}/apparel/purchases", json={"supplier_name": "Opening stock", "invoice_number": "OPENING", "lines": lines},
+                headers={**headers, "X-Idempotency-Key": f"seed-opening-{SLUG}"}))
+            print(f"Opening delivery: {sum(line['quantity'] for line in delivery['lines'])} pieces, cost {delivery['total_cost']}.")
         print(f"Sign in: {OWNER['username']} / {OWNER['password']} (PIN {OWNER['pin']}).")
 
 

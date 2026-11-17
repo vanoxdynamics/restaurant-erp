@@ -146,8 +146,21 @@ Reads are open to any signed-in staff; every write below is owners and managers 
   `category`, `size`, `price`. Rows with the same `style_code` (or, without one, the same category and name) are one product;
   `gst_rate` blank means the slab rate, a number a fixed rate (all rows of a product must agree). A row updates the variant with
   the same SKU, else barcode, else size and colour; a code may not move to another variant. Bad rows come back as
-  `errors: [{row, errors, data}]`; good rows are saved together; up to 10,000 rows. `opening_stock` is refused until the stock
-  stage of the module (A2).
+  `errors: [{row, errors, data}]`; good rows are saved together; up to 10,000 rows. `opening_stock` (whole pieces) needs
+  `branch_id` and is applied only to variants the import creates, as `count` ledger rows ("Opening stock (import)").
+- **Stock.** `GET /apparel/stock?branch_id=&search=&low_only=&category_id=&product_id=`: every active variant with its pieces on
+  hand in the branch (never stocked reads as 0; quantities may go negative). Anyone may read it; `cost_price` and
+  `stock_value` are sent to owners and managers only. `PUT /apparel/stock/{variant_id}` sets `low_stock_level` and
+  `cost_price` for a branch (managers).
+- **Deliveries.** `POST /apparel/purchases` (managers, `X-Idempotency-Key`): `lines: [{variant_id, quantity, unit_cost}]` in
+  whole pieces; a line's `unit_cost` becomes the variant's cost price in the branch. `GET /apparel/purchases`,
+  `GET /apparel/purchases/{id}` (managers: they carry costs).
+- **Adjustments and counts.** `POST /apparel/adjustments` (managers, `X-Idempotency-Key`): `{variant_id, delta | counted, reason}`.
+  A count equal to the record writes nothing.
+- **Ledger.** `GET /apparel/movements?branch_id=&variant_id=&kind=` (managers), newest first. Every stock change is one row with
+  `kind` (`purchase`, `sale`, `sale_void`, `return`, `adjustment`, `count`), signed `quantity` and `balance_after`; rows are
+  stamped when written, so time order is the order stock changed in. `apparel.stock.changed` and `apparel.stock.low` go out on
+  the `catalog` topic.
 
 ## Inventory
 

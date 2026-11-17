@@ -1,14 +1,14 @@
 """Request and response bodies of the dress shop module (`/apparel`). Money is a rupee string with 2 decimals."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from app.core.enums import ApparelTaxMode
-from app.schemas.common import Money
+from app.core.enums import ApparelMovementKind, ApparelTaxMode
+from app.schemas.common import Money, Reason
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
 CategoryName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
@@ -225,3 +225,108 @@ class ApparelImportResult(BaseModel):
     categories_created: int
     errors: List[ImportRowError]
     dry_run: bool
+
+
+# --- stock (A2) --------------------------------------------------------------------------------------------------------------
+
+Pieces = Annotated[int, Field(gt=0, le=1_000_000, strict=True)]
+Supplier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
+InvoiceNo = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
+
+
+class ApparelStockRead(BaseModel):
+    """A variant's stock in a branch. `cost_price` and `stock_value` go to owners and managers only."""
+    variant_id: uuid.UUID
+    product_id: uuid.UUID
+    product_name: str
+    category_id: uuid.UUID
+    category_name: str
+    size: str
+    colour: str
+    sku: Optional[str] = None
+    barcode: Optional[str] = None
+    price: Decimal
+    quantity: int
+    low_stock_level: Optional[int] = None
+    is_low: bool
+    is_out: bool
+    cost_price: Optional[Decimal] = None
+    stock_value: Optional[Decimal] = None
+
+
+class ApparelStockSettings(BaseModel):
+    """Fields left out are not changed; `null` clears."""
+    branch_id: Optional[uuid.UUID] = None
+    low_stock_level: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    cost_price: Optional[Money] = None
+
+
+class ApparelPurchaseLineIn(BaseModel):
+    variant_id: uuid.UUID
+    quantity: Pieces
+    unit_cost: Optional[Money] = None  # what one piece cost; becomes the variant's cost price in the branch
+
+
+class ApparelPurchaseCreate(BaseModel):
+    branch_id: Optional[uuid.UUID] = None
+    supplier_name: Optional[Supplier] = None
+    invoice_number: Optional[InvoiceNo] = None
+    received_on: Optional[date] = None  # defaults to today at the branch
+    notes: Optional[str] = Field(default=None, max_length=500)
+    lines: List[ApparelPurchaseLineIn] = Field(min_length=1, max_length=1000)
+
+
+class ApparelPurchaseLineRead(BaseModel):
+    variant_id: uuid.UUID
+    product_name: str
+    size: str
+    colour: str
+    quantity: int
+    unit_cost: Optional[Decimal] = None
+    line_cost: Optional[Decimal] = None
+
+
+class ApparelPurchaseRead(BaseModel):
+    id: uuid.UUID
+    branch_id: uuid.UUID
+    supplier_name: Optional[str] = None
+    invoice_number: Optional[str] = None
+    received_on: date
+    notes: Optional[str] = None
+    total_cost: Decimal
+    created_by: Optional[str] = None
+    created_at: datetime
+    lines: List[ApparelPurchaseLineRead] = []
+
+
+class ApparelStockAdjust(BaseModel):
+    """`delta` adds or removes pieces; `counted` replaces the quantity with a physical count. Exactly one."""
+    branch_id: Optional[uuid.UUID] = None
+    variant_id: uuid.UUID
+    delta: Optional[int] = Field(default=None, ge=-1_000_000, le=1_000_000, strict=True)
+    counted: Optional[int] = Field(default=None, ge=0, le=1_000_000, strict=True)
+    reason: Reason
+
+    @model_validator(mode="after")
+    def _one_of(self) -> "ApparelStockAdjust":
+        if (self.delta is None) == (self.counted is None):
+            raise ValueError("send exactly one of delta or counted")
+        if self.delta == 0:
+            raise ValueError("delta must not be zero")
+        return self
+
+
+class ApparelMovementRead(BaseModel):
+    id: uuid.UUID
+    variant_id: uuid.UUID
+    product_name: str
+    size: str
+    colour: str
+    kind: ApparelMovementKind
+    quantity: int
+    balance_after: int
+    unit_cost: Optional[Decimal] = None
+    reason: Optional[str] = None
+    purchase_id: Optional[uuid.UUID] = None
+    created_by: Optional[str] = None
+    created_at: datetime

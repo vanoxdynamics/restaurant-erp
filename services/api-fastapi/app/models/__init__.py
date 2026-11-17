@@ -21,11 +21,22 @@ from app.models.audit import AuditLog, DailyReport, DocumentCounter
 from app.models.inventory import StockLevel, StockMovement, StockPurchase
 from app.models.customers import Customer
 from app.models.devices import Device
-from app.models.apparel import ApparelCategory, ApparelProduct, ApparelSettings, ApparelVariant
+from app.models.apparel import (
+    ApparelCategory,
+    ApparelProduct,
+    ApparelPurchase,
+    ApparelSettings,
+    ApparelStock,
+    ApparelStockMovement,
+    ApparelVariant,
+)
 
 __all__ = [
     "ApparelCategory",
     "ApparelProduct",
+    "ApparelPurchase",
+    "ApparelStock",
+    "ApparelStockMovement",
     "ApparelSettings",
     "ApparelVariant",
     "Base",

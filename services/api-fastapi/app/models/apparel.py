@@ -7,13 +7,29 @@ is scanned, sold and counted. Every table carries its own tenant column (organiz
 
 import uuid
 from decimal import Decimal
+from datetime import date, datetime
 from typing import List, Optional
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.enums import ApparelTaxMode
+from app.core.enums import ApparelMovementKind, ApparelTaxMode
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_check
 
 
@@ -105,3 +121,58 @@ class ApparelVariant(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
     product: Mapped["ApparelProduct"] = relationship("ApparelProduct", back_populates="variants", lazy="raise")
+
+
+class ApparelStock(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Pieces of a variant in a branch. A missing row means none; the quantity may go below zero (the shelf is the truth)."""
+    __tablename__ = "apparel_stock"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "variant_id", name="uq_apparel_stock_branch_variant"),
+        CheckConstraint("low_stock_level IS NULL OR low_stock_level >= 0", name="ck_apparel_stock_low_stock_level"),
+        CheckConstraint("cost_price IS NULL OR cost_price >= 0", name="ck_apparel_stock_cost_price"),
+    )
+
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False, index=True)
+    variant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("apparel_variants.id"), nullable=False, index=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    low_stock_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # at or below this the variant is low
+    cost_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)  # per piece, from the last delivery
+
+
+class ApparelPurchase(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Pieces received in one delivery. Its lines are the ledger rows that point at it."""
+    __tablename__ = "apparel_purchases"
+    __table_args__ = (CheckConstraint("total_cost >= 0", name="ck_apparel_purchases_total_cost"),)
+
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False, index=True)
+    supplier_name: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    invoice_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    received_on: Mapped[date] = mapped_column(Date, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    total_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), server_default="0", nullable=False)
+    created_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.id"), nullable=True)
+
+
+class ApparelStockMovement(Base, UUIDPrimaryKeyMixin):
+    """The stock ledger: one row per change, never edited. A mistake is corrected by another row."""
+    __tablename__ = "apparel_stock_movements"
+    __table_args__ = (
+        enum_check("apparel_stock_movements", "kind", ApparelMovementKind),
+        CheckConstraint("quantity <> 0", name="ck_apparel_stock_movements_quantity"),
+        CheckConstraint("unit_cost IS NULL OR unit_cost >= 0", name="ck_apparel_stock_movements_unit_cost"),
+        Index("ix_apparel_stock_movements_branch_variant_created", "branch_id", "variant_id", "created_at"),
+    )
+
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False)
+    variant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("apparel_variants.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)  # signed: + in, - out
+    balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_cost: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    purchase_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("apparel_purchases.id"), nullable=True, index=True)
+    created_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.id"), nullable=True)
+    # The moment the row is written (not the transaction's start), so the ledger's time order is the order stock changed in, even
+    # when a sale waited on another's lock.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("clock_timestamp()"), nullable=False)
