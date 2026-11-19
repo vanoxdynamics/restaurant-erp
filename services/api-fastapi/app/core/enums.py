@@ -130,6 +130,38 @@ class StoreCreditStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class HardwareUnit(StrEnum):
+    """A unit a hardware shop product is counted, bought or sold in. Stock is always kept in the product's base unit."""
+    PCS = "pcs"
+    BOX = "box"
+    PKT = "pkt"
+    DOZEN = "dozen"
+    SET = "set"
+    PAIR = "pair"
+    BAG = "bag"
+    BUNDLE = "bundle"
+    ROLL = "roll"
+    COIL = "coil"
+    KG = "kg"
+    G = "g"
+    M = "m"
+    FT = "ft"
+    SQFT = "sqft"
+    L = "l"
+    ML = "ml"
+
+
+# Units that are measured rather than counted: a product in one of these may be sold in fractions by default.
+HARDWARE_MEASURED_UNITS = frozenset({HardwareUnit.KG, HardwareUnit.G, HardwareUnit.M, HardwareUnit.FT, HardwareUnit.SQFT,
+                                     HardwareUnit.L, HardwareUnit.ML})
+
+
+class HardwarePriceTier(StrEnum):
+    """Which price list a hardware sale is priced at."""
+    RETAIL = "retail"
+    WHOLESALE = "wholesale"
+
+
 class ItemUnit(StrEnum):
     """The unit an item is priced and sold in. Quantities are decimals (3 places), so 0.750 kg is a normal quantity."""
     PIECE = "pcs"

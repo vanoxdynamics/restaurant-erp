@@ -19,6 +19,7 @@ from app.modules.apparel.router import router as apparel_router
 from app.modules.approvals import router as approvals_router
 from app.modules.billing import router as billing_router
 from app.modules.business.router import router as business_router
+from app.modules.hardware.router import router as hardware_router
 from app.modules.catalog import router as catalog_router
 from app.modules.customers.router import router as customers_router
 from app.modules.devices.router import router as devices_router
@@ -137,6 +138,7 @@ app.include_router(catalog_router, prefix=settings.API_V1_STR)
 app.include_router(retail_router, prefix=settings.API_V1_STR)
 app.include_router(inventory_router, prefix=settings.API_V1_STR)
 app.include_router(apparel_router, prefix=settings.API_V1_STR)
+app.include_router(hardware_router, prefix=settings.API_V1_STR)
 app.include_router(customers_router, prefix=settings.API_V1_STR)
 app.include_router(entitlements_router, prefix=settings.API_V1_STR)
 app.include_router(floor_router, prefix=settings.API_V1_STR)

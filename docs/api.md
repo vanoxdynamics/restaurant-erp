@@ -204,6 +204,41 @@ Reads are open to any signed-in staff; every write below is owners and managers 
 - **Receipt.** `GET /apparel/sales/{id}/receipt?format=rows|text|html&paper_mm=58|80`.
 - **Cash day.** The module's successful cash payments are added to the shift and cash-day expected cash.
 
+### Hardware shops (`/hardware`)
+
+A **product** is one sellable thing at one size ("PVC Elbow 1/2 inch"); there are no variants. Stock and prices are per the
+product's **base unit** (`m`, `pcs`, `kg`...); **alternate units** (`coil` = 90 m, `box` = 100 pcs) are other ways to sell it.
+Prices per base unit take up to 4 decimals (`0.0450` a screw); alternate-unit prices and amounts on documents take 2. Reads are
+open to any signed-in staff; every write below is owners and managers only. Plan:
+[retail-modules/02-hardware.md](retail-modules/02-hardware.md). Stages so far: H1 (catalogue).
+
+- **Settings.** `GET /hardware/settings` (made with the defaults on first read), `PUT /hardware/settings`: `prices_include_tax`
+  (true), `round_to_rupee` (true), `default_tax_rate` (18.00, pre-filled on new products), `estimate_valid_days` (15),
+  `state_code` (the shop's two-digit GST state, used when a branch has no GSTIN; `null` clears it).
+- **Categories.** `GET`, `POST /hardware/categories`, `PATCH /hardware/categories/{id}` (`409 duplicate_category`).
+- **Products.** `GET /hardware/products` (paged; `search`, `category_id`, `include_inactive`), `POST /hardware/products`,
+  `GET|PATCH /hardware/products/{id}`. Fields: `name`, `brand`, `size_spec`, `category_id`, `sku`, `barcode`, `hsn_code`,
+  `tax_rate` (defaults to the settings), `base_unit` (default `pcs`), `allow_fraction` (defaults to true for `kg g m ft sqft l ml`),
+  `price`, `wholesale_price`, `min_price`, `mrp` (all per base unit; MRP includes tax), and `units`
+  (`[{unit, factor, price?, wholesale_price?, min_price?, barcode?}]`, at most 10). Products are never deleted: `is_active: false`.
+  `422 unit_is_base` when an alternate unit is the base unit; `409 duplicate_sku | duplicate_barcode`.
+- **Alternate units.** `PUT /hardware/products/{id}/units` with `{units: [...]}` replaces the list: listed units are updated or
+  added, the others removed.
+- **Prices per unit.** Every product read carries `options`: one entry per way to sell it (base unit first) with `retail_price`,
+  `wholesale_price`, `retail_floor`, `wholesale_floor` and `mrp` worked out per that unit: a unit's own price when set, else the
+  base price x factor rounded to paise; wholesale never above that unit's retail price; a floor never above the price at its tier.
+- **Barcodes.** One barcode names one product in one unit, so it is unique across products and alternate units in a business
+  (`409 duplicate_barcode`).
+- **Scanner lookup.** `GET /hardware/products/lookup?code=` returns `{product, unit}`: a product barcode sells the base unit, an
+  alternate unit's barcode that unit (a box barcode adds a box), a SKU the base unit (`404 barcode_not_found`).
+- **Counter search.** `GET /hardware/catalog/search?q=&category_id=&limit=` (at most 50): active products where every word of `q`
+  is in the name, brand, size or SKU ("pvc elbow 1/2"), or `q` is an exact product or unit barcode.
+- **Import.** `POST /hardware/import` with `{csv, dry_run}`: one row per product, columns `name, category, brand, size, price,
+  wholesale_price, min_price, mrp, gst_rate, hsn, unit, allow_fraction, barcode, sku, alt_unit, alt_factor, alt_price,
+  alt_barcode` (required: `name, category, price`; unit aliases such as `nos`, `mtr`, `feet`, `kgs`, `ltr`). A row matches a
+  product by SKU, then barcode, then category + name + size; on a match a blank `unit`, `gst_rate`, `sku` or `barcode` keeps
+  what the product has. Bad rows come back by line number and the rest are saved together; at most 10,000 rows.
+
 ## Inventory
 
 A paid module (`inventory`, switched on per plan or per subscriber in the platform console). Every endpoint under `/inventory`
