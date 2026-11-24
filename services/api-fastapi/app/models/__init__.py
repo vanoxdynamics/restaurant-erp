@@ -36,13 +36,24 @@ from app.models.apparel import (
     ApparelStoreCredit,
     ApparelVariant,
 )
-from app.models.hardware import HardwareCategory, HardwareProduct, HardwareProductUnit, HardwareSettings
+from app.models.hardware import (
+    HardwareCategory,
+    HardwareProduct,
+    HardwareProductUnit,
+    HardwarePurchase,
+    HardwareSettings,
+    HardwareStock,
+    HardwareStockMovement,
+)
 
 __all__ = [
     "HardwareCategory",
     "HardwareProduct",
     "HardwareProductUnit",
+    "HardwarePurchase",
     "HardwareSettings",
+    "HardwareStock",
+    "HardwareStockMovement",
     "ApparelCategory",
     "ApparelPayment",
     "ApparelReturn",

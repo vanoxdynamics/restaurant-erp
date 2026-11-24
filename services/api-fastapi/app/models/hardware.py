@@ -8,18 +8,34 @@ own tenant column (organization or branch) for row-level security.
 """
 
 import uuid
+from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.enums import HardwareUnit
+from app.core.enums import HardwareMovementKind, HardwareUnit
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_check
 
 PRICE = Numeric(12, 4)  # money per base unit
 MONEY = Numeric(10, 2)
+QUANTITY = Numeric(14, 3)  # in the product's base unit
 
 
 class HardwareSettings(Base, TimestampMixin):
@@ -118,3 +134,64 @@ class HardwareProductUnit(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     barcode: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # scanning it sells one of this unit
 
     product: Mapped[HardwareProduct] = relationship("HardwareProduct", back_populates="units", lazy="raise")
+
+
+class HardwareStock(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Base units of a product in a branch. A missing row means none; the quantity may go below zero (the shelf is the truth)."""
+    __tablename__ = "hardware_stock"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "product_id", name="uq_hardware_stock_branch_product"),
+        CheckConstraint("low_stock_level IS NULL OR low_stock_level >= 0", name="ck_hardware_stock_low_stock_level"),
+        CheckConstraint("cost_price IS NULL OR cost_price >= 0", name="ck_hardware_stock_cost_price"),
+    )
+
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False, index=True)
+    product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("hardware_products.id"), nullable=False, index=True)
+    quantity: Mapped[Decimal] = mapped_column(QUANTITY, default=Decimal("0"), server_default="0", nullable=False)
+    low_stock_level: Mapped[Optional[Decimal]] = mapped_column(QUANTITY, nullable=True)  # at or below this the product is low
+    cost_price: Mapped[Optional[Decimal]] = mapped_column(PRICE, nullable=True)  # per base unit, from the last delivery
+
+
+class HardwarePurchase(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Goods received in one delivery. Its lines are the ledger rows that point at it."""
+    __tablename__ = "hardware_purchases"
+    __table_args__ = (CheckConstraint("total_cost >= 0", name="ck_hardware_purchases_total_cost"),)
+
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False, index=True)
+    supplier_name: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    invoice_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    received_on: Mapped[date] = mapped_column(Date, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    total_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), server_default="0", nullable=False)
+    created_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.id"), nullable=True)
+
+
+class HardwareStockMovement(Base, UUIDPrimaryKeyMixin):
+    """
+    The stock ledger: one row per change, never edited, always in the base unit. A mistake is corrected by another row.
+    A purchase row also remembers what was typed (`entered_*`: 2 coils at 3,000.00) so the delivery reads back as received.
+    `sale_id` and `return_id` are added with the sales (H3) and returns (H7) tables.
+    """
+    __tablename__ = "hardware_stock_movements"
+    __table_args__ = (
+        enum_check("hardware_stock_movements", "kind", HardwareMovementKind),
+        CheckConstraint("quantity <> 0", name="ck_hardware_stock_movements_quantity"),
+        CheckConstraint("unit_cost IS NULL OR unit_cost >= 0", name="ck_hardware_stock_movements_unit_cost"),
+        Index("ix_hardware_stock_movements_branch_product_created", "branch_id", "product_id", "created_at"),
+    )
+
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("hardware_products.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)  # base unit, signed: + in, - out
+    balance_after: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    unit_cost: Mapped[Optional[Decimal]] = mapped_column(PRICE, nullable=True)  # per base unit
+    entered_unit: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    entered_quantity: Mapped[Optional[Decimal]] = mapped_column(QUANTITY, nullable=True)
+    entered_unit_cost: Mapped[Optional[Decimal]] = mapped_column(PRICE, nullable=True)  # per entered unit
+    reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    purchase_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hardware_purchases.id"), nullable=True, index=True)
+    created_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.id"), nullable=True)
+    # The moment the row is written (not the transaction's start), so the ledger's time order is the order stock changed in.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("clock_timestamp()"), nullable=False)

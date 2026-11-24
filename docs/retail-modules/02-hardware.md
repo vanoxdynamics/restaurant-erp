@@ -34,7 +34,9 @@ buyers in another state.
 ## 2. Tables
 
 Every table has `id`, `created_at`, `updated_at` unless noted. Money is `Numeric(10, 2)` except balances and totals that can
-grow large, which are `Numeric(12, 2)`. Quantities are `Numeric(14, 3)`.
+grow large, which are `Numeric(12, 2)`. Quantities are `Numeric(14, 3)`. Prices and costs **per base unit** are
+`Numeric(12, 4)`, because a base unit can be small (a box of 1,000 screws at 45.00 is 0.045 a piece); every price per unit sold
+and every amount on an invoice is rounded to paise.
 
 ### `hardware_settings` (Scope: organization)
 
@@ -65,10 +67,10 @@ Primary key `organization_id`, created on first read.
 | `tax_rate` | Numeric(5,2) | 0 to 40. |
 | `base_unit` | String(10) | `HardwareUnit` value. |
 | `allow_fraction` | bool | True for cut lengths and loose goods. False means the base quantity must be a whole number. |
-| `price` | money | Retail price per base unit. |
-| `wholesale_price` | money null | Per base unit. Null means wholesale buyers pay the retail price. |
-| `min_price` | money null | Per base unit. Selling below it needs a manager PIN. |
-| `mrp` | money null | Per base unit. A line price may not exceed it. |
+| `price` | Numeric(12,4) | Retail price per base unit. |
+| `wholesale_price` | Numeric(12,4) null | Per base unit. Null means wholesale buyers pay the retail price. |
+| `min_price` | Numeric(12,4) null | Per base unit. Selling below it needs a manager PIN (3.2). |
+| `mrp` | Numeric(12,4) null | Per base unit, tax included. A line price may not exceed it (3.2). |
 | `is_active` | bool | Soft delete only. |
 
 `HardwareUnit` (new enum in `app/core/enums.py`): `pcs`, `box`, `pkt`, `dozen`, `set`, `pair`, `bag`, `bundle`, `roll`, `coil`, `kg`,
@@ -77,19 +79,26 @@ Primary key `organization_id`, created on first read.
 ### `hardware_product_units` (Scope: organization)
 
 `organization_id`, `product_id`, `unit`, `factor` Numeric(12,4) > 0 (how many base units one of this unit holds), `price` null,
-`wholesale_price` null (both per this unit; null means base price x factor), `barcode` null (unique per organization where not
-null). Unique on (`product_id`, `unit`); the unit may not equal the product's base unit. The service must also refuse a
+`wholesale_price` null, `min_price` null (all money per this unit; see 3.2 for what null means), `barcode` null (unique per
+organization where not null). Unique on (`product_id`, `unit`); the unit may not equal the product's base unit. The service must also refuse a
 barcode that already exists on a product or on another unit row.
 
 ### `hardware_stock` (Scope: branch)
 
-`branch_id`, `product_id`, `quantity` (base unit, may be negative), `low_stock_level` null, `cost_price` null (per base unit).
+`branch_id`, `product_id`, `quantity` (base unit, may be negative), `low_stock_level` null, `cost_price` Numeric(12,4) null (per
+base unit).
 Unique on (`branch_id`, `product_id`).
 
 ### `hardware_purchases` (Scope: branch) and `hardware_stock_movements` (Scope: branch)
 
 As in `stock_purchases` and `stock_movements`. Movement quantities are always in the base unit. `kind` is one of `purchase`,
-`sale`, `sale_void`, `return`, `adjustment`, `count` (enum `HardwareMovementKind`). Movements also carry `sale_id` and `return_id`.
+`sale`, `sale_void`, `return`, `adjustment`, `count` (enum `HardwareMovementKind`). Movements also carry `sale_id` and `return_id`;
+those two columns are added by the migrations of H3 and H7, when their tables exist.
+
+`hardware_stock.low_stock_level` is `Numeric(14,3)`. A purchase movement also stores what was typed: `entered_unit`,
+`entered_quantity` and `entered_unit_cost` (per entered unit), so a delivery reads back as received (2 coils at 3,000.00) while
+`quantity` is 180 and `unit_cost` is 33.3333 per metre (`entered_unit_cost / factor`, 4 decimals). `hardware_purchases.total_cost`
+is the sum of entered quantity x entered unit cost, so it can differ by paise from stock quantity x cost per base unit.
 
 ### `hardware_accounts` (Scope: organization)
 
@@ -132,13 +141,19 @@ The model's `balance_due` property is `grand_total - paid_amount - on_account_am
 
 `branch_id`, `sale_id`, `product_id`, snapshots (`name_snapshot`, `size_spec_snapshot`, `hsn_snapshot`), `unit`, `unit_factor`,
 `quantity` (in the unit sold), `base_quantity` (`quantity x unit_factor`), `unit_price` (per unit sold), `line_discount`,
-`discount`, `tax_rate`, `taxable_value`, `cgst`, `sgst`, `igst`, `line_total`, `returned_quantity` (in the unit sold, default 0).
+`discount`, `tax_rate`, `taxable_value`, `cgst`, `sgst`, `igst`, `line_total`, `returned_base_quantity` (in the **base** unit,
+default 0; see 3.7).
 
 ### `hardware_payments` (Scope: branch)
 
-`PaymentColumns` from the kit, plus `branch_id`, `sale_id` FK null, `customer_id` FK null. `payment_mode` is one of `cash`, `card`,
-`upi`, `cheque`, `bank_transfer` (enum `HardwarePaymentMode`). Check: exactly one of `sale_id` and `customer_id` is set. A row
-with `sale_id` is a tender on a sale; a row with `customer_id` is money received against an account.
+`PaymentColumns` (`app/models/payment_columns.py`, re-exported by `retailkit.tenders`), plus `branch_id`, `sale_id` FK null,
+`customer_id` FK null. `payment_mode` is one of `cash`, `card`, `upi`, `cheque`, `bank_transfer` (enum `HardwarePaymentMode`).
+Check: exactly one of `sale_id` and `customer_id` is set. A row with `sale_id` is a tender on a sale; a row with `customer_id` is
+money received against an account.
+
+Two partial unique indexes for idempotency, because the apparel index on (`sale_id`, `idempotency_key`) does not cover rows
+whose `sale_id` is null: (`sale_id`, `idempotency_key`) where both are not null, and (`customer_id`, `idempotency_key`) where
+both are not null.
 
 ### `hardware_estimates` (Scope: branch) and `hardware_estimate_lines` (Scope: branch)
 
@@ -147,11 +162,12 @@ Estimate header: `branch_id`, `estimate_number` (from `next_document_number(db, 
 a customer record), `price_tier`, the same total columns as a sale, `is_interstate`, `status` (`open`, `converted`, `cancelled`),
 `converted_sale_id` null, `notes`, `created_by_id`.
 
-Estimate lines: the same columns as sale lines, without `returned_quantity`.
+Estimate lines: the same columns as sale lines, without `returned_base_quantity`.
 
 ### `hardware_returns` and `hardware_return_lines` (Scope: branch)
 
-As in the apparel module, with `refund_mode` one of `cash` or `account` and quantities as `Numeric(14,3)`.
+As in the apparel module, with `refund_mode` one of `cash` or `account`. Each return line stores the `unit` and `quantity` the
+cashier entered (any of the product's units, not only the unit sold) and the resulting `base_quantity`, all `Numeric(14,3)`.
 
 ---
 
@@ -166,18 +182,33 @@ As in the apparel module, with `refund_mode` one of `cash` or `account` and quan
 
 ### 3.2 Price of a line
 
-Resolved price for unit `u` and tier `t`:
+Every price below is per unit sold and is rounded to paise (half up) once it has been multiplied by the factor, for example
+42.00/m x 0.3048 = 12.80 per ft.
 
-1. The unit row's price for the tier, when the line uses an alternate unit and that price is set.
-2. Otherwise the product's tier price x factor.
-3. For `wholesale`, when no wholesale price is set at that level, fall back to the retail price at the same level.
+**Retail price** for unit `u`: the unit row's `price` when set, else `product.price x factor`.
 
-The request may send its own `unit_price` (hardware shops negotiate). Rules, all per unit sold:
+**Wholesale price** for unit `u`:
 
-- Above the resolved price is allowed, up to `mrp x factor` when MRP is set.
-- Below the resolved price is allowed for any cashier down to `min_price x factor`.
-- Below `min_price x factor` needs a manager PIN and writes a `PRICE_OVERRIDE` audit row. When the product has no `min_price`,
-  any price above zero is allowed without a PIN.
+1. The unit row's `wholesale_price`, when set.
+2. Else `product.wholesale_price x factor`, when the product has one, **but never more than the retail price for `u`**. (A coil
+   priced at 3,500.00 retail must not cost a wholesale buyer 40.00 x 90 = 3,600.00.)
+3. Else the retail price for `u`.
+
+**Floor** for unit `u` and tier `t`: the unit row's `min_price` when set; else `product.min_price x factor`, but never more than
+the resolved price for `u` and `t`; else no floor. (So selling a coil at its own listed price, or a wholesale buyer at the
+wholesale price, never needs a PIN.)
+
+**Ceiling**: `mrp x factor` when MRP is set. MRP includes tax, so when `prices_include_tax = false` the line is compared with
+MRP after adding the line's tax.
+
+The request may send its own `unit_price` (hardware shops negotiate). Rules:
+
+- Above the ceiling is refused (`code="price_above_mrp"`).
+- The floor is checked on the **net price per unit**: `(quantity x unit_price - line_discount) / quantity`. A line discount
+  cannot be used to get under the floor without a PIN. The bill discount is not counted here; it falls under the
+  high-discount approval rule as in apparel.
+- At or above the floor, any cashier may set the price.
+- Below the floor needs a manager PIN and writes a `PRICE_OVERRIDE` audit row. With no floor, any price above zero is allowed.
 
 ### 3.3 Tax
 
@@ -212,12 +243,16 @@ apparel.
 - Tenders on a sale use `retailkit.tenders.Tenders`, which reads the model's `balance_due`.
 - `POST /hardware/sales/{id}/charge-to-account` with an optional `amount` (default: the whole balance due) and optional
   `approver_pin`:
-  1. The sale must have a customer with an active account, and be `unpaid` or `partially_paid`.
+  1. The sale must have a customer with an active account, and be `unpaid` or `partially_paid`. Refused while a terminal
+     payment on the sale is pending (`Tenders.refuse_while_terminal_pending`). `amount` must be above zero and not more than
+     `balance_due`.
   2. If `account.balance + amount > account.credit_limit`, require a manager PIN and write a `CREDIT_LIMIT_OVERRIDE` audit
      row.
   3. Add a `sale` ledger entry, increase `account.balance` and `sale.on_account_amount`.
-  4. If `balance_due` is now zero, mark the sale `paid` and set `settled_at`.
+  4. If `balance_due` is now zero, mark the sale `paid` and set `settled_at`; otherwise mark it `partially_paid`.
 - A sale may mix both: part cash now, the rest on account.
+- **Lock order**, everywhere a request touches both: the sale row first, then the account row, each `FOR UPDATE`. Receipts and
+  account adjustments lock only the account. This keeps charges, returns and receipts on the same customer from deadlocking.
 
 ### 3.6 Money received against an account
 
@@ -229,10 +264,19 @@ card and UPI are recorded by hand with a reference.
 ### 3.7 Voiding and returns
 
 - Void: as in apparel (unpaid, nothing paid, nothing on account, manager PIN, stock restored with `sale_void`).
-- Return: as in apparel section 3.5, with these differences. Quantities are decimal and in the unit sold; restocked goods
-  return `quantity x unit_factor` base units. `refund_mode = 'cash'` pays cash out. `refund_mode = 'account'` adds a `return`
-  ledger entry with a negative amount and needs a customer with an account. There is no store credit in this module.
-- A return of a sale that was charged to account must use `refund_mode = 'account'` up to the amount still on account.
+- Return: as in apparel section 3.5, with these differences.
+  - A return line names a sale line, a unit (any of the product's units) and a decimal quantity. It is converted to base
+    units with the same rules as 3.1 (`whole_quantity_required` applies). 10 m back from a 1-coil line is `unit = m,
+    quantity = 10`, not 0.111 coil.
+  - Returnable is `base_quantity - returned_base_quantity` on the sale line, in base units.
+  - The refund is `line_total x returned base / line base_quantity`, rounded to paise; the return that takes the last base
+    units of a line takes the remainder of `line_total`, so a line refunds exactly its total.
+  - Restocked goods return their base quantity.
+  - `refund_mode = 'cash'` pays cash out. `refund_mode = 'account'` adds a `return` ledger entry with a negative amount and
+    needs a customer with an account. There is no store credit in this module.
+- A return of a sale that was charged to account must use `refund_mode = 'account'` for the part up to the sale's
+  **amount still on account**, defined as `sale.on_account_amount` minus the refunds already credited to the account for
+  that sale. Receipts are not tied to invoices, so they do not reduce it. Any remainder may be refunded in either mode.
 
 ### 3.8 Estimates
 
@@ -338,9 +382,9 @@ refund mode; net cash (3.9); open estimates created today; top 10 products by va
 |---|---|
 | `HardwareApp.tsx` | Route state: sale, pay, estimates, accounts, returns, day end, printer. |
 | `SaleScreen.tsx` | Search-first, because most hardware has no barcode: a search box (server-side search, results as a list with name, size spec, price per base unit and stock), category chips, and keyboard-scanner support. The customer is chosen at the top; choosing a customer with a wholesale account reprices the cart. Buttons: "Bill" and "Save as estimate". |
-| `QuantitySheet.tsx` | Opens when a product is tapped or scanned: unit chips (base unit and alternate units, with the price of each), a number pad for the quantity (decimals only when allowed), and an editable rate. Shows the line total and, for managers, the minimum price. Modelled on `retail/WeightSheet.tsx`. |
+| `QuantitySheet.tsx` | Opens when a product is tapped or scanned: unit chips (base unit and alternate units, with the price of each), a number pad for the quantity (decimals only when allowed), and an editable rate. Shows the line total and, for managers, the floor price for the chosen unit (3.2). Modelled on `retail/WeightSheet.tsx`. |
 | `hardwareCartStore.ts` | Cart keyed by product and unit. |
-| `PayScreen.tsx` | Sale summary plus `retailkit/PayPanel` with the hardware `TenderApi`. Adds "On account", shown when the customer has an account, with the current balance and limit. |
+| `PayScreen.tsx` | Sale summary plus `retailkit/PayPanel` with the hardware `TenderApi`. Adds "On account", shown when the customer has an account, with the current balance and limit. `PayPanel` offers cash, card and UPI only; cheque and bank transfer are added by this screen as hand-recorded tenders with a reference (no change given). |
 | `EstimatesScreen.tsx` | List of open estimates with search; open one to edit (loads it into the cart), print, convert to a sale, copy or cancel. |
 | `AccountsScreen.tsx` | Find a customer, see the balance, take a receipt, print a statement. Cashiers see one customer at a time; the full list is for managers. |
 | `ReturnsScreen.tsx` | As in apparel, with decimal quantities and "Refund in cash" or "Credit the account". |
@@ -365,7 +409,7 @@ refund mode; net cash (3.9); open estimates created today; top 10 products by va
 |---|---|---|
 | **H1 Catalogue** | Settings, categories, products, alternate units, lookup, search, CSV import. Admin `ProductsScreen`, `ImportSheet`. Seed script with about 60 products across cable, pipe fittings, fasteners, paint, switches. | A product with a base unit and two alternate units saves and reads back; a box barcode lookup returns the box unit; a 1,000-row CSV imports with per-row errors. |
 | **H2 Stock** | Stock, purchases in any unit, adjustments, counts, ledger. Admin `StockScreen`. | Receiving 2 coils adds 180 m at the right cost per metre; ledger balances are right; cost hidden from cashiers. |
-| **H3 Sales** | Quantity, price and tax rules; sales; tenders; void; thermal receipt; cash-day source. No screens. | Every row of the worked examples passes; a price below minimum needs a PIN and is audited; an interstate sale stores IGST only. |
+| **H3 Sales** | Quantity, price and tax rules; sales; tenders; void; thermal receipt; cash-day source. No screens. | Every row of the worked examples passes; a price below the floor needs a PIN and is audited, also when reached through a line discount; a coil at its listed price needs no PIN; an interstate sale stores IGST only. |
 | **H4 Counter** | POS `HardwareApp`, `SaleScreen`, `QuantitySheet`, `PayScreen`, day end. | In the browser: sell 2.5 m and 1 coil of the same cable plus half a box of screws, change one rate, pay by UPI, print, and see stock fall by 92.5 m and 50 pcs. |
 | **H5 Estimates** | Estimates end to end, POS `EstimatesScreen`, printed estimate. | Save an estimate, edit it, print it, convert it to a sale at the quoted prices after the product's price has changed; an expired estimate is refused and can be copied. |
 | **H6 Accounts** | Accounts, ledger, charge to account, receipts, statement, outstanding report. POS `AccountsScreen`, admin `AccountsScreen`. | A sale part-paid in cash and the rest on account is `paid` with the right ledger entry; a charge over the limit needs a PIN; a cash receipt lowers the balance and raises expected cash; the statement's closing balance equals the account balance. |
@@ -379,7 +423,13 @@ for the pure quantity and price functions.
 
 - The category guard, tenant isolation and RLS coverage for every `hardware_` table.
 - The worked examples in 3.3.
-- Price resolution: unit price set, unit price missing, wholesale missing at unit level, wholesale missing everywhere.
+- Price resolution: unit price set, unit price missing, wholesale missing at unit level (product wholesale x factor, capped
+  at the unit's retail price), wholesale missing everywhere; rounding of `price x factor` to paise.
+- Floor: unit `min_price` set; derived floor capped at the resolved price; net price after a line discount below the floor
+  needs a PIN; MRP compared tax-inclusive when prices exclude tax.
+- Charge to account: partial charge leaves the sale `partially_paid`; refused while a terminal payment is pending.
+- Receipts against an account with the same idempotency key create one payment and one ledger entry.
+- Returns in a unit other than the one sold (10 m from a coil line); the last return of a line refunds exactly its remainder.
 - Ledger integrity: after any sequence of charges, receipts, returns and adjustments, the last `balance_after` equals
   `account.balance`, and the sum of entry amounts equals the balance.
 - Two concurrent charges against one account cannot both pass a limit that only allows one.

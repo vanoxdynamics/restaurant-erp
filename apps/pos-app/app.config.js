@@ -13,7 +13,7 @@ const VARIANTS = {
   waiter: { name: 'Restaurant POS', package: 'com.vanoxdynamics.pos' },
   counter: { name: 'Restaurant Counter', package: 'com.vanoxdynamics.pos.counter' },
   'counter-uat': { name: 'Counter UAT', package: 'com.vanoxdynamics.pos.counter.uat' },
-  retail: { name: 'Vanox Retail', package: 'com.vanoxdynamics.retail' },
+  retail: { name: 'Vanox ERP', package: 'com.vanoxdynamics.retail' },
 };
 
 module.exports = ({ config }) => {

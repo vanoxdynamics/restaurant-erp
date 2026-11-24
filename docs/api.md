@@ -210,7 +210,7 @@ A **product** is one sellable thing at one size ("PVC Elbow 1/2 inch"); there ar
 product's **base unit** (`m`, `pcs`, `kg`...); **alternate units** (`coil` = 90 m, `box` = 100 pcs) are other ways to sell it.
 Prices per base unit take up to 4 decimals (`0.0450` a screw); alternate-unit prices and amounts on documents take 2. Reads are
 open to any signed-in staff; every write below is owners and managers only. Plan:
-[retail-modules/02-hardware.md](retail-modules/02-hardware.md). Stages so far: H1 (catalogue).
+[retail-modules/02-hardware.md](retail-modules/02-hardware.md). Stages so far: H1 (catalogue), H2 (stock, backend).
 
 - **Settings.** `GET /hardware/settings` (made with the defaults on first read), `PUT /hardware/settings`: `prices_include_tax`
   (true), `round_to_rupee` (true), `default_tax_rate` (18.00, pre-filled on new products), `estimate_valid_days` (15),
@@ -238,6 +238,22 @@ open to any signed-in staff; every write below is owners and managers only. Plan
   alt_barcode` (required: `name, category, price`; unit aliases such as `nos`, `mtr`, `feet`, `kgs`, `ltr`). A row matches a
   product by SKU, then barcode, then category + name + size; on a match a blank `unit`, `gst_rate`, `sku` or `barcode` keeps
   what the product has. Bad rows come back by line number and the rest are saved together; at most 10,000 rows.
+- **Stock (H2).** Stock is kept per branch in the product's base unit, with up to 3 decimals (`92.5` m); a quantity that is a
+  whole number comes back as `180`, not `180.000`. It may go below zero. Branch rows are made on first use.
+  - `GET /hardware/stock?branch_id=&search=&low_only=&category_id=&product_id=` lists every active product with `quantity`,
+    `low_stock_level`, `is_low`, `is_out` and its `units`; anyone may read it, but `cost_price` and `stock_value` go to owners and
+    managers only. `PUT /hardware/stock/{product_id}` sets `low_stock_level` and `cost_price` (per base unit, 4 decimals).
+  - `POST /hardware/purchases` (needs `X-Idempotency-Key`) records a delivery. A line is `{product_id, unit?, quantity, unit_cost?}`:
+    `unit` is the base unit or one of the product's alternate units (`422 unit_not_available`), `unit_cost` is what one of that
+    unit cost. Two coils at 3,000.00 add 180 m and set the cost price to 33.3333 a metre; the delivery's `total_cost` is
+    quantity x cost as typed (6,000.00). A product sold whole refuses a delivery that comes to part of a piece
+    (`422 whole_quantity_required`). `GET /hardware/purchases` (paged) and `GET /hardware/purchases/{id}` read a delivery back with
+    each line in the unit it was entered in and in base units. Managers only.
+  - `POST /hardware/adjustments` (needs `X-Idempotency-Key`): `{product_id, delta | counted, reason}` in base units. A count that
+    matches the record writes nothing. `GET /hardware/movements?product_id=&kind=&branch_id=` is the ledger, newest first, with
+    `balance_after`; managers only.
+  - Pass `branch_id` to `GET /hardware/catalog/search`, `GET /hardware/products/lookup`, `GET /hardware/products` and
+    `GET /hardware/products/{id}` to get `on_hand` (base units) on each product; without it `on_hand` is `null`.
 
 ## Inventory
 

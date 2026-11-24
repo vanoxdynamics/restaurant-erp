@@ -7,6 +7,7 @@ import { ApiError, apparelSalesApi, ApparelSale, TerminalOutcome, useApparelSale
 import { QueryState } from '../components/QueryState';
 import { TopBar } from '../components/TopBar';
 import { PayPanel, Row, type TenderApi, type TenderSale } from '../retailkit/PayPanel';
+import { cloudCalls } from '../retailkit/cloudCharge';
 import { StoreCreditTender } from './StoreCreditTender';
 
 const money = (paise: number) => formatPaiseToRupees(paise);
@@ -57,6 +58,7 @@ export const PayScreen: React.FC<PayScreenProps> = ({ saleId, credit, onBack, on
     startTerminal: async ({ mode, amountPaise, idempotencyKey }) =>
       refreshed(apparelSalesApi.startTerminal(saleId, { mode, amountPaise }, idempotencyKey)),
     completeTerminal: (paymentId: string, outcome: TerminalOutcome) => refreshed(apparelSalesApi.completeTerminal(paymentId, outcome)),
+    cloud: cloudCalls('apparel', () => queryClient.invalidateQueries({ queryKey: ['apparel', 'sale', saleId] })),
     reverse: (paymentId, input) =>
       refreshed(apparelSalesApi.reverse(paymentId, {
         reason: input.reason, approver_pin: input.approverPin, details: input.details, check_only: input.checkOnly,

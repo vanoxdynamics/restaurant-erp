@@ -156,6 +156,16 @@ HARDWARE_MEASURED_UNITS = frozenset({HardwareUnit.KG, HardwareUnit.G, HardwareUn
                                      HardwareUnit.L, HardwareUnit.ML})
 
 
+class HardwareMovementKind(StrEnum):
+    """Why a hardware product's stock changed. Every change is one row in the module's stock ledger, in the base unit."""
+    PURCHASE = "purchase"
+    SALE = "sale"
+    SALE_VOID = "sale_void"  # a voided sale puts its goods back
+    RETURN = "return"  # goods returned and put back on the shelf
+    ADJUSTMENT = "adjustment"
+    COUNT = "count"
+
+
 class HardwarePriceTier(StrEnum):
     """Which price list a hardware sale is priced at."""
     RETAIL = "retail"

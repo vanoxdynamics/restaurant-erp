@@ -18,6 +18,7 @@ from app.modules.analytics import router as analytics_router
 from app.modules.apparel.router import router as apparel_router
 from app.modules.approvals import router as approvals_router
 from app.modules.billing import router as billing_router
+from app.modules.pinelabs_cloud.router import router as pinelabs_cloud_router
 from app.modules.business.router import router as business_router
 from app.modules.hardware.router import router as hardware_router
 from app.modules.catalog import router as catalog_router
@@ -147,6 +148,7 @@ app.include_router(notices_router, prefix=settings.API_V1_STR)
 app.include_router(kots_station_router, prefix=settings.API_V1_STR)
 app.include_router(kots_router, prefix=settings.API_V1_STR)
 app.include_router(billing_router, prefix=settings.API_V1_STR)
+app.include_router(pinelabs_cloud_router, prefix=settings.API_V1_STR)
 app.include_router(business_router, prefix=settings.API_V1_STR)
 app.include_router(devices_router, prefix=settings.API_V1_STR)
 app.include_router(staff_router, prefix=settings.API_V1_STR)

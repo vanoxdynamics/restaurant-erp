@@ -30,6 +30,7 @@ import {
   PrintablePage,
   PrintRow,
   TerminalOutcome,
+  CloudPaymentState,
   Bill,
   BillPayment,
   BoardTicket,
@@ -1210,6 +1211,21 @@ export class RestaurantApiClient {
       body: { ...body, approver_pin: body.approver_pin || undefined },
     });
     return adaptBill(raw.bill);
+  }
+
+  /** Whether the server can send card/UPI payments to a terminal through Pine Labs' cloud. */
+  async pinelabsCloudEnabled(): Promise<boolean> {
+    const raw = await this.request<Raw>('GET', '/billing/terminal-cloud');
+    return !!raw.enabled;
+  }
+
+  /**
+   * Work on a pending card/UPI payment through Pine Labs' cloud: `send` it to the terminal, `check` how it went (an approved or
+   * failed answer is recorded by the server), or `cancel` it. `scope` is the module that owns the payment.
+   */
+  async pinelabsCloud(scope: 'billing' | 'apparel', paymentId: string, action: 'send' | 'check' | 'cancel'): Promise<CloudPaymentState> {
+    const raw = await this.request<Raw>('POST', `/${scope}/payments/${paymentId}/cloud/${action}`);
+    return { state: raw.state, message: raw.message };
   }
 
   /** The customer bill as print rows for the paper width. */

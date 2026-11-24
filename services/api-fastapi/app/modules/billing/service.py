@@ -407,6 +407,9 @@ async def start_terminal_payment(
     terminal approves it, but it exists from the start, so a crash between the charge and the answer can never lose it.
     """
     bill = await _load_payable(db, user, bill_id)
+    if payload.amount < settings.PINELABS_MIN_AMOUNT:
+        raise ValidationFailed(f"The terminal takes {settings.PINELABS_MIN_AMOUNT} rupee or more: take a smaller amount another way",
+                               code="terminal_amount_too_small", details={"minimum": str(settings.PINELABS_MIN_AMOUNT)})
     if payload.amount > bill.balance_due:
         raise ValidationFailed("Payment exceeds the balance due", code="overpayment", details={"balance_due": str(bill.balance_due)})
     shift = await get_open_shift(db, user.id)

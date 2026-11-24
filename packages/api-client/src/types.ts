@@ -798,6 +798,12 @@ export interface TerminalOutcome {
   details?: Record<string, string | number | boolean | null>;
 }
 
+/** How a card/UPI payment sent through Pine Labs' cloud stands. `unknown`: Pine Labs could not be reached, the payment is still pending. */
+export interface CloudPaymentState {
+  state: 'pending' | 'approved' | 'declined' | 'unknown';
+  message: string;
+}
+
 export interface CashShift {
   id: string;
   start_time: string;

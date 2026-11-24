@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useQueryClient } from '@tanstack/react-query';
 import { Badge, BadgeProps, Button, colors, fonts, Input, Modal, radii, spacing, typography } from '@repo/shared-ui';
 import { formatPaiseToRupees, PaymentMode } from '@repo/shared-utils';
 import {
@@ -29,6 +30,7 @@ import { printerKind } from '../device';
 import { TransactionResult } from '../devices/pinelabs';
 import { hasLinePrinter, hasTerminalPayments, terminal } from '../devices/terminal';
 import { printHtml } from '../printing/printHtml';
+import { chargeThroughCloud, cloudCalls, useCloudEnabled } from '../retailkit/cloudCharge';
 import { usePrinterSettings } from '../stores/printerStore';
 
 const money = (paise: number) => formatPaiseToRupees(paise);
@@ -92,7 +94,14 @@ export const BillScreen: React.FC<BillScreenProps> = ({ orderId, title, onBack, 
   const balance = bill?.balance_due_paise ?? 0;
   const payable = bill?.status === 'unpaid' || bill?.status === 'partially_paid';
   const pending = (bill?.payments ?? []).filter((p) => p.status === 'pending');
-  const onTerminal = hasTerminalPayments();
+  const nativeTerminal = hasTerminalPayments();
+  const cloudOn = useCloudEnabled(nativeTerminal);
+  const viaCloud = !nativeTerminal && cloudOn;
+  const onTerminal = nativeTerminal || cloudOn;
+  const cancelCloud = useRef(false);
+  const [cloudCharging, setCloudCharging] = useState(false);
+  const queryClient = useQueryClient();
+  const cloud = cloudCalls('billing', () => queryClient.invalidateQueries());
   const canPrintBill = hasLinePrinter() || printerKind() === 'system';
 
   const [mode, setMode] = useState<PaymentMode>(PaymentMode.CASH);
@@ -202,6 +211,23 @@ export const BillScreen: React.FC<BillScreenProps> = ({ orderId, title, onBack, 
       // Saved as pending first: if anything below goes wrong, the payment is still on the bill to be resolved.
       const started = await startTerminal.mutateAsync({ orderId, billId: bill.id, mode: payMode, amountPaise, idempotencyKey: terminalKey });
       setTerminalKey(newIdempotencyKey());
+      if (viaCloud) {
+        cancelCloud.current = false;
+        setCloudCharging(true);
+        setBusy('Sending to the terminal…');
+        try {
+          const result = await chargeThroughCloud(cloud, started.payment.id, {
+            cancelRequested: () => cancelCloud.current,
+            onProgress: () => setBusy(payMode === 'card' ? 'Waiting for the card on the terminal… On the terminal, open Open transactions and pick this payment.' : 'Waiting for the UPI payment on the terminal… On the terminal, open Open transactions and pick this payment.'),
+          });
+          if (result.state === 'approved') setNotice(`${payMode === 'card' ? 'Card' : 'UPI'} payment approved.`);
+          else if (result.state === 'declined') setError(`Not paid: ${result.message}`);
+          else setError(`${result.message} It is still pending below: use "Check terminal" before collecting again.`);
+        } finally {
+          setCloudCharging(false);
+        }
+        return;
+      }
       const ref = started.payment.billing_ref_no ?? '';
       let result = await terminal.sale(payMode, amountPaise, ref);
       if (result.status === 'unknown') {
@@ -227,6 +253,13 @@ export const BillScreen: React.FC<BillScreenProps> = ({ orderId, title, onBack, 
     setError(null);
     setBusy('Checking the result with the terminal…');
     try {
+      if (viaCloud) {
+        const result = await cloud.check(payment.id);
+        if (result.state === 'approved') setNotice('The payment was approved.');
+        else if (result.state === 'declined') setNotice('The payment was not taken.');
+        else setError(`${result.message} Check the charge slip and resolve it by hand if needed.`);
+        return;
+      }
       const result = await terminal.status(payment.amount_paise, payment.billing_ref_no ?? '');
       if (result.status === 'unknown') setError('The terminal still has no result. Check the charge slip and resolve it by hand.');
       else if (await saveOutcome(payment, result)) setNotice(result.status === 'approved' ? 'The payment was approved.' : 'The payment was not taken.');
@@ -318,7 +351,7 @@ export const BillScreen: React.FC<BillScreenProps> = ({ orderId, title, onBack, 
   };
 
   const reversible = (p: BillPayment) =>
-    onTerminal && p.status === 'success' && p.provider !== 'manual' && !!p.terminal?.InvoiceNumber && bill?.status !== 'voided';
+    nativeTerminal && p.status === 'success' && p.provider !== 'manual' && !!p.terminal?.InvoiceNumber && bill?.status !== 'voided';
 
   return (
     <View style={styles.container}>
@@ -328,6 +361,9 @@ export const BillScreen: React.FC<BillScreenProps> = ({ orderId, title, onBack, 
           {error ? <Text style={styles.error}>{error}</Text> : null}
           {notice ? <Text style={styles.notice}>{notice}</Text> : null}
           {busy ? <Text style={styles.busy}>{busy}</Text> : null}
+          {cloudCharging ? (
+            <Button title="Cancel on terminal" variant="secondary" onPress={() => { cancelCloud.current = true; setBusy('Cancelling on the terminal…'); }} />
+          ) : null}
 
           {order && order.status !== 'cancelled' ? (
             <View style={[styles.card, styles.customerCard]}>

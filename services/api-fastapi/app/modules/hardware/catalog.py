@@ -16,14 +16,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.auth import CurrentUser
+from app.core.auth import CurrentUser, resolve_branch_id
 from app.core.enums import HARDWARE_MEASURED_UNITS, HardwarePriceTier, HardwareUnit, Topic
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.events import commit, queue_event
 from app.core.pagination import PageParams, paginate
 from app.models.floor import Branch
 from app.models.hardware import HardwareCategory, HardwareProduct, HardwareProductUnit, HardwareSettings
-from app.modules.hardware import pricing
+from app.modules.hardware import pricing, stockview
 from app.schemas.hardware import (
     HardwareCategoryCreate,
     HardwareCategoryUpdate,
@@ -215,10 +215,12 @@ _PRODUCT_FIELDS = ("id", "category_id", "name", "brand", "size_spec", "sku", "ba
                    "allow_fraction", "price", "wholesale_price", "min_price", "mrp", "is_active", "created_at")
 
 
-async def product_rows(db: AsyncSession, products: Sequence[HardwareProduct]) -> List[Dict[str, Any]]:
-    """Products as response rows, each with its stored units and every way to sell it."""
+async def product_rows(db: AsyncSession, products: Sequence[HardwareProduct],
+                       branch_id: Optional[uuid.UUID] = None) -> List[Dict[str, Any]]:
+    """Products as response rows, each with its stored units and every way to sell it, and (given a branch) its stock there."""
     if not products:
         return []
+    on_hand = await stockview.on_hand(db, branch_id, [p.id for p in products]) if branch_id is not None else {}
     names = dict((await db.execute(select(HardwareCategory.id, HardwareCategory.name)
                                    .where(HardwareCategory.id.in_({p.category_id for p in products})))).all())
     return [{
@@ -226,6 +228,7 @@ async def product_rows(db: AsyncSession, products: Sequence[HardwareProduct]) ->
         "category_name": names.get(p.category_id),
         "units": list(p.units),
         "options": [option(p, None)] + [option(p, u) for u in p.units],
+        "on_hand": on_hand.get(p.id),
     } for p in products]
 
 
@@ -240,9 +243,15 @@ async def _product(db: AsyncSession, org_id: uuid.UUID, product_id: uuid.UUID, *
     return product
 
 
-async def get_product(db: AsyncSession, user: CurrentUser, product_id: uuid.UUID) -> Dict[str, Any]:
+async def get_product(db: AsyncSession, user: CurrentUser, product_id: uuid.UUID,
+                      branch_id: Optional[uuid.UUID] = None) -> Dict[str, Any]:
     product = await _product(db, user.organization_id, product_id)
-    return (await product_rows(db, [product]))[0]
+    return (await product_rows(db, [product], _branch(user, branch_id)))[0]
+
+
+def _branch(user: CurrentUser, branch_id: Optional[uuid.UUID]) -> Optional[uuid.UUID]:
+    """The branch whose stock to show: only when one was asked for, and only one the user may see."""
+    return resolve_branch_id(user, branch_id) if branch_id is not None else None
 
 
 def _matches(org_id: uuid.UUID, text: str) -> Any:
@@ -258,8 +267,9 @@ def _matches(org_id: uuid.UUID, text: str) -> Any:
 
 async def list_products(
     db: AsyncSession, user: CurrentUser, params: PageParams, *, search: Optional[str], category_id: Optional[uuid.UUID],
-    include_inactive: bool,
+    include_inactive: bool, branch_id: Optional[uuid.UUID] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
+    branch_id = _branch(user, branch_id)
     stmt = (select(HardwareProduct).where(HardwareProduct.organization_id == user.organization_id)
             .options(*PRODUCT_LOADERS).order_by(HardwareProduct.name, HardwareProduct.size_spec, HardwareProduct.id))
     if not include_inactive:
@@ -269,7 +279,7 @@ async def list_products(
     if search and search.strip():
         stmt = stmt.where(_matches(user.organization_id, search.strip()))
     products, total = await paginate(db, stmt, params)
-    return await product_rows(db, products), total
+    return await product_rows(db, products, branch_id), total
 
 
 # --- writing products --------------------------------------------------------------------------------------------------------
@@ -359,7 +369,7 @@ async def replace_units(db: AsyncSession, user: CurrentUser, product_id: uuid.UU
 # --- the counter: scanner lookup and search ----------------------------------------------------------------------------------
 
 
-async def lookup(db: AsyncSession, user: CurrentUser, code: str) -> Dict[str, Any]:
+async def lookup(db: AsyncSession, user: CurrentUser, code: str, branch_id: Optional[uuid.UUID] = None) -> Dict[str, Any]:
     """
     The active product whose code is exactly `code`, and the unit it sells: a product barcode sells the base unit, a unit's
     barcode that unit, and a SKU the base unit. Barcodes win over SKUs.
@@ -381,13 +391,13 @@ async def lookup(db: AsyncSession, user: CurrentUser, code: str) -> Dict[str, An
     if product_id is None:
         raise NotFound("No item has this barcode", code="barcode_not_found", details={"code": code})
     product = await _product(db, org_id, product_id)
-    row = (await product_rows(db, [product]))[0]
+    row = (await product_rows(db, [product], _branch(user, branch_id)))[0]
     chosen = next((u for u in product.units if u.id == unit_id), None)
     return {"product": row, "unit": option(product, chosen)}
 
 
 async def search(db: AsyncSession, user: CurrentUser, q: Optional[str], category_id: Optional[uuid.UUID],
-                 limit: int) -> List[Dict[str, Any]]:
+                 limit: int, branch_id: Optional[uuid.UUID] = None) -> List[Dict[str, Any]]:
     """Active products for the counter: every word of `q` in the name, brand, size or SKU, or an exact barcode."""
     stmt = (select(HardwareProduct).where(HardwareProduct.organization_id == user.organization_id,
                                           HardwareProduct.is_active.is_(True))
@@ -397,4 +407,4 @@ async def search(db: AsyncSession, user: CurrentUser, q: Optional[str], category
         stmt = stmt.where(HardwareProduct.category_id == category_id)
     if q and q.strip():
         stmt = stmt.where(_matches(user.organization_id, q.strip()))
-    return await product_rows(db, (await db.scalars(stmt)).all())
+    return await product_rows(db, (await db.scalars(stmt)).all(), _branch(user, branch_id))

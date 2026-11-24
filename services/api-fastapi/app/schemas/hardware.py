@@ -6,14 +6,14 @@ alternate unit and every amount on an invoice carry 2.
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from app.core.enums import HardwareUnit
-from app.schemas.common import Money
+from app.core.enums import HardwareMovementKind, HardwareUnit
+from app.schemas.common import Money, QuantityOut, Reason
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
 CategoryName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
@@ -194,6 +194,7 @@ class HardwareProductRead(ORM):
     created_at: datetime
     units: List[HardwareUnitRead]
     options: List[HardwareUnitOption]
+    on_hand: Optional[QuantityOut] = None  # base units in the branch asked about; null when no branch was named
 
 
 class HardwareLookupRead(BaseModel):
@@ -228,3 +229,122 @@ class HardwareImportResult(BaseModel):
     categories_created: int
     errors: List[HardwareImportRowError]
     dry_run: bool
+
+
+# --- stock (H2) -------------------------------------------------------------------------------------------------------------
+
+Supplier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
+InvoiceNo = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
+# A quantity typed by a person: up to 3 decimals, as much as a pallet of screws.
+Qty = Annotated[Decimal, Field(gt=0, le=10_000_000, max_digits=11, decimal_places=3)]
+QtyDelta = Annotated[Decimal, Field(ge=-10_000_000, le=10_000_000, max_digits=11, decimal_places=3)]
+QtyCounted = Annotated[Decimal, Field(ge=0, le=10_000_000, max_digits=11, decimal_places=3)]
+CostPerUnit = Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=4)]
+
+
+class HardwareStockRead(BaseModel):
+    """A product's stock in a branch, in its base unit. `cost_price` and `stock_value` go to owners and managers only."""
+    product_id: uuid.UUID
+    product_name: str
+    brand: Optional[str] = None
+    size_spec: Optional[str] = None
+    category_id: uuid.UUID
+    category_name: str
+    sku: Optional[str] = None
+    barcode: Optional[str] = None
+    base_unit: HardwareUnit
+    allow_fraction: bool
+    price: Decimal
+    quantity: QuantityOut
+    low_stock_level: Optional[QuantityOut] = None
+    is_low: bool
+    is_out: bool
+    cost_price: Optional[Decimal] = None
+    stock_value: Optional[Decimal] = None
+    units: List[HardwareUnitRead] = []
+
+
+class HardwareStockSettings(BaseModel):
+    """Fields left out are not changed; `null` clears. `cost_price` is per base unit."""
+    branch_id: Optional[uuid.UUID] = None
+    low_stock_level: Optional[QtyCounted] = None
+    cost_price: Optional[CostPerUnit] = None
+
+
+class HardwarePurchaseLineIn(BaseModel):
+    """
+    Goods received in `unit` (the base unit when left out, or one of the product's alternate units). `unit_cost` is what one of
+    that unit cost; the service works out the cost per base unit.
+    """
+    product_id: uuid.UUID
+    unit: Optional[HardwareUnit] = None
+    quantity: Qty
+    unit_cost: Optional[CostPerUnit] = None
+
+
+class HardwarePurchaseCreate(BaseModel):
+    branch_id: Optional[uuid.UUID] = None
+    supplier_name: Optional[Supplier] = None
+    invoice_number: Optional[InvoiceNo] = None
+    received_on: Optional[date] = None  # defaults to today at the branch
+    notes: Optional[str] = Field(default=None, max_length=500)
+    lines: List[HardwarePurchaseLineIn] = Field(min_length=1, max_length=1000)
+
+
+class HardwarePurchaseLineRead(BaseModel):
+    product_id: uuid.UUID
+    product_name: str
+    size_spec: Optional[str] = None
+    unit: HardwareUnit  # what was typed
+    quantity: QuantityOut  # as typed, in `unit`
+    unit_cost: Optional[Decimal] = None  # per `unit`
+    line_cost: Optional[Decimal] = None
+    base_unit: HardwareUnit
+    base_quantity: QuantityOut  # what stock gained
+    base_unit_cost: Optional[Decimal] = None
+
+
+class HardwarePurchaseRead(BaseModel):
+    id: uuid.UUID
+    branch_id: uuid.UUID
+    supplier_name: Optional[str] = None
+    invoice_number: Optional[str] = None
+    received_on: date
+    notes: Optional[str] = None
+    total_cost: Decimal
+    created_by: Optional[str] = None
+    created_at: datetime
+    lines: List[HardwarePurchaseLineRead] = []
+
+
+class HardwareStockAdjust(BaseModel):
+    """`delta` adds or removes base units; `counted` replaces the quantity with a physical count. Exactly one."""
+    branch_id: Optional[uuid.UUID] = None
+    product_id: uuid.UUID
+    delta: Optional[QtyDelta] = None
+    counted: Optional[QtyCounted] = None
+    reason: Reason
+
+    @model_validator(mode="after")
+    def _one_of(self) -> "HardwareStockAdjust":
+        if (self.delta is None) == (self.counted is None):
+            raise ValueError("send exactly one of delta or counted")
+        if self.delta == 0:
+            raise ValueError("delta must not be zero")
+        return self
+
+
+class HardwareMovementRead(BaseModel):
+    id: uuid.UUID
+    product_id: uuid.UUID
+    product_name: str
+    size_spec: Optional[str] = None
+    base_unit: HardwareUnit
+    kind: HardwareMovementKind
+    quantity: QuantityOut
+    balance_after: QuantityOut
+    unit_cost: Optional[Decimal] = None
+    reason: Optional[str] = None
+    purchase_id: Optional[uuid.UUID] = None
+    created_by: Optional[str] = None
+    created_at: datetime

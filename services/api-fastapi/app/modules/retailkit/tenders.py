@@ -26,6 +26,7 @@ from sqlalchemy.orm import selectinload
 from app.core.audit import record_audit
 from app.core.auth import CurrentUser, require_branch_access, resolve_approver
 from app.core.clock import utcnow
+from app.core.config import settings
 from app.core.enums import AuditAction, BillStatus, PaymentStatus, Topic
 from app.core.errors import Conflict, InvalidTransition, ValidationFailed
 from app.core.events import commit, queue_event
@@ -191,6 +192,9 @@ class Tenders(Generic[S, P]):
         answer can never lose it. It counts towards the sale only once approved.
         """
         sale: Any = await self.load_payable(db, user, sale_id)
+        if amount < settings.PINELABS_MIN_AMOUNT:
+            raise ValidationFailed(f"The terminal takes {settings.PINELABS_MIN_AMOUNT} rupee or more: take a smaller amount another way",
+                                   code="terminal_amount_too_small", details={"minimum": str(settings.PINELABS_MIN_AMOUNT)})
         if amount > sale.balance_due:
             raise ValidationFailed("Payment exceeds the balance due", code="overpayment",
                                    details={"balance_due": str(sale.balance_due)})

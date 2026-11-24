@@ -14,7 +14,7 @@ export const WrongApp: React.FC<{ expected: 'restaurant' | 'retail' }> = ({ expe
       <Text style={styles.title}>This app is not for your business</Text>
       <Text style={styles.text}>
         {expected === 'retail'
-          ? 'Your business is set up as a café or shop. Install the Vanox Retail app on this device to make sales.'
+          ? 'Your business is set up as a café or shop. Install the Vanox ERP app on this device to make sales.'
           : 'Your business is set up as a restaurant. Install the Restaurant Counter app (or the waiter app on phones).'}
       </Text>
     </View>

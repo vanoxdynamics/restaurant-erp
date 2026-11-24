@@ -161,3 +161,18 @@ The last four come from Pine Labs' **Security Requirement** section and are need
 | 12 | Settlement | Pine Labs slip printed, summary shown |
 | 13 | Terminal info | terminal ID and store name shown |
 | 14 | Plutus app missing or busy | clear message; nothing recorded as paid |
+
+## Cloud-based integration (server to terminal)
+
+For devices without the on-device plugin (tablets, browsers), the server can send the amount to the terminal through Pine Labs' cloud
+(`UploadBilledTransaction`, `GetCloudBasedTxnStatus`, `CancelTransaction`). Settings: `PINELABS_CLOUD_BASE_URL` (UAT by default),
+`PINELABS_MERCHANT_ID`, `PINELABS_SECURITY_TOKEN`, `PINELABS_STORE_ID`, `PINELABS_CLIENT_ID`, `PINELABS_USER_ID`. Keep the token in
+the environment only. The device must be activated and settled once so it picks up the changes.
+
+- `GET /billing/terminal-cloud` tells the POS whether it is configured.
+- The POS starts the payment as usual (pending), then `POST /billing|apparel/payments/{id}/cloud/send`, polls `.../check` every 3 s
+  and may call `.../cancel`. The server records approved or failed answers itself; anything unclear stays pending, to be checked or
+  resolved from the charge slip.
+- The on-device plugin wins when a device has it. Void/reverse of an approved cloud payment is not wired yet.
+- How answers are read is in `app/modules/pinelabs_cloud/status.py`: **confirm against a real UAT response** (approved = "APPROVED" in
+  `ResponseMessage`; declined = DECLINE/CANCEL/FAIL/REJECT/TIMEOUT/EXPIRED; anything else pending).

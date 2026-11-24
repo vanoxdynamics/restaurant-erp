@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Badge, BadgeProps, Button, colors, fonts, Input, Modal, radii, spacing, typography } from '@repo/shared-ui';
 import { formatPaiseToRupees } from '@repo/shared-utils';
@@ -8,6 +8,7 @@ import { printerKind } from '../device';
 import { TransactionResult } from '../devices/pinelabs';
 import { hasLinePrinter, hasTerminalPayments, terminal } from '../devices/terminal';
 import { printHtml } from '../printing/printHtml';
+import { chargeThroughCloud, type CloudCalls, useCloudEnabled } from './cloudCharge';
 import { usePrinterSettings } from '../stores/printerStore';
 
 /**
@@ -52,6 +53,8 @@ export interface TenderApi {
   split(tenders: TenderInput[], idempotencyKey: string): Promise<void>;
   startTerminal(input: { mode: 'card' | 'upi'; amountPaise: number; idempotencyKey: string }): Promise<TenderPayment>;
   completeTerminal(paymentId: string, outcome: TerminalOutcome): Promise<void>;
+  /** Charging through Pine Labs' cloud, for devices without the on-device terminal. Leave out where the module has no cloud calls. */
+  cloud?: CloudCalls;
   reverse(paymentId: string, input: { reason: string; approverPin?: string; details?: TerminalOutcome['details']; checkOnly?: boolean }): Promise<void>;
   receiptPrint(paperMm: 58 | 80): Promise<PrintablePage>;
   receiptHtml(paperMm: 58 | 80): Promise<string>;
@@ -74,6 +77,9 @@ const PAYMENT_STATUS: Record<TenderStatus, string | null> = {
   failed: 'Declined',
   reversed: 'Reversed',
 };
+
+/** Pine Labs does not take a terminal request under Rs 1 (the server refuses it too). */
+const MIN_TERMINAL_PAISE = 100;
 
 const TENDERS: { mode: 'cash' | 'card' | 'upi'; label: string; referenceLabel?: string }[] = [
   { mode: 'cash', label: 'Cash' },
@@ -107,7 +113,12 @@ export const PayPanel: React.FC<PayPanelProps> = ({ sale, api, summary, extraTen
   const balance = sale.balance_due_paise;
   const payable = sale.status === 'unpaid' || sale.status === 'partially_paid';
   const pending = sale.payments.filter((p) => p.status === 'pending');
-  const onTerminal = hasTerminalPayments();
+  const nativeTerminal = hasTerminalPayments();
+  const cloudOn = useCloudEnabled(nativeTerminal || !api.cloud);
+  const viaCloud = !nativeTerminal && cloudOn;
+  const onTerminal = nativeTerminal || cloudOn;
+  const cancelCloud = useRef(false);
+  const [cloudCharging, setCloudCharging] = useState(false);
   const canPrint = hasLinePrinter() || printerKind() === 'system';
 
   const [mode, setMode] = useState<'cash' | 'card' | 'upi' | 'split'>('cash');
@@ -141,7 +152,8 @@ export const PayPanel: React.FC<PayPanelProps> = ({ sale, api, summary, extraTen
   const amountPaise = toPaise(amount);
   const overBalance = mode !== 'cash' && amountPaise > balance;
   const missingReference = !viaTerminal && !!tender?.referenceLabel && !reference.trim();
-  const canPay = amountPaise > 0 && !overBalance && !missingReference && pending.length === 0 && !busy;
+  const underTerminalMinimum = viaTerminal && amountPaise > 0 && amountPaise < MIN_TERMINAL_PAISE; // Pine Labs: nothing under Rs 1
+  const canPay = amountPaise > 0 && !overBalance && !underTerminalMinimum && !missingReference && pending.length === 0 && !busy;
 
   const splitTenders: TenderInput[] = (['cash', 'card', 'upi'] as const)
     .map((m) => ({ mode: m, amountPaise: toPaise(split[m].amount), reference: split[m].reference.trim() || undefined }))
@@ -199,6 +211,24 @@ export const PayPanel: React.FC<PayPanelProps> = ({ sale, api, summary, extraTen
     return false;
   };
 
+  /** Send to the terminal through Pine Labs' cloud and wait for the answer. The server records it, so nothing is lost if we stop. */
+  const chargeOnCloud = async (payment: TenderPayment, cloud: CloudCalls, payMode: 'card' | 'upi') => {
+    cancelCloud.current = false;
+    setCloudCharging(true);
+    setBusy('Sending to the terminal…');
+    try {
+      const result = await chargeThroughCloud(cloud, payment.id, {
+        cancelRequested: () => cancelCloud.current,
+        onProgress: () => setBusy(payMode === 'card' ? 'Waiting for the card on the terminal… On the terminal, open Open transactions and pick this payment.' : 'Waiting for the UPI payment on the terminal… On the terminal, open Open transactions and pick this payment.'),
+      });
+      if (result.state === 'approved') setNotice(`${payMode === 'card' ? 'Card' : 'UPI'} payment approved.`);
+      else if (result.state === 'declined') setError(`Not paid: ${result.message}`);
+      else setError(`${result.message} It is still pending below: use "Check terminal" before collecting again.`);
+    } finally {
+      setCloudCharging(false);
+    }
+  };
+
   const chargeOnTerminal = async () => {
     const payMode = mode === 'upi' ? 'upi' : 'card';
     setError(null);
@@ -208,6 +238,10 @@ export const PayPanel: React.FC<PayPanelProps> = ({ sale, api, summary, extraTen
       // Saved as pending first: if anything below goes wrong, the payment is still on the sale to be resolved.
       const started = await api.startTerminal({ mode: payMode, amountPaise, idempotencyKey: terminalKey });
       setTerminalKey(newIdempotencyKey());
+      if (viaCloud && api.cloud) {
+        await chargeOnCloud(started, api.cloud, payMode);
+        return;
+      }
       const ref = started.billing_ref_no ?? '';
       let result = await terminal.sale(payMode, amountPaise, ref);
       if (result.status === 'unknown') {
@@ -233,6 +267,13 @@ export const PayPanel: React.FC<PayPanelProps> = ({ sale, api, summary, extraTen
     setError(null);
     setBusy('Checking the result with the terminal…');
     try {
+      if (viaCloud && api.cloud) {
+        const result = await api.cloud.check(payment.id);
+        if (result.state === 'approved') setNotice('The payment was approved.');
+        else if (result.state === 'declined') setNotice('The payment was not taken.');
+        else setError(`${result.message} Check the charge slip and resolve it by hand if needed.`);
+        return;
+      }
       const result = await terminal.status(payment.amount_paise, payment.billing_ref_no ?? '');
       if (result.status === 'unknown') setError('The terminal still has no result. Check the charge slip and resolve it by hand.');
       else if (await saveOutcome(payment, result)) setNotice(result.status === 'approved' ? 'The payment was approved.' : 'The payment was not taken.');
@@ -303,13 +344,16 @@ export const PayPanel: React.FC<PayPanelProps> = ({ sale, api, summary, extraTen
   });
 
   const reversible = (p: TenderPayment) =>
-    onTerminal && p.status === 'success' && p.provider !== 'manual' && !!p.terminal?.InvoiceNumber && sale.status !== 'voided';
+    nativeTerminal && p.status === 'success' && p.provider !== 'manual' && !!p.terminal?.InvoiceNumber && sale.status !== 'voided';
 
   return (
     <View style={styles.stack}>
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {notice ? <Text style={styles.notice}>{notice}</Text> : null}
       {busy ? <Text style={styles.busy}>{busy}</Text> : null}
+      {cloudCharging ? (
+        <Button title="Cancel on terminal" variant="secondary" onPress={() => { cancelCloud.current = true; setBusy('Cancelling on the terminal…'); }} />
+      ) : null}
 
       <View style={styles.card}>
         <View style={styles.headRow}>
@@ -408,7 +452,13 @@ export const PayPanel: React.FC<PayPanelProps> = ({ sale, api, summary, extraTen
                 value={amount}
                 onChangeText={setAmount}
                 keyboardType="decimal-pad"
-                error={overBalance ? `More than the balance of ${money(balance)}` : undefined}
+                error={
+                  overBalance
+                    ? `More than the balance of ${money(balance)}`
+                    : underTerminalMinimum
+                      ? `The terminal takes ${money(MIN_TERMINAL_PAISE)} or more`
+                      : undefined
+                }
               />
               {!viaTerminal && tender?.referenceLabel ? (
                 <Input label={tender.referenceLabel} value={reference} onChangeText={setReference} autoCapitalize="characters" />

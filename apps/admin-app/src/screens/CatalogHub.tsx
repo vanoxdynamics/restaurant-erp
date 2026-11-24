@@ -5,6 +5,7 @@ import { useEntitlements } from '@repo/api-client';
 import { LabelsScreen as ApparelLabelsScreen } from './apparel/LabelsScreen';
 import { ProductsScreen as ApparelProductsScreen } from './apparel/ProductsScreen';
 import { StockScreen as ApparelStockScreen } from './apparel/StockScreen';
+import { StockScreen as HardwareStockScreen } from './hardware/StockScreen';
 import { MenuBuilderScreen } from './MenuBuilder';
 import { StockScreen } from './StockScreen';
 
@@ -17,11 +18,10 @@ type CatalogView = 'items' | 'stock' | 'labels';
 export const CatalogHub: React.FC = () => {
   const entitlements = useEntitlements().data;
   const [view, setView] = useState<CatalogView>('items');
-  // Dress and hardware shops keep their catalogue and stock in their own modules.
-  if (entitlements?.category === 'hardware') return <ShopModulePlaceholder kind="hardware" />;
-  // A dress shop's products and stock are its own module's (stock needs no `inventory` module there).
+  // Dress and hardware shops keep their catalogue and stock in their own modules (stock needs no `inventory` module there).
   const apparel = entitlements?.category === 'apparel';
-  if (!apparel && !entitlements?.modules.includes('inventory')) return <MenuBuilderScreen />;
+  const hardware = entitlements?.category === 'hardware';
+  if (!apparel && !hardware && !entitlements?.modules.includes('inventory')) return <MenuBuilderScreen />;
   const shop = entitlements?.category !== 'restaurant' && !entitlements?.settings.kitchen_tickets;
 
   return (
@@ -29,7 +29,7 @@ export const CatalogHub: React.FC = () => {
       <View style={styles.segmentWrapper}>
         <View style={styles.segmented} accessibilityRole="tablist">
           {([
-            ['items', apparel ? 'Products' : shop ? 'Items' : 'Menu'],
+            ['items', apparel || hardware ? 'Products' : shop ? 'Items' : 'Menu'],
             ['stock', 'Stock'],
             ...(apparel ? ([['labels', 'Labels']] as const) : []),
           ] as const).map(([key, label]) => (
@@ -46,9 +46,11 @@ export const CatalogHub: React.FC = () => {
         </View>
       </View>
       <View style={{ flex: 1 }}>
-        {apparel
-          ? view === 'items' ? <ApparelProductsScreen /> : view === 'stock' ? <ApparelStockScreen /> : <ApparelLabelsScreen />
-          : view === 'items' ? <MenuBuilderScreen /> : <StockScreen />}
+        {hardware
+          ? view === 'stock' ? <HardwareStockScreen /> : <ShopModulePlaceholder kind="hardware" />
+          : apparel
+            ? view === 'items' ? <ApparelProductsScreen /> : view === 'stock' ? <ApparelStockScreen /> : <ApparelLabelsScreen />
+            : view === 'items' ? <MenuBuilderScreen /> : <StockScreen />}
       </View>
     </View>
   );
@@ -56,7 +58,7 @@ export const CatalogHub: React.FC = () => {
 
 const ShopModulePlaceholder: React.FC<{ kind: 'apparel' | 'hardware' }> = ({ kind }) => (
   <View style={[styles.container, styles.placeholder]}>
-    <Text style={styles.placeholderTitle}>{kind === 'apparel' ? 'Products, sizes and stock' : 'Products, units and stock'}</Text>
+    <Text style={styles.placeholderTitle}>{kind === 'apparel' ? 'Products, sizes and stock' : 'Products and their units'}</Text>
     <Text style={styles.segmentText}>Coming soon</Text>
   </View>
 );

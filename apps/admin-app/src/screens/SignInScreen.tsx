@@ -32,7 +32,7 @@ export const SignInScreen: React.FC = () => {
         <View style={styles.logo}>
           <Text style={styles.logoText}>R</Text>
         </View>
-        <Text style={styles.title}>Vanox Admin</Text>
+        <Text style={styles.title}>Vanox ERP</Text>
         <Text style={styles.subtitle}>Sign in with your manager account</Text>
 
         <Input

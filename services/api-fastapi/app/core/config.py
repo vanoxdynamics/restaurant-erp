@@ -60,6 +60,16 @@ class Settings(BaseSettings):
     BILLING_DUE_DAYS: int = 7  # due date for activation / plan-change invoices
     BILLING_SWEEP_INTERVAL_SECONDS: int = 3600  # `run-billing --loop` cadence
 
+    # Pine Labs cloud-based integration (card/UPI on a terminal, driven from the server). Empty = not configured.
+    PINELABS_CLOUD_BASE_URL: str = "https://www.plutuscloudserviceuat.in:8201"  # UAT; production differs
+    PINELABS_MERCHANT_ID: str = ""
+    PINELABS_SECURITY_TOKEN: str = ""  # secret: set in the environment only, never commit it
+    PINELABS_STORE_ID: str = ""
+    PINELABS_CLIENT_ID: str = ""
+    PINELABS_USER_ID: str = ""
+    PINELABS_TIMEOUT_SECONDS: float = 15.0
+    PINELABS_MIN_AMOUNT: Decimal = Decimal("1")  # Pine Labs: no terminal request under Rs 1
+
     # Business rules
     DEFAULT_TIMEZONE: str = "Asia/Kolkata"
     DISCOUNT_APPROVAL_THRESHOLD_PERCENT: Decimal = Decimal("10")
