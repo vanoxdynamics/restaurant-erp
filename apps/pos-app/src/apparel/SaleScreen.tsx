@@ -22,6 +22,7 @@ import {
   toRupees,
   useApparelSearch,
   useCreateApparelSale,
+  useVoidApparelSale,
 } from '@repo/api-client';
 import { CashDayBanner, cashButtonLabel, useCounterCashDay } from '../components/CashDayBanner';
 import { Icon } from '../components/Icon';
@@ -30,8 +31,8 @@ import { QueryState } from '../components/QueryState';
 import { TopBar } from '../components/TopBar';
 import { useDeviceStore } from '../stores/deviceStore';
 import { useSessionStore } from '../stores/sessionStore';
-import { ApparelCartLine, cartTotals, hasDiscount, lineNet, useApparelCartStore } from './apparelCartStore';
-import { VariantPickerSheet } from './VariantPickerSheet';
+import { ApparelCartLine, cartSignature, cartTotals, hasDiscount, lineNet, useApparelCartStore } from './apparelCartStore';
+import { stockWarning, VariantPickerSheet } from './VariantPickerSheet';
 
 const money = (paise: number) => formatPaiseToRupees(paise);
 
@@ -44,6 +45,8 @@ export interface SaleScreenProps {
   onReturns: () => void;
   /** Today's report: shown to managers and owners only. */
   onToday: () => void;
+  /** My shift: every role sees its own shift's sales. */
+  onShift: () => void;
   onPrinter: () => void;
   onDayEnd: () => void;
 }
@@ -55,13 +58,18 @@ type DiscountTarget = { kind: 'line'; line: ApparelCartLine } | { kind: 'bill' }
  * and colour. Typing a name lists styles; tapping one opens the size and colour grid. "Make invoice" sends the whole cart; the
  * totals shown here are an estimate and the server's invoice is what is paid.
  */
-export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, onSale, onReturns, onToday, onPrinter, onDayEnd }) => {
+export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, onSale, onReturns, onToday, onShift, onPrinter, onDayEnd }) => {
   const role = useSessionStore((s) => s.user?.role);
   const device = useDeviceStore((s) => s.device)!;
   const cashDay = useCounterCashDay();
   const createSale = useCreateApparelSale();
-  const { lines, billDiscountPaise, discountReason, add, setQuantity, setLineDiscount, setBillDiscount, setDiscountReason, clear } =
-    useApparelCartStore();
+  const voidSale = useVoidApparelSale();
+  const {
+    lines, billDiscountPaise, discountReason, pendingSale, add, setQuantity, setLineDiscount, setBillDiscount, setDiscountReason, clear,
+    setPendingSale,
+  } = useApparelCartStore();
+  // An invoice made from this cart is waiting for payment; the cart is unchanged since it was made.
+  const unchanged = !!pendingSale && pendingSale.signature === cartSignature({ lines, billDiscountPaise, discountReason });
   const wide = useWindowDimensions().width >= 900;
 
   const [search, setSearch] = useState('');
@@ -72,7 +80,7 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
   const [discountText, setDiscountText] = useState('');
   const [pinOpen, setPinOpen] = useState(false);
   const [pin, setPin] = useState('');
-  const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
+  const [message, setMessage] = useState<{ text: string; error?: boolean; warn?: boolean } | null>(null);
   const [saleKey, setSaleKey] = useState(newIdempotencyKey);
   const searchRef = useRef<TextInputInstance>(null);
 
@@ -92,12 +100,15 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
     setMessage(null);
   };
 
-  const addVariant = (product: Pick<ApparelProduct, 'name'>, variant: ApparelVariant) => {
+  /** Adds one piece; returns the warning when it takes the recorded stock below zero (the sale is still allowed). */
+  const addVariant = (product: Pick<ApparelProduct, 'name'>, variant: ApparelVariant): string | null => {
+    const warning = stockWarning(product.name, variant, inCart[variant.id] ?? 0);
     add({
       variant_id: variant.id, name: product.name, size: variant.size, colour: variant.colour, mrp_paise: variant.mrp_paise,
       price_paise: variant.price_paise, on_hand: variant.on_hand,
     });
     changed();
+    return warning;
   };
 
   /** Enter in the search box: what a keyboard-style barcode scanner sends after the code. */
@@ -107,10 +118,10 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
     if (/\s/.test(code)) return; // a name, not a code: the list is already showing
     try {
       const found = await apparelApi.lookup(code, device.branchId);
-      addVariant(found.product, found.variant);
+      const warning = addVariant(found.product, found.variant);
       setSearch('');
       setTerm('');
-      setMessage({ text: `Added ${found.product.name}, ${found.variant.size} / ${found.variant.colour}.` });
+      setMessage(warning ? { text: warning, warn: true } : { text: `Added ${found.product.name}, ${found.variant.size} / ${found.variant.colour}.` });
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
         // Not a barcode or SKU: if the name matches one style, open it.
@@ -142,12 +153,32 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
 
   const makeInvoice = async (approverPin?: string) => {
     if (!lines.length) return;
+    if (pendingSale && unchanged) return onSale(pendingSale.id); // nothing changed: pay the invoice already made
     if (discounted && !discountReason.trim()) {
       setMessage({ text: 'Enter the reason for the discount first.', error: true });
       setCartOpen(true);
       return;
     }
     setMessage(null);
+    if (pendingSale) {
+      // Pieces were added or changed after the invoice was made. That invoice no longer matches the cart, so it is cancelled
+      // (its pieces go back to stock) and a new one is made from the whole cart below. Never two invoices for one customer.
+      try {
+        await voidSale.mutateAsync({ saleId: pendingSale.id, reason: 'Cart changed before payment; invoiced again' });
+      } catch (e) {
+        const gone = e instanceof ApiError && (e.status === 404 || (e.code === 'refund_required' && e.details?.status === 'voided'));
+        if (!gone) {
+          setMessage({
+            text: e instanceof ApiError && (e.code === 'refund_required' || e.code === 'approval_required' || e.code === 'terminal_payment_pending')
+              ? `Invoice ${pendingSale.number ?? ''} already has a payment on it, so it cannot be changed. Resume payment to finish it, or cancel it there with a manager.`
+              : 'Could not update the invoice. Check the connection and try again.',
+            error: true,
+          });
+          return;
+        }
+      }
+      setPendingSale(null);
+    }
     const key = approverPin ? newIdempotencyKey() : saleKey;
     try {
       const sale = await createSale.mutateAsync({
@@ -161,7 +192,8 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
           approver_pin: approverPin,
         },
       });
-      clear();
+      // The cart is kept until this invoice is paid, so cancelling the payment brings the same pieces back.
+      setPendingSale({ id: sale.id, number: sale.number, signature: cartSignature({ lines, billDiscountPaise, discountReason }) });
       setSaleKey(newIdempotencyKey());
       setCartOpen(false);
       setPinOpen(false);
@@ -225,10 +257,16 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
           <Text style={styles.totalLabel}>{totals.pieces} {totals.pieces === 1 ? 'piece' : 'pieces'} · GST included</Text>
           <Text style={styles.total}>{money(totals.total)}</Text>
         </View>
-        {message ? <Text style={[styles.message, message.error ? { color: colors.danger } : null]}>{message.text}</Text> : null}
+        {message ? <Text style={[styles.message, message.error ? { color: colors.danger } : message.warn ? styles.warn : null]}>{message.text}</Text> : null}
         <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-          {lines.length ? <Button title="Clear" variant="secondary" onPress={() => { clear(); changed(); }} /> : null}
-          <Button title="Make invoice" onPress={() => makeInvoice()} disabled={!lines.length} loading={createSale.isPending} style={{ flex: 1 }} />
+          {lines.length && !pendingSale ? <Button title="Clear" variant="secondary" onPress={() => { clear(); changed(); }} /> : null}
+          <Button
+            title={!pendingSale ? 'Make invoice' : unchanged || !lines.length ? 'Resume payment' : 'Update invoice'}
+            onPress={() => (pendingSale && (unchanged || !lines.length) ? onSale(pendingSale.id) : makeInvoice())}
+            disabled={(!lines.length && !pendingSale) || createSale.isPending || voidSale.isPending}
+            loading={createSale.isPending || voidSale.isPending}
+            style={{ flex: 1 }}
+          />
         </View>
       </View>
     </View>
@@ -244,6 +282,7 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
         right={
           <View style={styles.topActions}>
             <Button title="Returns" variant="secondary" size="sm" onPress={onReturns} />
+            <Button title="My shift" variant="secondary" size="sm" onPress={onShift} />
             {role === StaffRole.OWNER || role === StaffRole.MANAGER ? <Button title="Today" variant="secondary" size="sm" onPress={onToday} /> : null}
             {wide ? <Button title="Printer" variant="secondary" size="sm" onPress={onPrinter} icon={<Icon name="printer" size={14} color={colors.text} />} /> : null}
             <Button title={cashButtonLabel(cashDay?.status)} variant="secondary" size="sm" onPress={onDayEnd} />
@@ -251,6 +290,15 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
         }
       />
       <CashDayBanner onPress={onDayEnd} />
+      {pendingSale ? (
+        <Pressable onPress={() => (unchanged || !lines.length ? onSale(pendingSale.id) : makeInvoice())} accessibilityRole="button" style={styles.pendingBar}>
+          <Text style={styles.pendingText}>
+            {unchanged
+              ? `Invoice ${pendingSale.number ?? ''} is waiting for payment. Tap to resume payment.`
+              : `The cart has changed since invoice ${pendingSale.number ?? ''} was made. Tap "Update invoice" to bill the whole cart.`}
+          </Text>
+        </Pressable>
+      ) : null}
       {credit ? (
         <Pressable onPress={onDropCredit} accessibilityRole="button" accessibilityLabel="Forget the store credit for this sale" style={styles.creditBar}>
           <Text style={styles.creditText}>
@@ -284,7 +332,7 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
               </Pressable>
             ) : null}
           </View>
-          {!wide && message ? <Text style={[styles.message, message.error ? { color: colors.danger } : null]}>{message.text}</Text> : null}
+          {!wide && message ? <Text style={[styles.message, message.error ? { color: colors.danger } : message.warn ? styles.warn : null]}>{message.text}</Text> : null}
 
           <QueryState query={products} isEmpty={list.length === 0} emptyText={term ? 'No styles match.' : 'No styles yet. Add them in the admin app.'}>
             <ScrollView contentContainerStyle={styles.grid} keyboardShouldPersistTaps="handled">
@@ -366,6 +414,8 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   topActions: { flexDirection: 'row', gap: spacing.xs, marginRight: spacing.sm },
+  pendingBar: { marginHorizontal: spacing.lg, marginTop: spacing.md, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.warningBg },
+  pendingText: { ...typography.caption, color: colors.warning, fontFamily: fonts.semibold },
   creditBar: { marginHorizontal: spacing.lg, marginTop: spacing.md, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.primaryGlow },
   creditText: { ...typography.caption, color: colors.primary, fontFamily: fonts.semibold },
   body: { flex: 1 },
@@ -376,6 +426,7 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, ...typography.body, color: colors.text, paddingVertical: spacing.sm, outlineStyle: 'none' } as never,
   message: { ...typography.caption, color: colors.textSecondary, marginTop: spacing.sm },
+  warn: { color: colors.warning, backgroundColor: colors.warningBg, padding: spacing.sm, borderRadius: radii.md },
   hint: { ...typography.caption, color: colors.textMuted, marginTop: spacing.sm },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.md, paddingBottom: spacing.xl },
   tile: {

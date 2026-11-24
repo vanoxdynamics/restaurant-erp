@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, RefreshControl } from 'react-native';
 import { colors, radii, spacing, typography, Button, Badge, RoleBadge, Input, Modal, fonts } from '@repo/shared-ui';
-import { formatPaiseToRupees, formatVariancePaise, formatDateTime, StaffRole } from '@repo/shared-utils';
+import { formatPaiseToRupees, formatVariancePaise, formatDateTime, StaffRole, roleLabel, staffLabel } from '@repo/shared-utils';
 import {
   ApiError,
   StaffUser,
   useCreateDeviceSetupCode,
   useCreateStaffUser,
   useDeleteStaffUser,
+  useEntitlements,
   useSetStaffActive,
   useShiftAudits,
   useStaffUsers,
@@ -26,10 +27,15 @@ const RANK: Record<string, number> = {
 };
 const FLOOR_ROLES = [StaffRole.WAITER, StaffRole.CAPTAIN, StaffRole.CASHIER, StaffRole.KITCHEN];
 const isPin = (value: string) => /^\d{4,6}$/.test(value);
+const USERNAME_RULE = 'Use 3 or more lowercase letters, numbers, dots or underscores (no spaces).';
 const errorText = (e: unknown) => (e instanceof ApiError ? e.message : 'Something went wrong. Try again.');
 
 export const StaffPINsScreen: React.FC = () => {
   const { currentUser, activeBranchId } = useAuthStore();
+  const entitlements = useEntitlements();
+  const category = entitlements.data?.category;
+  // Kitchen accounts only exist with the kitchen display, so a shop is not offered that role.
+  const hasKitchenScreen = !!entitlements.data?.modules.includes('kds');
   const staffQuery = useStaffUsers(activeBranchId);
   const shiftQuery = useShiftAudits(activeBranchId);
   const resetPin = useUpdateStaffPIN();
@@ -58,7 +64,8 @@ export const StaffPINsScreen: React.FC = () => {
   const isOwner = currentUser?.role === StaffRole.OWNER;
   const canManage = (staff: StaffUser) =>
     staff.id !== currentUser?.id && (isOwner || RANK[staff.role] < RANK[currentUser?.role ?? StaffRole.WAITER]);
-  const assignableRoles = isOwner ? [...FLOOR_ROLES, StaffRole.MANAGER] : FLOOR_ROLES;
+  const floorRoles = hasKitchenScreen ? FLOOR_ROLES : FLOOR_ROLES.filter((r) => r !== StaffRole.KITCHEN);
+  const assignableRoles = isOwner ? [...floorRoles, StaffRole.MANAGER] : floorRoles;
 
   // Reset PIN
   const [pinTarget, setPinTarget] = useState<StaffUser | null>(null);
@@ -72,6 +79,8 @@ export const StaffPINsScreen: React.FC = () => {
   // Delete
   const [deleteTarget, setDeleteTarget] = useState<StaffUser | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Step 1 explains; step 2 is the "are you sure?" in the middle of the screen.
+  const [deleteStep, setDeleteStep] = useState<1 | 2>(1);
   const confirmDelete = async () => {
     if (!deleteTarget) return;
     try {
@@ -79,6 +88,7 @@ export const StaffPINsScreen: React.FC = () => {
       setDeleteTarget(null);
     } catch (e) {
       setDeleteError(errorText(e));
+      setDeleteStep(1); // show the reason on the first dialog
     }
   };
 
@@ -132,6 +142,7 @@ export const StaffPINsScreen: React.FC = () => {
 
   const saveStaff = async () => {
     if (!fullName.trim() || !username.trim()) return setAddError('Name and username are required.');
+    if (!/^[a-z0-9_.]{3,50}$/.test(username.trim().toLowerCase())) return setAddError(USERNAME_RULE);
     if (!isPin(pin)) return setAddError('PIN must be 4–6 digits.');
     if (needsPassword && password.length < 10) return setAddError('Password must be at least 10 characters.');
     try {
@@ -161,7 +172,7 @@ export const StaffPINsScreen: React.FC = () => {
       }
     >
       <View style={styles.topHeader}>
-        <Text style={[typography.h1, { color: colors.text }]}>Staff</Text>
+        <Text style={[typography.h1, { color: colors.text }]}>{staffLabel(category)}</Text>
         <View style={{ flexDirection: 'row', gap: spacing.sm }}>
           <Button title="Link a device" size="sm" variant="secondary" onPress={openLink} />
           <Button title="Add staff" size="sm" variant="primary" onPress={() => setAddOpen(true)} />
@@ -170,7 +181,7 @@ export const StaffPINsScreen: React.FC = () => {
 
       <View style={styles.tabRow}>
         {([
-          { key: 'STAFF', label: `Staff (${staffList.length})` },
+          { key: 'STAFF', label: `${staffLabel(category)} (${staffList.length})` },
           { key: 'SHIFTS', label: 'Shifts' },
         ] as const).map((tab) => (
           <TouchableOpacity
@@ -197,7 +208,7 @@ export const StaffPINsScreen: React.FC = () => {
                     <Text style={styles.staffName}>{staff.full_name}</Text>
                     <Text style={styles.staffUsername}>@{staff.username}</Text>
                   </View>
-                  {staff.is_active ? <RoleBadge role={staff.role} /> : <Badge label="Inactive" variant="neutral" size="sm" />}
+                  {staff.is_active ? <RoleBadge role={staff.role} category={category} /> : <Badge label="Inactive" variant="neutral" size="sm" />}
                 </View>
 
                 {canManage(staff) ? (
@@ -221,6 +232,7 @@ export const StaffPINsScreen: React.FC = () => {
                       variant="ghost"
                       onPress={() => {
                         setDeleteError(null);
+                        setDeleteStep(1);
                         setDeleteTarget(staff);
                       }}
                       textStyle={{ color: colors.danger }}
@@ -347,14 +359,21 @@ export const StaffPINsScreen: React.FC = () => {
 
       {/* Delete */}
       <Modal
-        visible={deleteTarget !== null}
+        visible={deleteTarget !== null && deleteStep === 1}
         onClose={() => setDeleteTarget(null)}
         title="Delete staff member"
         subtitle={deleteTarget?.full_name}
         footer={
           <>
             <Button title="Cancel" variant="secondary" onPress={() => setDeleteTarget(null)} />
-            <Button title="Delete" variant="danger" onPress={confirmDelete} loading={deleteStaff.isPending} />
+            <Button
+              title="Delete"
+              variant="danger"
+              onPress={() => {
+                setDeleteError(null);
+                setDeleteStep(2);
+              }}
+            />
           </>
         }
       >
@@ -363,6 +382,23 @@ export const StaffPINsScreen: React.FC = () => {
           them instead.
         </Text>
         {deleteError ? <Text style={styles.modalError}>{deleteError}</Text> : null}
+      </Modal>
+
+      {/* Delete: are you sure? (centered on every screen size) */}
+      <Modal
+        centered
+        visible={deleteTarget !== null && deleteStep === 2}
+        onClose={() => setDeleteTarget(null)}
+        title="Are you sure?"
+        subtitle={deleteTarget?.full_name}
+        footer={
+          <>
+            <Button title="No, keep" variant="secondary" onPress={() => setDeleteTarget(null)} />
+            <Button title="Yes, delete" variant="danger" onPress={confirmDelete} loading={deleteStaff.isPending} />
+          </>
+        }
+      >
+        <Text style={styles.modalBody}>This cannot be undone.</Text>
       </Modal>
 
       {/* Link a device */}
@@ -405,7 +441,7 @@ export const StaffPINsScreen: React.FC = () => {
         }
       >
         <Input label="Full name" value={fullName} onChangeText={setFullName} />
-        <Input label="Username" value={username} onChangeText={setUsername} autoCapitalize="none" autoCorrect={false} />
+        <Input label="Username" value={username} onChangeText={setUsername} autoCapitalize="none" autoCorrect={false} helper={USERNAME_RULE} />
 
         <Text style={styles.fieldLabel}>Role</Text>
         <View style={styles.rolePickerRow}>
@@ -418,7 +454,7 @@ export const StaffPINsScreen: React.FC = () => {
               accessibilityState={{ selected: role === r }}
             >
               <Text style={[styles.roleChipText, role === r ? { color: colors.primary } : null]}>
-                {r.charAt(0) + r.slice(1).toLowerCase()}
+                {roleLabel(r, category)}
               </Text>
             </TouchableOpacity>
           ))}

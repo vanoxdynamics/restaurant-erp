@@ -26,6 +26,7 @@ from app.schemas.apparel import (
     ApparelCategoryRead,
     ApparelCategoryUpdate,
     ApparelDayReport,
+    ApparelShiftReport,
     ApparelImportRequest,
     ApparelImportResult,
     ApparelLabelsRequest,
@@ -70,6 +71,7 @@ router = APIRouter(
 
 managers = require_roles(Role.OWNER, Role.MANAGER)
 cashiers = require_roles(Role.OWNER, Role.MANAGER, Role.CASHIER)
+shift_roles = require_roles(Role.OWNER, Role.MANAGER, Role.CASHIER, Role.CAPTAIN, Role.WAITER)
 
 
 def _branch(user: CurrentUser, branch_id: Optional[uuid.UUID]) -> Optional[uuid.UUID]:
@@ -529,6 +531,12 @@ async def print_labels(payload: ApparelLabelsRequest, user: CurrentUser = Depend
     return Response(page, media_type="text/html; charset=utf-8", headers={
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'self'",
         "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+
+
+@router.get("/reports/shift", response_model=ApparelShiftReport)
+async def shift_report(shift_id: Optional[uuid.UUID] = None, user: CurrentUser = Depends(shift_roles), db: AsyncSession = Depends(get_db)):
+    """Sales, payments and returns of the caller's open shift; a manager may pass any `shift_id` of the branch."""
+    return await reports.shift_report(db, user, shift_id)
 
 
 @router.get("/reports/day", response_model=ApparelDayReport)

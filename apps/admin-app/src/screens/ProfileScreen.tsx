@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, colors, fonts, RoleBadge, spacing, typography } from '@repo/shared-ui';
-import { StaffRole } from '@repo/shared-utils';
+import { StaffRole, catalogLabel, roleLabel } from '@repo/shared-utils';
+import { useEntitlements } from '@repo/api-client';
 import { BranchPicker } from '../components/BranchPicker';
 import { Icon } from '../components/Icon';
 import { useAuthStore } from '../stores/authStore';
@@ -16,7 +17,7 @@ const CAN_DO: Partial<Record<StaffRole, string[]>> = {
   ],
   [StaffRole.MANAGER]: [
     'Work in your own branch',
-    'Add and manage cashiers, captains, waiters and kitchen staff',
+    'Add and manage your branch staff',
     'Menu, insights, daily reports and business settings',
   ],
 };
@@ -27,6 +28,7 @@ export const ProfileScreen: React.FC = () => {
   const [pickerOpen, setPickerOpen] = useState(false);
   const canSwitch = branches.length > 1;
   const initials = (currentUser?.full_name ?? '?').split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase();
+  const category = useEntitlements().data?.category;
   const abilities = currentUser ? CAN_DO[currentUser.role] : undefined;
 
   return (
@@ -37,7 +39,7 @@ export const ProfileScreen: React.FC = () => {
         </View>
         <Text style={styles.name}>{currentUser?.full_name}</Text>
         <Text style={styles.sub}>@{currentUser?.username}</Text>
-        {currentUser ? <RoleBadge role={currentUser.role} /> : null}
+        {currentUser ? <RoleBadge role={currentUser.role} category={category} /> : null}
       </View>
 
       {abilities ? (
@@ -47,7 +49,7 @@ export const ProfileScreen: React.FC = () => {
             {abilities.map((line) => (
               <View key={line} style={styles.ability}>
                 <Icon name="check" size={16} color={colors.primary} />
-                <Text style={styles.abilityText}>{line}</Text>
+                <Text style={styles.abilityText}>{line.replace(/^Menu/, catalogLabel(category))}</Text>
               </View>
             ))}
           </Card>

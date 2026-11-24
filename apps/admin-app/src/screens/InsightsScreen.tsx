@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Card, colors, fonts, radii, SectionHeader, spacing, StatCard, typography } from '@repo/shared-ui';
-import { formatPaiseToRupees, StaffRole } from '@repo/shared-utils';
+import { formatPaiseToRupees, isFoodBusiness, StaffRole } from '@repo/shared-utils';
 import { ApiError, OverviewPeriod, OverviewPoint, OverviewSlice, useEntitlements, useOverview } from '@repo/api-client';
 import { PaymentBreakdownChart } from '../components/SkiaCharts';
 import { QueryState } from '../components/QueryState';
@@ -205,7 +205,7 @@ export const InsightsScreen: React.FC = () => {
                   subtitle={data.totals.gross_sales_paise ? `${((data.totals.discounts_paise / data.totals.gross_sales_paise) * 100).toFixed(1)}% of sales` : undefined} style={styles.tile} />
               </View>
               <StatCard title="Cancelled and voided" value={`${data.totals.cancellations}`}
-                subtitle={`${money(data.totals.cancelled_paise)} taken off orders and bills`} style={styles.block} />
+                subtitle={`${money(data.totals.cancelled_paise)} taken off ${isFoodBusiness(entitlements.data?.category) ? 'orders and bills' : 'bills'}`} style={styles.block} />
 
               {data.totals.bills === 0 ? (
                 <Card style={styles.block}><Text style={styles.empty}>No paid bills in this period yet.</Text></Card>

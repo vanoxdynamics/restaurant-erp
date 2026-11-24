@@ -61,6 +61,8 @@ class RosterEntry(BaseModel):
     full_name: str
     role: Role
     pin_length: Optional[int] = None  # 4, 5 or 6; unknown for older PINs
+    # The kind of business, so a device that nobody has signed in on yet can name the roles in its own words.
+    category: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 

@@ -199,3 +199,37 @@ async def test_the_new_routes_are_for_dress_shops_only(client, db, redis_client,
     for method, url in routes:
         r = await client.request(method, url, json={} if method == "POST" else None, headers=auth_headers(shop["owner"]))
         assert r.status_code == 404 and r.json()["error"]["code"] == "wrong_business_category", url
+
+
+# --- one shift's sales ---------------------------------------------------------------------------------------------------------
+
+
+async def test_a_shift_report_counts_only_what_was_paid_in_that_shift(client, db, shop):
+    from tests.modules.test_apparel_sales import pay
+
+    cashier = shop["cashier"]
+    r = await client.get(f"{A}/reports/shift", headers=auth_headers(cashier))
+    assert r.status_code == 404 and r.json()["error"]["code"] == "no_open_shift"
+
+    opened = await client.post(f"{API}/staff/shifts/open", json={"opening_cash": "500.00"}, headers=auth_headers(cashier))
+    assert opened.status_code == 201, opened.text
+    v = (await style(client, shop, sizes=["M"], price="999.00"))["variants"][0]["id"]
+    one = (await sell(client, cashier, [(v, 1)])).json()
+    two = (await sell(client, cashier, [(v, 1)])).json()
+    await pay(client, cashier, one["id"], "999.00")
+    await client.post(f"{A}/sales/{two['id']}/payments/split", headers=idem(cashier), json={"payments": [
+        {"payment_mode": "cash", "amount": "300.00"}, {"payment_mode": "upi", "amount": "699.00", "reference_id": "U1"}]})
+
+    report = (await client.get(f"{A}/reports/shift", headers=auth_headers(cashier))).json()
+    assert report["status"] == "open" and report["sales"]["count"] == 2 and report["sales"]["units"] == 2
+    assert D(report["sales"]["grand_total"]) == D("1998.00")
+    modes = {p["mode"]: p for p in report["payments"]}
+    assert D(modes["cash"]["amount"]) == D("1299.00") and D(modes["upi"]["amount"]) == D("699.00")
+    assert D(report["net_cash"]) == D("1299.00")
+
+    # Another person's shift is theirs: a manager may look at it by id, another cashier may not.
+    shift_id = report["shift_id"]
+    as_manager = await client.get(f"{A}/reports/shift", params={"shift_id": shift_id}, headers=auth_headers(shop["manager"]))
+    assert as_manager.status_code == 200 and as_manager.json()["sales"]["count"] == 2
+    manager_own = await client.get(f"{A}/reports/shift", headers=auth_headers(shop["manager"]))
+    assert manager_own.status_code == 404  # the manager has no shift of their own open

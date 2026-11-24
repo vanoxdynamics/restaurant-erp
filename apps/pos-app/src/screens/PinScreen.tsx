@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
-import { colors, fonts, humanizeLabel, radii, spacing, typography } from '@repo/shared-ui';
+import { colors, fonts, radii, spacing, typography } from '@repo/shared-ui';
 import { ApiError, RosterEntry } from '@repo/api-client';
+import { roleLabel } from '@repo/shared-utils';
+import { useBusiness } from '../business';
 import { Icon } from '../components/Icon';
 import { useDeviceStore } from '../stores/deviceStore';
 import { useSessionStore } from '../stores/sessionStore';
@@ -16,6 +18,7 @@ export interface PinScreenProps {
 
 /** Shared-tablet sign-in, step two: the chosen staff member enters their own 4–6 digit PIN. */
 export const PinScreen: React.FC<PinScreenProps> = ({ staff, onBack }) => {
+  const { category } = useBusiness();
   const device = useDeviceStore((s) => s.device)!;
   const signIn = useSessionStore((s) => s.signIn);
   const [pin, setPin] = useState('');
@@ -54,7 +57,7 @@ export const PinScreen: React.FC<PinScreenProps> = ({ staff, onBack }) => {
       <View style={styles.panel}>
         <Text style={styles.branch}>{device.branchName}</Text>
         <Text style={styles.title}>{staff.full_name}</Text>
-        <Text style={styles.role}>{humanizeLabel(staff.role)} · enter your PIN</Text>
+        <Text style={styles.role}>{roleLabel(staff.role, staff.category ?? category)} · enter your PIN</Text>
 
         <View style={styles.dots} accessibilityLabel={`${pin.length} digits entered`}>
           {Array.from({ length: length ?? Math.max(4, pin.length) }).map((_, i) => (

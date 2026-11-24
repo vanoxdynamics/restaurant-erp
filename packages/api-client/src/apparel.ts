@@ -678,9 +678,10 @@ export const apparelSalesApi = {
   async reverse(paymentId: string, body: { reason: string; approver_pin?: string; details?: object; check_only?: boolean }): Promise<void> {
     await apiClient.request<Raw>('POST', `${P}/payments/${paymentId}/reverse`, { body: { ...body, approver_pin: body.approver_pin || undefined } });
   },
-  async void(saleId: string, reason: string, approverPin?: string): Promise<ApparelSale> {
+  /** Reason and PIN are only needed once a payment was attempted; a sale nobody tried to pay is cancelled on confirmation. */
+  async void(saleId: string, reason?: string, approverPin?: string): Promise<ApparelSale> {
     return adaptApparelSale(await apiClient.request<Raw>('POST', `${P}/sales/${saleId}/void`, {
-      body: { reason, approver_pin: approverPin || undefined },
+      body: { reason: reason?.trim() || undefined, approver_pin: approverPin || undefined },
     }));
   },
   async receiptPrint(saleId: string, paperMm: 58 | 80): Promise<PrintablePage> {
@@ -706,7 +707,7 @@ export function useCreateApparelSale() {
 }
 
 export function useVoidApparelSale() {
-  return useApparelMutation(({ saleId, reason, approverPin }: { saleId: string; reason: string; approverPin?: string }) =>
+  return useApparelMutation(({ saleId, reason, approverPin }: { saleId: string; reason?: string; approverPin?: string }) =>
     apparelSalesApi.void(saleId, reason, approverPin));
 }
 
@@ -833,6 +834,19 @@ export interface ApparelDayReport {
   units_by_size: { size: string; units: number }[];
 }
 
+/** One person's shift: invoices paid in it, how they were paid and goods taken back. */
+export interface ApparelShiftReport {
+  shift_id: string;
+  staff_name: string;
+  status: string;
+  start_time: string;
+  end_time?: string;
+  sales: { count: number; units: number; subtotal_paise: number; discount_paise: number; total_paise: number };
+  payments: { mode: string; count: number; amount_paise: number }[];
+  returns: { count: number; total_paise: number; cash_paise: number; store_credit_paise: number };
+  net_cash_paise: number;
+}
+
 export interface ApparelProductSalesRow {
   name: string;
   units: number;
@@ -870,7 +884,23 @@ export function adaptApparelDayReport(raw: Raw): ApparelDayReport {
   };
 }
 
+export function adaptApparelShiftReport(raw: Raw): ApparelShiftReport {
+  return {
+    shift_id: raw.shift_id, staff_name: raw.staff_name, status: raw.status, start_time: raw.start_time, end_time: raw.end_time ?? undefined,
+    sales: { count: raw.sales.count, units: raw.sales.units, subtotal_paise: toPaise(raw.sales.subtotal),
+      discount_paise: toPaise(raw.sales.discount_amount), total_paise: toPaise(raw.sales.grand_total) },
+    payments: raw.payments.map((p: Raw) => ({ mode: p.mode, count: p.count, amount_paise: toPaise(p.amount) })),
+    returns: { count: raw.returns.count, total_paise: toPaise(raw.returns.total), cash_paise: toPaise(raw.returns.cash_total),
+      store_credit_paise: toPaise(raw.returns.store_credit_total) },
+    net_cash_paise: toPaise(raw.net_cash),
+  };
+}
+
 export const apparelReportsApi = {
+  /** The signed-in person's open shift (404 when none), or a given shift for a manager. */
+  async shift(shiftId?: string): Promise<ApparelShiftReport> {
+    return adaptApparelShiftReport(await apiClient.request<Raw>('GET', `${P}/reports/shift`, { query: shiftId ? { shift_id: shiftId } : {} }));
+  },
   async day(params: { date?: string; branch_id?: string } = {}): Promise<ApparelDayReport> {
     return adaptApparelDayReport(await apiClient.request<Raw>('GET', `${P}/reports/day`, { query: { ...params } }));
   },
@@ -893,6 +923,10 @@ export const apparelReportsApi = {
     return { items: raw.items.map(adaptApparelSale), total: raw.total };
   },
 };
+
+export function useApparelShiftReport(shiftId: string | undefined, enabled = true) {
+  return useQuery({ queryKey: ['apparel', 'report', 'shift', shiftId ?? 'current'], queryFn: () => apparelReportsApi.shift(shiftId), enabled, refetchInterval: 30000 });
+}
 
 export function useApparelDayReport(params: { date?: string; branch_id?: string }, enabled = true) {
   return useQuery({ queryKey: ['apparel', 'report', 'day', params], queryFn: () => apparelReportsApi.day(params), enabled, refetchInterval: 60000 });

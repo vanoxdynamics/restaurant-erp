@@ -215,7 +215,9 @@ zero. Store credit never gives change in cash.
 
 ### 3.4 Voiding
 
-Only an unpaid sale with nothing paid can be voided, with a manager PIN (same rule and audit as `void_bill`). Voiding puts the
+Only an unpaid sale with nothing paid can be voided (same audit as `void_bill`). A sale no payment was ever tried on is
+cancelled at the counter with a confirmation only (no reason or PIN; the reason is recorded as "Cancelled before payment");
+once any payment was attempted, a cashier needs a manager PIN. Voiding puts the
 stock back with `sale_void` movements. A paid sale is undone with a return.
 
 ### 3.5 Returns and exchanges

@@ -2,13 +2,14 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Button, colors, fonts, radii, spacing, TableStatusBadge, typography } from '@repo/shared-ui';
 import { formatPaiseToRupees, getOccupancyTime, TableStatus } from '@repo/shared-utils';
-import { ApiError, DiningTable, useCreateOrder, useFloorLayout, useKitchenBoard, useOpenTakeaways } from '@repo/api-client';
+import { ApiError, DiningTable, useCreateOrder, useFloorLayout, useKitchenBoard, useOpenTakeaways, useServedTickets } from '@repo/api-client';
 import { GuestCountSheet } from '../components/GuestCountSheet';
 import { Icon } from '../components/Icon';
 import { QueryState } from '../components/QueryState';
 import { TopBar } from '../components/TopBar';
 import { useDeviceStore } from '../stores/deviceStore';
 import { useKitchenPlan } from '../plan';
+import { IS_COUNTER } from '../device';
 
 const STATUS_TINT: Record<string, string> = {
   [TableStatus.AVAILABLE]: colors.available,
@@ -68,6 +69,16 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder, onBack })
     return { readyByOrder: ready, unprintedByOrder: unprinted };
   }, [board.data]);
 
+  // On a waiter's phone an order whose every ticket has been served is finished for the waiter: it moves to "Completed orders"
+  // (payment happens at the counter). Orders that still have an open ticket, or nothing sent yet, stay with the tables.
+  const served = useServedTickets(device.branchId, !IS_COUNTER);
+  const completedIds = useMemo(() => {
+    const open = new Set((board.data ?? []).map((t) => t.order_id));
+    const done = new Set<string>();
+    if (!IS_COUNTER) for (const t of served.data ?? []) if (!open.has(t.order_id)) done.add(t.order_id);
+    return done;
+  }, [board.data, served.data]);
+
   const floors = floorQuery.data ?? [];
   const [area, setArea] = useState<string>('ALL');
   const [seating, setSeating] = useState<DiningTable | null>(null);
@@ -77,6 +88,11 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder, onBack })
     () => floors.flatMap((f) => f.tables).filter((t) => area === 'ALL' || t.section === area),
     [floors, area],
   );
+  const activeTables = tables.filter((t) => !(t.running_order_id && completedIds.has(t.running_order_id)));
+  const completedTables = tables.filter((t) => t.running_order_id && completedIds.has(t.running_order_id));
+  const allTakeaways = takeawayQuery.data ?? [];
+  const activeTakeaways = allTakeaways.filter((o) => !completedIds.has(o.id));
+  const completedTakeaways = allTakeaways.filter((o) => completedIds.has(o.id));
 
   const openTable = async (guests: number) => {
     if (!seating) return;
@@ -145,7 +161,7 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder, onBack })
 
         <QueryState query={floorQuery} isEmpty={tables.length === 0} emptyText="No tables set up for this branch.">
           <View style={styles.grid}>
-            {tables.map((table) => {
+            {activeTables.map((table) => {
               const busy = !!table.running_order_id;
               const merged = !!table.merged_into_table_id;
               const ready = table.running_order_id ? readyByOrder.get(table.running_order_id) ?? 0 : 0;
@@ -186,11 +202,11 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder, onBack })
           </View>
         </QueryState>
 
-        {(takeawayQuery.data ?? []).length > 0 ? (
+        {activeTakeaways.length > 0 ? (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Takeaway</Text>
             <View style={styles.grid}>
-              {(takeawayQuery.data ?? []).map((order) => {
+              {activeTakeaways.map((order) => {
                 const label = 'Takeaway';
                 const items = order.lines.filter((l) => l.status !== 'cancelled').reduce((n, l) => n + l.quantity, 0);
                 const ready = readyByOrder.get(order.id) ?? 0;
@@ -215,6 +231,34 @@ export const FloorScreen: React.FC<FloorScreenProps> = ({ onOpenOrder, onBack })
                 );
               })}
             </View>
+          </View>
+        ) : null}
+
+        {completedTables.length + completedTakeaways.length > 0 ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Completed orders</Text>
+            {completedTables.map((table) => (
+              <Pressable
+                key={table.id}
+                onPress={() => onOpenOrder(table.running_order_id!, `Table ${table.table_number}`)}
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.doneRow, pressed ? styles.tilePressed : null]}
+              >
+                <Text style={styles.doneTitle}>Table {table.table_number}</Text>
+                <Text style={styles.meta}>Served · {formatPaiseToRupees(table.running_bill_paise ?? 0, { decimals: 0 })}</Text>
+              </Pressable>
+            ))}
+            {completedTakeaways.map((order) => (
+              <Pressable
+                key={order.id}
+                onPress={() => onOpenOrder(order.id, 'Takeaway')}
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.doneRow, pressed ? styles.tilePressed : null]}
+              >
+                <Text style={styles.doneTitle}>Takeaway #{order.order_number.split('-').pop()}</Text>
+                <Text style={styles.meta}>Served · {formatPaiseToRupees(order.subtotal_paise, { decimals: 0 })}</Text>
+              </Pressable>
+            ))}
           </View>
         ) : null}
       </ScrollView>
@@ -326,6 +370,21 @@ const styles = StyleSheet.create({
   meta: {
     ...typography.caption,
     color: colors.textSecondary,
+  },
+  doneRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    backgroundColor: colors.surface,
+  },
+  doneTitle: {
+    ...typography.bodyBold,
+    color: colors.text,
   },
   section: {
     marginTop: spacing.xxl,

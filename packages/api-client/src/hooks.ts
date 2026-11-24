@@ -439,6 +439,15 @@ export function useKitchenBoard(branchId: string) {
   });
 }
 
+export function useServedTickets(branchId: string, enabled = true) {
+  return useQuery<BoardTicket[]>({
+    queryKey: ['servedTickets', branchId],
+    queryFn: () => apiClient.getServedTickets(branchId),
+    enabled: enabled && !!branchId,
+    refetchInterval: 5000,
+  });
+}
+
 export function useAdvanceTicket() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -446,6 +455,7 @@ export function useAdvanceTicket() {
       apiClient.advanceTicket(kotId, status),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['kitchenBoard'] });
+      queryClient.invalidateQueries({ queryKey: ['servedTickets'] });
       queryClient.invalidateQueries({ queryKey: ['orderTickets'] });
     },
   });

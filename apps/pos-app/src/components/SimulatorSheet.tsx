@@ -22,7 +22,7 @@ export const SimulatorSheet: React.FC = () => {
       }
     >
       <Text style={styles.text}>
-        On a real device the guest would tap, insert or swipe the card (or pay by UPI) on the Pine Labs terminal now.
+        On a real device the customer would tap, insert or swipe the card (or pay by UPI) on the Pine Labs terminal now.
         "No answer" takes the money but loses the reply, to try the recovery path.
       </Text>
     </Modal>

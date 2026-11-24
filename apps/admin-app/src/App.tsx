@@ -19,6 +19,7 @@ import {
 import { colors, radii, spacing, typography, fonts } from '@repo/shared-ui';
 import { Icon } from './components/Icon';
 import { LivePulseScreen } from './screens/LivePulse';
+import { TodayScreen as ApparelTodayScreen } from './screens/apparel/TodayScreen';
 import { FloorObserverScreen } from './screens/FloorObserverScreen';
 import { CatalogHub } from './screens/CatalogHub';
 import { VoidApprovalsScreen } from './screens/VoidApprovals';
@@ -53,7 +54,7 @@ type TabType =
 
 export function AdminAppMain(): React.JSX.Element {
   const [activeTab, setActiveTab] = useState<TabType>('LivePulse');
-  const [insightsView, setInsightsView] = useState<InsightsView>('overview');
+  const [insightsView, setInsightsView] = useState<InsightsView>('reports');
   const { currentUser, activeBranchId, activeBranchName, branches } = useAuthStore();
 
   // Cancel requests only exist with the kitchen display; without it a KOT is cancelled at the till with a manager's PIN.
@@ -92,6 +93,8 @@ export function AdminAppMain(): React.JSX.Element {
   const renderActiveScreen = () => {
     switch (activeTab) {
       case 'LivePulse':
+        // A dress shop's sales are in its own module, which the live pulse (orders, bills, tables) does not read.
+        if (entitlements.data?.category === 'apparel') return <ApparelTodayScreen />;
         return <LivePulseScreen onNavigateToTab={handleNavigateFromScreen} hasKitchenScreen={hasKitchenScreen} />;
       case 'Insights':
         return <InsightsHub view={insightsView} onChangeView={setInsightsView} />;
@@ -163,6 +166,7 @@ export function AdminAppMain(): React.JSX.Element {
         onSelectTab={handleBottomTabSelect}
         pendingApprovalsCount={pendingCount}
         showApprovals={hasKitchenScreen}
+        category={entitlements.data?.category}
       />
 
       <BranchPicker visible={branchPickerOpen} onClose={() => setBranchPickerOpen(false)} />

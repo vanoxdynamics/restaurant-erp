@@ -54,6 +54,46 @@
         "cd apps\\platform-console && set VITE_API_TARGET=http://127.0.0.1:8010&& npx vite --host 127.0.0.1"
       ],
       "port": 5180
+    },
+    {
+      "name": "api-alt",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd services\\api-fastapi && venv\\Scripts\\python -m uvicorn app.main:app --host 127.0.0.1 --port 8012"
+      ],
+      "port": 8012,
+      "autoPort": false
+    },
+    {
+      "name": "admin-fashion",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd apps\\admin-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_API_URL=http://localhost:8010&& npx expo start --web --port 8097"
+      ],
+      "port": 8097,
+      "autoPort": false
+    },
+    {
+      "name": "pos-fashion",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_APP_VARIANT=retail&& set EXPO_PUBLIC_PINELABS_SIMULATOR=1&& set EXPO_PUBLIC_API_URL=http://localhost:8010&& npx expo start --web --port 8096"
+      ],
+      "port": 8096,
+      "autoPort": false
+    },
+    {
+      "name": "pos-retail-alt",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd apps\\pos-app && set CI=1&& set BROWSER=none&& set EXPO_PUBLIC_APP_VARIANT=retail&& set EXPO_PUBLIC_PINELABS_SIMULATOR=1&& set EXPO_PUBLIC_API_URL=http://localhost:8012&& npx expo start --web --port 8092 --clear"
+      ],
+      "port": 8092,
+      "autoPort": false
     }
   ]
 }

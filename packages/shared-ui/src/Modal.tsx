@@ -20,6 +20,8 @@ export interface ModalProps {
   children: React.ReactNode;
   footer?: React.ReactNode;
   contentStyle?: ViewStyle;
+  /** Always a dialog in the middle of the screen, even on phones (for "are you sure?" prompts). */
+  centered?: boolean;
 }
 
 /**
@@ -33,9 +35,10 @@ export const Modal: React.FC<ModalProps> = ({
   children,
   footer,
   contentStyle,
+  centered = false,
 }) => {
   const { width } = useWindowDimensions();
-  const asSheet = width < 600;
+  const asSheet = width < 600 && !centered;
   // A bottom sheet runs to the screen's edge: keep its last row above Android's navigation bar or the iPhone home indicator,
   // and its top below the status bar when it is tall.
   const insets = useSafeAreaInsets();

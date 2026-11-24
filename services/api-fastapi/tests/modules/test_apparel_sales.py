@@ -234,15 +234,25 @@ async def test_voiding_restores_stock_and_only_unpaid_sales_can_be_voided(client
     sale = (await sell(client, shop["cashier"], [(v, 3)])).json()
     assert await on_hand(client, shop["owner"], v) == 17
     body = {"reason": "Customer left"}
-    r = await client.post(f"{A}/sales/{sale['id']}/void", json=body, headers=auth_headers(shop["cashier"]))
-    assert r.status_code == 403 and r.json()["error"]["code"] == "approval_required"
-    r = await client.post(f"{A}/sales/{sale['id']}/void", json={**body, "approver_pin": "7001"}, headers=auth_headers(shop["cashier"]))
+    # No payment was ever tried: the cashier just confirms, without a reason or a manager.
+    r = await client.post(f"{A}/sales/{sale['id']}/void", json={}, headers=auth_headers(shop["cashier"]))
     assert r.status_code == 200 and r.json()["status"] == "voided"
     assert await on_hand(client, shop["owner"], v) == 20
     kinds = [e["kind"] for e in (await client.get(f"{A}/movements", params={"variant_id": v},
                                                   headers=auth_headers(shop["owner"]))).json()["items"]]
     assert kinds[:2] == ["sale_void", "sale"]
     assert (await pay(client, shop["cashier"], sale["id"], "10.00")).status_code == 409  # a voided sale takes no money
+
+    # Once a payment was attempted (here a declined card), a cashier needs a manager's PIN.
+    tried = (await sell(client, shop["cashier"], [(v, 1)])).json()
+    started = await client.post(f"{A}/sales/{tried['id']}/payments/terminal", json={"payment_mode": "card", "amount": "999.00"},
+                                headers=idem(shop["cashier"]))
+    await client.post(f"{A}/payments/{started.json()['payment']['id']}/terminal/complete", json={"outcome": "declined"},
+                      headers=auth_headers(shop["cashier"]))
+    r = await client.post(f"{A}/sales/{tried['id']}/void", json=body, headers=auth_headers(shop["cashier"]))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "approval_required"
+    r = await client.post(f"{A}/sales/{tried['id']}/void", json={**body, "approver_pin": "7001"}, headers=auth_headers(shop["cashier"]))
+    assert r.status_code == 200 and r.json()["status"] == "voided"
 
     paid = (await sell(client, shop["cashier"], [(v, 1)])).json()
     await pay(client, shop["cashier"], paid["id"], "999.00")

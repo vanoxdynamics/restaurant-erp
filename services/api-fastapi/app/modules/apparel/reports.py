@@ -31,6 +31,8 @@ from app.models.apparel import (
 )
 from app.models.customers import Customer
 from app.models.floor import Branch
+from app.models.staff import Shift, StaffUser
+from app.modules.staff.service import get_open_shift
 from app.modules.apparel.sales import SALE_LOADERS
 from app.modules.business.service import bill_name, load_with_logo
 from app.modules.retailkit import barcode as bc
@@ -156,6 +158,50 @@ async def day_report(db: AsyncSession, user: CurrentUser, branch_id: Optional[uu
         "net_cash": cash_in - cash_back,
         "top_products": [{"name": n, "units": int(u), "value": _d(v)} for n, u, v in top],
         "units_by_size": [{"size": z, "units": int(u)} for z, u in sizes],
+    }
+
+
+# --- one shift's sales ------------------------------------------------------------------------------------------------------
+
+
+async def shift_report(db: AsyncSession, user: CurrentUser, shift_id: Optional[uuid.UUID]) -> Dict[str, object]:
+    """The caller's open shift (or any shift, for a manager). An invoice belongs to the shift its payment was taken in."""
+    if shift_id is None:
+        shift = await get_open_shift(db, user.id)
+        if shift is None:
+            raise NotFound("You have no open shift", code="no_open_shift")
+    else:
+        shift = await db.get(Shift, shift_id)
+        if shift is None or (shift.user_id != user.id and not user.is_manager):
+            raise NotFound("Shift not found", code="shift_not_found")
+        resolve_branch_id(user, shift.branch_id)
+    staff = await db.get(StaffUser, shift.user_id)
+
+    taken = (ApparelPayment.shift_id == shift.id, ApparelPayment.status == PaymentStatus.SUCCESS.value)
+    sale_ids = select(ApparelPayment.sale_id).where(*taken)
+    paid = (ApparelSale.id.in_(sale_ids), ApparelSale.status == BillStatus.PAID.value)
+    s = (await db.execute(select(
+        func.count(), func.coalesce(func.sum(ApparelSale.subtotal), 0), func.coalesce(func.sum(ApparelSale.discount_amount), 0),
+        func.coalesce(func.sum(ApparelSale.grand_total), 0)).where(*paid))).one()
+    units = _d(await db.scalar(select(func.coalesce(func.sum(ApparelSaleLine.quantity), 0)).join(
+        ApparelSale, ApparelSale.id == ApparelSaleLine.sale_id).where(*paid)))
+    pay_rows = (await db.execute(
+        select(ApparelPayment.payment_mode, func.count(), func.sum(ApparelPayment.amount)).where(*taken)
+        .group_by(ApparelPayment.payment_mode).order_by(ApparelPayment.payment_mode))).all()
+    ret_rows = (await db.execute(
+        select(ApparelReturn.refund_mode, func.count(), func.sum(ApparelReturn.total_amount))
+        .where(ApparelReturn.shift_id == shift.id).group_by(ApparelReturn.refund_mode))).all()
+    returned = {mode: (n, _d(total)) for mode, n, total in ret_rows}
+    cash_in = next((_d(total) for mode, _, total in pay_rows if mode == "cash"), ZERO)
+    cash_back = returned.get("cash", (0, ZERO))[1]
+    return {
+        "shift_id": shift.id, "staff_id": shift.user_id, "staff_name": staff.full_name if staff else "", "status": shift.status,
+        "start_time": shift.start_time, "end_time": shift.end_time,
+        "sales": {"count": s[0], "units": int(units), "subtotal": _d(s[1]), "discount_amount": _d(s[2]), "grand_total": _d(s[3])},
+        "payments": [{"mode": m, "count": n, "amount": _d(a)} for m, n, a in pay_rows],
+        "returns": {"count": sum(n for n, _ in returned.values()), "total": sum((t for _, t in returned.values()), ZERO),
+                    "cash_total": cash_back, "store_credit_total": returned.get("store_credit", (0, ZERO))[1]},
+        "net_cash": cash_in - cash_back,
     }
 
 

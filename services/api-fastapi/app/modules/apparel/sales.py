@@ -237,17 +237,28 @@ async def void_sale(
     db: AsyncSession, user: CurrentUser, sale_id: uuid.UUID, payload: ApparelVoid, *, redis_client: Any = None,
     background: Optional[BackgroundTasks] = None,
 ) -> ApparelSale:
-    """Only an unpaid sale with nothing paid can be voided (with a manager); its pieces go back. A paid sale needs a return."""
+    """
+    Only an unpaid sale with nothing paid can be voided; its pieces go back. A paid sale needs a return.
+
+    A sale no payment was ever tried on (cancelled at the counter before paying) only needs the cashier's confirmation: no
+    money has moved. Once any payment was attempted (a declined card, a reversed payment) a manager must approve, since money
+    may have changed hands. Every void is audited and sent to the managers either way.
+    """
     sale = await load_sale(db, sale_id, for_update=True)
     require_branch_access(user, sale.branch_id)
     if sale.status != BillStatus.UNPAID.value or sale.paid_amount > ZERO:
         raise Conflict("Only unpaid sales can be voided; a paid sale is undone with a return", code="refund_required",
                        details={"status": sale.status})
     Tenders.refuse_while_terminal_pending(sale)
-    approver_id = await resolve_approver(db, user, sale.branch_id, payload.approver_pin, redis_client)
+    untouched = len(sale.payments) == 0
+    if untouched and not payload.approver_pin:
+        approver_id = user.id if user.is_manager else None
+    else:
+        approver_id = await resolve_approver(db, user, sale.branch_id, payload.approver_pin, redis_client)
+    reason = payload.reason or "Cancelled before payment"
     sale.status = BillStatus.VOIDED.value
     sale.voided_by_id = user.staff_id
-    sale.void_reason = payload.reason
+    sale.void_reason = reason
 
     back: Dict[uuid.UUID, int] = {}
     for line in sale.lines:
@@ -258,13 +269,13 @@ async def void_sale(
 
     record_audit(db, branch_id=sale.branch_id, action=AuditAction.BILL_VOID, actor_id=user.staff_id, approver_id=approver_id,
                  entity_type=ENTITY, entity_id=sale.id, amount=sale.grand_total,
-                 details={"sale_number": sale.sale_number, "reason": payload.reason})
+                 details={"sale_number": sale.sale_number, "reason": reason})
     queue_event(db, sale.branch_id, Topic.BILLING, "apparel.sale.voided", sale.id, {"sale_number": sale.sale_number})
     stocks.announce(db, sale.branch_id, back)
     await commit(db)
     if background is not None:
         background.add_task(send_manager_push_alert, sale.branch_id, "Sale voided",
-                            f"{sale.sale_number} voided by {user.full_name}: {payload.reason}", {"sale_id": str(sale.id)})
+                            f"{sale.sale_number} voided by {user.full_name}: {reason}", {"sale_id": str(sale.id)})
     return await load_sale(db, sale.id)
 
 

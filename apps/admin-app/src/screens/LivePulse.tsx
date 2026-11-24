@@ -1,13 +1,14 @@
 import React from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable, RefreshControl } from 'react-native';
 import { colors, radii, spacing, typography, StatCard, Card, SectionHeader, fonts } from '@repo/shared-ui';
-import { formatPaiseToRupees, formatDateTime } from '@repo/shared-utils';
+import { formatPaiseToRupees, formatDateTime, orderLabel } from '@repo/shared-utils';
 import {
   useLivePulse,
   useFraudAlerts,
   useVoidApprovals,
   useZReport,
   useTodayPayments,
+  useEntitlements,
 } from '@repo/api-client';
 import {
   LiveSalesPulseChart,
@@ -34,6 +35,13 @@ export const LivePulseScreen: React.FC<LivePulseScreenProps> = ({ onNavigateToTa
   const { data: pending = [] } = useVoidApprovals(activeBranchId, 'pending', hasKitchenScreen);
   const { data: payments } = useTodayPayments(activeBranchId);
   const { data: zReport } = useZReport(activeBranchId);
+
+  // A shop has no tables or kitchen, and rings up bills rather than orders.
+  const business = useEntitlements().data;
+  const category = business?.category;
+  const tableService = business?.settings.table_service ?? true;
+  const kitchenTickets = business?.settings.kitchen_tickets ?? true;
+  const orders = orderLabel(category);
 
   const pendingVoidCount = pending.length;
   const totalTables = kpis ? kpis.active_tables_count + kpis.vacant_tables_count : 0;
@@ -76,22 +84,25 @@ export const LivePulseScreen: React.FC<LivePulseScreenProps> = ({ onNavigateToTa
               </Pressable>
             )}
 
-            <View style={styles.kpiGrid}>
-              <StatCard
-                title="Occupied tables"
-                value={`${kpis.active_tables_count} / ${totalTables}`}
-                subtitle={`${occupancy}% occupancy`}
-                onPress={() => onNavigateToTab && onNavigateToTab('FloorObserver')}
-              />
-              <StatCard title="Average bill" value={money(kpis.average_ticket_size_paise)} />
-            </View>
+            {tableService ? (
+              <View style={styles.kpiGrid}>
+                <StatCard
+                  title="Occupied tables"
+                  value={`${kpis.active_tables_count} / ${totalTables}`}
+                  subtitle={`${occupancy}% occupancy`}
+                  onPress={() => onNavigateToTab && onNavigateToTab('FloorObserver')}
+                />
+                <StatCard title="Average bill" value={money(kpis.average_ticket_size_paise)} />
+              </View>
+            ) : null}
 
             <View style={styles.kpiGrid}>
-              <StatCard title="Open orders" value={`${kpis.open_orders_count}`} />
-              <StatCard title="Kitchen queue" value={`${kpis.pending_kots_count} tickets`} />
+              {tableService ? null : <StatCard title="Average bill" value={money(kpis.average_ticket_size_paise)} />}
+              <StatCard title={`Open ${orders.toLowerCase()}`} value={`${kpis.open_orders_count}`} />
+              {kitchenTickets ? <StatCard title="Kitchen queue" value={`${kpis.pending_kots_count} tickets`} /> : null}
             </View>
 
-            {kpis.hourly_sales.length > 0 && <LiveSalesPulseChart data={kpis.hourly_sales} />}
+            {kpis.hourly_sales.length > 0 && <LiveSalesPulseChart data={kpis.hourly_sales} countLabel={orders} />}
             {payments && payments.total_paise > 0 && <PaymentBreakdownChart breakdown={payments} />}
             {zReport && zReport.top_selling_items.length > 0 && (
               <TopSellingRankingChart items={zReport.top_selling_items} />

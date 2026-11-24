@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, Pressable, StyleSheet, Platform } from 'react-native';
 import { colors, spacing, fonts } from '@repo/shared-ui';
+import { catalogLabel, staffLabel } from '@repo/shared-utils';
 import { Icon, IconName } from './Icon';
 
 export type AppStoreTabKey = 'Today' | 'Insights' | 'Menu' | 'Staff' | 'Approvals';
@@ -14,6 +15,8 @@ export interface AppStoreBottomBarProps {
    * manager's PIN), so only they get the Approvals tab.
    */
   showApprovals?: boolean;
+  /** The kind of business, so the Menu tab reads Products in a dress shop. */
+  category?: string | null;
 }
 
 type Tab = { key: AppStoreTabKey; label: string; icon: IconName; matches: string[] };
@@ -27,6 +30,9 @@ const TABS: Tab[] = [
   { key: 'Approvals', label: 'Approvals', icon: 'check-circle', matches: ['VoidApprovals'] },
 ];
 
+const labelOf = (tab: Tab, category?: string | null) =>
+  tab.key === 'Menu' ? catalogLabel(category) : tab.key === 'Staff' ? staffLabel(category) : tab.label;
+
 const tabsFor = (showApprovals: boolean) => (showApprovals ? TABS : TABS.filter((t) => t.key !== 'Approvals'));
 
 export const AppStoreBottomBar: React.FC<AppStoreBottomBarProps> = ({
@@ -34,6 +40,7 @@ export const AppStoreBottomBar: React.FC<AppStoreBottomBarProps> = ({
   onSelectTab,
   pendingApprovalsCount = 0,
   showApprovals = true,
+  category,
 }) => (
   <View style={styles.bar} accessibilityRole="tablist">
     {tabsFor(showApprovals).map((tab) => {
@@ -48,7 +55,7 @@ export const AppStoreBottomBar: React.FC<AppStoreBottomBarProps> = ({
           onPress={() => onSelectTab(tab.key)}
           accessibilityRole="tab"
           accessibilityState={{ selected: active }}
-          accessibilityLabel={showBadge ? `${tab.label}, ${pendingApprovalsCount} waiting` : tab.label}
+          accessibilityLabel={showBadge ? `${tab.label}, ${pendingApprovalsCount} waiting` : labelOf(tab, category)}
         >
           {({ pressed }) => (
             <View style={[styles.tabInner, { opacity: pressed ? 0.6 : 1 }]}>
@@ -60,7 +67,7 @@ export const AppStoreBottomBar: React.FC<AppStoreBottomBarProps> = ({
                   </View>
                 ) : null}
               </View>
-              <Text style={[styles.label, { color: tint, fontFamily: active ? fonts.semibold : fonts.medium }]}>{tab.label}</Text>
+              <Text style={[styles.label, { color: tint, fontFamily: active ? fonts.semibold : fonts.medium }]}>{labelOf(tab, category)}</Text>
             </View>
           )}
         </Pressable>

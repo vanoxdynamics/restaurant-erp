@@ -77,7 +77,9 @@ async def sign_in_roster(
     db: AsyncSession = Depends(get_db),
 ):
     """Names and roles for the POS 'who is working' screen. Needs the X-Device-Token a manager issued (401 once revoked)."""
-    return await service.staff_roster(db, device.branch_id)
+    category = await service.branch_category(db, device.branch_id)
+    staff = await service.staff_roster(db, device.branch_id)
+    return [RosterEntry.model_validate(s).model_copy(update={"category": category}) for s in staff]
 
 
 @router.post("/devices/setup-codes", response_model=DeviceSetupCode, status_code=status.HTTP_201_CREATED)

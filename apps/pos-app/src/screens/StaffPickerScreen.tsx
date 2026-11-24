@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Button, colors, fonts, humanizeLabel, radii, spacing, typography } from '@repo/shared-ui';
+import { Button, colors, fonts, radii, spacing, typography } from '@repo/shared-ui';
 import { ApiError, RosterEntry, useSignInRoster } from '@repo/api-client';
+import { roleLabel } from '@repo/shared-utils';
+import { rememberCategory, useBusiness } from '../business';
 import { useDeviceStore } from '../stores/deviceStore';
 import { storage } from '../stores/storage';
 
@@ -23,9 +25,13 @@ export interface StaffPickerScreenProps {
 
 /** Shared-tablet sign-in, step one: tap your name. */
 export const StaffPickerScreen: React.FC<StaffPickerScreenProps> = ({ onSelect }) => {
+  const business = useBusiness();
   const device = useDeviceStore((s) => s.device)!;
   const unregister = useDeviceStore((s) => s.unregister);
   const roster = useSignInRoster(device.deviceToken);
+  // Before anyone signs in, the roster is the only place that knows what kind of business this is.
+  const category = roster.data?.[0]?.category ?? business.category;
+  useEffect(() => rememberCategory(roster.data?.[0]?.category), [roster.data]);
   // The last list this tablet loaded: shown at once while the fresh one loads, and if the network is down.
   const [cached, setCached] = useState<RosterEntry[] | null>(null);
   const [slow, setSlow] = useState(false);
@@ -92,7 +98,7 @@ export const StaffPickerScreen: React.FC<StaffPickerScreenProps> = ({ onSelect }
             key={person.id}
             onPress={() => onSelect(person)}
             accessibilityRole="button"
-            accessibilityLabel={`${person.full_name}, ${humanizeLabel(person.role)}`}
+            accessibilityLabel={`${person.full_name}, ${roleLabel(person.role, category)}`}
             style={({ pressed }) => [styles.tile, pressed ? styles.tilePressed : null]}
           >
             <View style={styles.avatar}>
@@ -101,7 +107,7 @@ export const StaffPickerScreen: React.FC<StaffPickerScreenProps> = ({ onSelect }
             <Text style={styles.name} numberOfLines={1}>
               {person.full_name}
             </Text>
-            <Text style={styles.role}>{humanizeLabel(person.role)}</Text>
+            <Text style={styles.role}>{roleLabel(person.role, category)}</Text>
           </Pressable>
         ))}
       </ScrollView>

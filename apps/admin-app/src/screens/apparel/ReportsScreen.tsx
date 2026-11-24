@@ -42,7 +42,7 @@ export const ReportsScreen: React.FC = () => {
   );
 };
 
-const DayReport: React.FC = () => {
+export const DayReport: React.FC = () => {
   const branchId = useAuthStore((s) => s.activeBranchId) ?? undefined;
   const today = isoDate(new Date());
   const [date, setDate] = useState(today);
@@ -122,7 +122,7 @@ const DayReport: React.FC = () => {
 
 const PRESETS = [['Today', 0], ['7 days', 6], ['30 days', 29]] as const;
 
-const ProductSales: React.FC = () => {
+export const ProductSales: React.FC = () => {
   const branchId = useAuthStore((s) => s.activeBranchId) ?? undefined;
   const today = isoDate(new Date());
   const [from, setFrom] = useState(shift(today, -6));

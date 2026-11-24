@@ -371,7 +371,8 @@ class ApparelSaleCreate(BaseModel):
 
 
 class ApparelVoid(BaseModel):
-    reason: Reason
+    # Optional: a sale cancelled at the counter before any payment is just confirmed, not explained.
+    reason: Optional[Reason] = None
     approver_pin: Optional[Pin] = None
 
 
@@ -607,6 +608,28 @@ class ApparelDayReport(BaseModel):
     net_cash: Decimal
     top_products: List[ReportProduct]
     units_by_size: List[ReportSize]
+
+
+class ShiftReportSales(BaseModel):
+    count: int
+    units: int
+    subtotal: Decimal
+    discount_amount: Decimal
+    grand_total: Decimal
+
+
+class ApparelShiftReport(BaseModel):
+    """One person's shift: the invoices paid in it, how they were paid and the goods taken back."""
+    shift_id: uuid.UUID
+    staff_id: uuid.UUID
+    staff_name: str
+    status: str
+    start_time: datetime
+    end_time: Optional[datetime] = None
+    sales: ShiftReportSales
+    payments: List[ReportPayment]
+    returns: ReportReturns
+    net_cash: Decimal
 
 
 class ReportProductSize(BaseModel):

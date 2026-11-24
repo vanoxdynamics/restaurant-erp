@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useQueryClient } from '@tanstack/react-query';
-import { Button, colors, Input, Modal, radii, spacing, typography } from '@repo/shared-ui';
+import { Button, colors, Modal, radii, spacing, typography } from '@repo/shared-ui';
 import { formatPaiseToRupees } from '@repo/shared-utils';
 import { ApiError, apparelSalesApi, ApparelSale, TerminalOutcome, useApparelSale, useVoidApparelSale } from '@repo/api-client';
 import { QueryState } from '../components/QueryState';
@@ -17,8 +17,10 @@ export interface PayScreenProps {
   credit?: { code: string; amount_paise: number } | null;
   /** Back to the counter with the sale left as it is (unpaid sales keep their pieces out of stock until voided). */
   onBack: () => void;
-  /** Paid (or cancelled): next customer. */
+  /** Paid: next customer. */
   onDone: () => void;
+  /** The invoice was cancelled: back to the counter with the same pieces in the cart, to change and invoice again. */
+  onCancelled: () => void;
 }
 
 const asTenderSale = (sale: ApparelSale): TenderSale => ({
@@ -30,15 +32,13 @@ const asTenderSale = (sale: ApparelSale): TenderSale => ({
 });
 
 /** Payment for a dress shop invoice: the shared pay panel with this module's endpoints, above the invoice's own lines and tax. */
-export const PayScreen: React.FC<PayScreenProps> = ({ saleId, credit, onBack, onDone }) => {
+export const PayScreen: React.FC<PayScreenProps> = ({ saleId, credit, onBack, onDone, onCancelled }) => {
   const query = useApparelSale(saleId);
   const queryClient = useQueryClient();
   const voidSale = useVoidApparelSale();
   const sale = query.data;
 
   const [voiding, setVoiding] = useState(false);
-  const [reason, setReason] = useState('');
-  const [pin, setPin] = useState('');
   const [voidError, setVoidError] = useState<string | null>(null);
 
   /** Every tender changes the sale: fetch it again so the panel shows what the server now says. */
@@ -69,9 +69,10 @@ export const PayScreen: React.FC<PayScreenProps> = ({ saleId, credit, onBack, on
   const cancel = async () => {
     setVoidError(null);
     try {
-      await voidSale.mutateAsync({ saleId, reason: reason.trim(), approverPin: pin || undefined });
+      // Only offered before any payment was tried, so the server needs no reason or manager PIN: a confirmation is enough.
+      await voidSale.mutateAsync({ saleId });
       setVoiding(false);
-      onDone();
+      onCancelled();
     } catch (e) {
       setVoidError(e instanceof ApiError ? e.message : 'Could not cancel the sale. Try again.');
     }
@@ -81,7 +82,8 @@ export const PayScreen: React.FC<PayScreenProps> = ({ saleId, credit, onBack, on
 
   return (
     <View style={styles.container}>
-      <TopBar title="Payment" subtitle={sale?.number} onBack={onBack} />
+      {/* A sale cancelled elsewhere (the admin app) is gone: going back frees the cart for a new invoice. */}
+      <TopBar title="Payment" subtitle={sale?.number} onBack={sale?.status === 'voided' ? onCancelled : onBack} />
       <QueryState query={query} isEmpty={!sale} emptyText="Sale not found.">
         {sale ? (
           <ScrollView contentContainerStyle={styles.body}>
@@ -127,14 +129,19 @@ export const PayScreen: React.FC<PayScreenProps> = ({ saleId, credit, onBack, on
       </QueryState>
 
       <Modal
+        centered
         visible={voiding}
         onClose={() => setVoiding(false)}
-        title="Cancel this sale"
-        subtitle="The pieces go back into stock. Needs a manager."
-        footer={<Button title="Cancel the sale" variant="danger" onPress={cancel} disabled={reason.trim().length < 3} loading={voidSale.isPending} />}
+        title="Cancel this sale?"
+        subtitle={sale?.number}
+        footer={
+          <>
+            <Button title="No, keep it" variant="secondary" onPress={() => setVoiding(false)} />
+            <Button title="Yes, cancel" variant="danger" onPress={cancel} loading={voidSale.isPending} />
+          </>
+        }
       >
-        <Input label="Reason" value={reason} onChangeText={setReason} placeholder="e.g. Customer changed their mind" />
-        <Input label="Manager PIN (not needed if you are a manager)" value={pin} onChangeText={(v) => setPin(v.replace(/\D/g, ''))} secureTextEntry keyboardType="number-pad" maxLength={6} />
+        <Text style={styles.confirm}>The invoice is cancelled and its pieces go back into stock. They stay in the cart, so you can change the sale.</Text>
         {voidError ? <Text style={styles.error}>{voidError}</Text> : null}
       </Modal>
     </View>
@@ -143,6 +150,7 @@ export const PayScreen: React.FC<PayScreenProps> = ({ saleId, credit, onBack, on
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  confirm: { ...typography.body, color: colors.textSecondary },
   body: { padding: spacing.lg, gap: spacing.md, maxWidth: 720, width: '100%', alignSelf: 'center' },
   summary: { gap: spacing.xs, marginVertical: spacing.sm },
   rule: { height: 1, backgroundColor: colors.surfaceBorder, marginVertical: spacing.xs, borderRadius: radii.full },

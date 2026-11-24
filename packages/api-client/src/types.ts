@@ -258,6 +258,8 @@ export interface RosterEntry {
   role: StaffRole;
   /** 4, 5 or 6: how many digits this person's PIN has. Unknown for PINs set before it was recorded. */
   pin_length?: number;
+  /** The kind of business (restaurant, apparel…), so a device nobody has signed in on yet uses its words. */
+  category?: string;
 }
 
 /** A one-time code a manager shows so a new tablet can be linked to the branch. */

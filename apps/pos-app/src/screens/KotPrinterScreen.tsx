@@ -9,6 +9,7 @@ import { useSimulator } from '../devices/simulator';
 import { terminal } from '../devices/terminal';
 import { JobState, usePrintQueueStore } from '../printing/printQueue';
 import { useSlipPrinting } from '../printing/useSlipPrinting';
+import { useBusiness } from '../business';
 import { useDeviceStore } from '../stores/deviceStore';
 import { usePrinterSettings } from '../stores/printerStore';
 
@@ -21,7 +22,13 @@ const STATE_BADGE: Record<JobState, { label: string; variant: BadgeProps['varian
 
 const kotLabel = (kotNumber: string) => `KOT ${kotNumber.split('-').pop()}`;
 
-function testPage(paperMm: 58 | 80, branch: string): PrintablePage {
+/** The sample lines on the test page: a dish in a restaurant, a garment in a shop. */
+const SAMPLE = {
+  food: ['2 x Butter Naan', '  - less butter'],
+  shop: ['1 x Cotton Kurta', '  - size M, blue'],
+};
+
+function testPage(paperMm: 58 | 80, branch: string, sample: string[]): PrintablePage {
   const width = paperMm === 58 ? 32 : 48;
   return {
     reference: 'TEST',
@@ -31,8 +38,8 @@ function testPage(paperMm: 58 | 80, branch: string): PrintablePage {
       { style: 'big', align: 'center', text: 'TEST PRINT' },
       { style: 'normal', align: 'center', text: branch.slice(0, width) },
       { style: 'normal', align: 'left', text: '-'.repeat(width) },
-      { style: 'bold', align: 'left', text: '2 x Butter Naan' },
-      { style: 'normal', align: 'left', text: '  - less butter' },
+      { style: 'bold', align: 'left', text: sample[0] },
+      { style: 'normal', align: 'left', text: sample[1] },
       { style: 'normal', align: 'left', text: `${'1234567890'.repeat(5)}`.slice(0, width) },
       { style: 'normal', align: 'left', text: '-'.repeat(width) },
       { style: 'bold', align: 'center', text: `${paperMm} mm paper OK` },
@@ -40,7 +47,10 @@ function testPage(paperMm: 58 | 80, branch: string): PrintablePage {
   };
 }
 
-/** The counter's KOT printer: what is printing or failed, the paper width, a test print, and the terminal's details. */
+/**
+ * The counter's printer: what is printing or failed, the paper width, a test print, and the terminal's details. A business without
+ * kitchen tickets (a shop) only prints bills and labels, so it sees no KOT queue.
+ */
 export const KotPrinterScreen: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const device = useDeviceStore((s) => s.device)!;
   const { paperMm, setPaperMm } = usePrinterSettings();
@@ -54,6 +64,8 @@ export const KotPrinterScreen: React.FC<{ onBack: () => void }> = ({ onBack }) =
   const [info, setInfo] = useState<Record<string, string>>({});
   const simulator = paymentKind() === 'simulator';
   const sim = useSimulator();
+  const { settings } = useBusiness();
+  const kots = settings.kitchen_tickets;
 
   useEffect(() => {
     if (paymentKind() !== 'manual') void terminal.info().then(setInfo).catch(() => setInfo({}));
@@ -61,13 +73,13 @@ export const KotPrinterScreen: React.FC<{ onBack: () => void }> = ({ onBack }) =
 
   const testPrint = async () => {
     setMessage(null);
-    const result = await terminal.print(testPage(paperMm, device.branchName));
+    const result = await terminal.print(testPage(paperMm, device.branchName, kots ? SAMPLE.food : SAMPLE.shop));
     setMessage(result.ok ? 'Test page printed.' : `Not printed: ${result.message}`);
   };
 
   return (
     <View style={styles.container}>
-      <TopBar title="KOT printer" subtitle={device.branchName} onBack={onBack} />
+      <TopBar title={kots ? 'KOT printer' : 'Printer'} subtitle={device.branchName} onBack={onBack} />
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Paper</Text>
@@ -79,7 +91,13 @@ export const KotPrinterScreen: React.FC<{ onBack: () => void }> = ({ onBack }) =
           {unattended ? <Button title="Test print" variant="secondary" onPress={testPrint} /> : null}
           {message ? <Text style={styles.hint}>{message}</Text> : null}
           <Text style={styles.hint}>
-            {unattended
+            {!kots
+              ? unattended
+                ? 'Bills and receipts print here.'
+                : printerKind() === 'system'
+                  ? 'This counter prints bills through the print dialog.'
+                  : 'This device has no printer.'
+              : unattended
               ? 'KOTs sent from waiters’ phones print here automatically.'
               : printerKind() === 'system'
                 ? 'This counter prints through the print dialog. KOTs sent from phones wait below until you print them.'
@@ -87,7 +105,7 @@ export const KotPrinterScreen: React.FC<{ onBack: () => void }> = ({ onBack }) =
           </Text>
         </View>
 
-        {unattended ? (
+        {!kots ? null : unattended ? (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Recent KOTs</Text>
             {jobs.length === 0 ? <Text style={styles.hint}>Nothing printed yet on this device.</Text> : null}

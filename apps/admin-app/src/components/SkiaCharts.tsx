@@ -32,39 +32,73 @@ const TENDER_COLORS = {
   cash: '#64748b',
 };
 
+/** How many of the latest hours the chart shows. */
+const HOURS_SHOWN = 7;
+
 /**
- * Hourly sales: plain bars, the busiest hour called out in words and colour.
+ * Hourly sales for the latest 7 hours (up to the current hour). Every hour is listed so the day reads left to right, but only
+ * hours with sales get bars: money in one colour, number of orders in another. The busiest hour is called out in words.
  */
 export const LiveSalesPulseChart: React.FC<{
   data: HourlySalesPoint[];
   velocityPaisePerHour?: number;
-}> = ({ data }) => {
-  const maxSales = Math.max(...data.map((d) => d.sales_paise), 1);
-  const peak = data.find((d) => d.sales_paise === maxSales);
+  /** "Orders" in a restaurant, "Bills" in a shop. */
+  countLabel?: string;
+}> = ({ data, countLabel = 'Orders' }) => {
+  // The window ends at the current hour; early in the day it starts at midnight instead of reaching into yesterday.
+  const start = Math.max(0, new Date().getHours() - (HOURS_SHOWN - 1));
+  const slots: HourlySalesPoint[] = Array.from({ length: HOURS_SHOWN }, (_, i) => {
+    const label = `${String(start + i).padStart(2, '0')}:00`;
+    return data.find((d) => d.hour === label) ?? { hour: label, sales_paise: 0, orders_count: 0 };
+  });
+
+  const maxSales = Math.max(...slots.map((d) => d.sales_paise), 1);
+  const maxOrders = Math.max(...slots.map((d) => d.orders_count), 1);
+  const peak = slots.find((d) => d.sales_paise > 0 && d.sales_paise === maxSales);
 
   return (
     <Card style={styles.block}>
       <SectionHeader
         title="Sales by hour"
-        subtitle={peak ? `Peak: ${peak.hour} · ${formatPaiseToRupees(peak.sales_paise, { decimals: 0 })}` : undefined}
+        subtitle={peak ? `Peak: ${peak.hour} · ${formatPaiseToRupees(peak.sales_paise, { decimals: 0 })}` : 'Last 7 hours'}
       />
 
-      <View style={styles.bars} accessibilityRole="image" accessibilityLabel="Bar chart of sales by hour">
-        {data.map((point, index) => {
+      <View style={styles.legendRow}>
+        <View style={styles.legendLabelRow}>
+          <View style={[styles.legendDot, { backgroundColor: colors.primary }]} />
+          <Text style={styles.legendLabel}>Sales (₹)</Text>
+        </View>
+        <View style={styles.legendLabelRow}>
+          <View style={[styles.legendDot, { backgroundColor: colors.accent }]} />
+          <Text style={styles.legendLabel}>{countLabel}</Text>
+        </View>
+      </View>
+
+      <View style={styles.bars} accessibilityRole="image" accessibilityLabel={`Bar chart of sales and ${countLabel.toLowerCase()} by hour, last 7 hours`}>
+        {slots.map((point) => {
           const isPeak = point === peak;
-          const barHeight = Math.max((point.sales_paise / maxSales) * BAR_MAX_HEIGHT, 4);
+          const hasSales = point.sales_paise > 0 || point.orders_count > 0;
+          const salesHeight = Math.max((point.sales_paise / maxSales) * BAR_MAX_HEIGHT, 4);
+          const ordersHeight = Math.max((point.orders_count / maxOrders) * BAR_MAX_HEIGHT, 4);
 
           return (
-            <View key={point.hour || index} style={styles.barColumn}>
-              <Text style={[styles.barValue, isPeak ? styles.barValuePeak : null]}>
-                {formatPaiseToRupees(point.sales_paise, { compact: true, showSymbol: false, decimals: 0 })}
-              </Text>
-              <View
-                style={[
-                  styles.bar,
-                  { height: barHeight, backgroundColor: isPeak ? colors.primary : colors.primaryGlow },
-                ]}
-              />
+            <View key={point.hour} style={styles.barColumn}>
+              <View style={styles.barPair}>
+                {hasSales ? (
+                  <>
+                    <View style={styles.barWithValue}>
+                      <Text style={[styles.barValue, isPeak ? styles.barValuePeak : null]}>
+                        {formatPaiseToRupees(point.sales_paise, { compact: true, showSymbol: false, decimals: 0 })}
+                      </Text>
+                      <View style={[styles.bar, { height: salesHeight, backgroundColor: colors.primary }]} />
+                    </View>
+                    <View style={styles.barWithValue}>
+                      <Text style={styles.barValue}>{point.orders_count}</Text>
+                      <View style={[styles.bar, { height: ordersHeight, backgroundColor: colors.accent }]} />
+                    </View>
+                  </>
+                ) : null}
+              </View>
               <Text style={[styles.hourLabel, isPeak ? styles.hourLabelPeak : null]}>{point.hour}</Text>
             </View>
           );
@@ -117,12 +151,12 @@ export const PaymentBreakdownChart: React.FC<{ breakdown: PaymentBreakdownData }
 /**
  * Best sellers by revenue.
  */
-export const TopSellingRankingChart: React.FC<{ items: TopItemData[] }> = ({ items }) => {
+export const TopSellingRankingChart: React.FC<{ items: TopItemData[]; title?: string }> = ({ items, title = 'Top items' }) => {
   const maxSales = Math.max(...items.map((i) => i.total_sales_paise), 1);
 
   return (
     <Card style={styles.block}>
-      <SectionHeader title="Top items" subtitle="By revenue" />
+      <SectionHeader title={title} subtitle="By revenue" />
       {items.map((item, index) => {
         const widthPercent = `${Math.max(6, Math.round((item.total_sales_paise / maxSales) * 100))}%` as const;
         return (
@@ -168,9 +202,25 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
   },
+  barPair: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 3,
+    height: BAR_MAX_HEIGHT + 20,
+  },
+  barWithValue: {
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  legendRow: {
+    flexDirection: 'row',
+    gap: spacing.lg,
+    marginTop: spacing.xs,
+  },
   barValue: {
     fontFamily: fonts.regular,
-    fontSize: 12,
+    fontSize: 11,
     color: colors.textMuted,
     marginBottom: 4,
   },
@@ -179,8 +229,7 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
   },
   bar: {
-    width: '62%',
-    maxWidth: 28,
+    width: 12,
     borderRadius: radii.sm,
   },
   hourLabel: {

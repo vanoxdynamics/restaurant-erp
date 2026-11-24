@@ -804,7 +804,9 @@ export class RestaurantApiClient {
       anonymous: true,
       timeoutMs: 10000,
     });
-    return rows.map((r) => ({ id: r.id, full_name: r.full_name, role: roleFromApi(r.role), pin_length: r.pin_length ?? undefined }));
+    return rows.map((r) => ({
+      id: r.id, full_name: r.full_name, role: roleFromApi(r.role), pin_length: r.pin_length ?? undefined, category: r.category ?? undefined,
+    }));
   }
 
   async login(username: string, password: string): Promise<AuthSession> {
@@ -1322,6 +1324,12 @@ export class RestaurantApiClient {
   /** Open tickets (queued, preparing, ready) for the branch, oldest first. */
   async getKitchenBoard(branchId: string): Promise<BoardTicket[]> {
     const rows = await this.request<Raw[]>('GET', '/kots', { query: { branch_id: branchId } });
+    return rows.map(adaptBoardTicket);
+  }
+
+  /** Tickets already served, so the floor can tell which running orders have nothing left to deliver. */
+  async getServedTickets(branchId: string): Promise<BoardTicket[]> {
+    const rows = await this.request<Raw[]>('GET', '/kots', { query: { branch_id: branchId, status: 'served' } });
     return rows.map(adaptBoardTicket);
   }
 

@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, ViewStyle, TextStyle, StyleProp } from 'react-native';
 import { colors, humanizeLabel, radii, spacing, fonts } from './theme';
-import { TableStatus, StaffRole } from '@repo/shared-utils';
+import { TableStatus, StaffRole, roleLabel } from '@repo/shared-utils';
 
 export interface BadgeProps {
   label: string;
@@ -102,8 +102,9 @@ export const TableStatusBadge: React.FC<{ status: TableStatus | string; size?: '
   return <Badge label={status} variant={variant} size={size} pulse={status === TableStatus.OCCUPIED} />;
 };
 
-export const RoleBadge: React.FC<{ role: StaffRole | string; size?: 'sm' | 'md' }> = ({
+export const RoleBadge: React.FC<{ role: StaffRole | string; size?: 'sm' | 'md'; category?: string | null }> = ({
   role,
+  category,
   size = 'sm',
 }) => {
   let variant: BadgeProps['variant'] = 'neutral';
@@ -113,5 +114,5 @@ export const RoleBadge: React.FC<{ role: StaffRole | string; size?: 'sm' | 'md' 
   else if (role === StaffRole.CAPTAIN) variant = 'available';
   else if (role === StaffRole.KITCHEN) variant = 'warning';
 
-  return <Badge label={role} variant={variant} size={size} />;
+  return <Badge label={roleLabel(role, category)} variant={variant} size={size} />;
 };

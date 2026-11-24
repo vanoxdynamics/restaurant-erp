@@ -211,7 +211,8 @@ async def test_roster_needs_a_device_token_and_shows_only_this_branch(
     ids = {e["id"] for e in r.json()}
     assert {str(waiter.id), str(kitchen.id), str(manager.id)} <= ids
     assert str(outsider.id) not in ids and str(inactive.id) not in ids
-    assert set(r.json()[0]) == {"id", "full_name", "role", "pin_length"}  # no PIN, username or other details
+    assert set(r.json()[0]) == {"id", "full_name", "role", "pin_length", "category"}  # no PIN, username or other details
+    assert r.json()[0]["category"] == "restaurant"  # the business kind, so the device names roles in its words
 
     assert (await client.get(f"{API}/staff/auth/roster")).status_code == 401
     assert (await client.get(f"{API}/staff/auth/roster", headers={"X-Device-Token": "garbage"})).status_code == 401

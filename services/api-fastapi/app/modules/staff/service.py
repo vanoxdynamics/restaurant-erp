@@ -44,6 +44,7 @@ from app.core.security import (
 from app.models.billing import Bill, Payment
 from app.models.devices import Device
 from app.models.floor import Branch
+from app.models.organization import Organization
 from app.models.staff import Shift, StaffUser
 from app.schemas.staff import (
     DeviceLinkRequest,
@@ -194,6 +195,13 @@ async def link_device(
         expires_delta=timedelta(days=365),
     )
     return DeviceTokenResponse(device_token=token, branch_id=branch.id, branch_name=branch.name)
+
+
+async def branch_category(db: AsyncSession, branch_id: uuid.UUID) -> Optional[str]:
+    """The business category of the organization a branch belongs to."""
+    return await db.scalar(
+        select(Organization.category).join(Branch, Branch.organization_id == Organization.id).where(Branch.id == branch_id)
+    )
 
 
 async def staff_roster(db: AsyncSession, branch_id: uuid.UUID) -> List[StaffUser]:

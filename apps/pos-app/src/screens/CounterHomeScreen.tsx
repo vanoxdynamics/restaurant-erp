@@ -9,6 +9,8 @@ import { QueryState } from '../components/QueryState';
 import { TopBar } from '../components/TopBar';
 import { usePrintQueueStore } from '../printing/printQueue';
 import { useDeviceStore } from '../stores/deviceStore';
+import { useSessionStore } from '../stores/sessionStore';
+import { useKitchenPlan } from '../plan';
 
 interface OpenBill {
   orderId: string;
@@ -37,6 +39,10 @@ export const CounterHomeScreen: React.FC<CounterHomeProps> = ({ onOpenOrder, onO
   const takeawayQuery = useOpenTakeaways(device.branchId);
   const failedPrints = usePrintQueueStore((s) => s.jobs.filter((j) => j.state === 'failed').length);
   const cashDay = useCounterCashDay();
+  // Billing and the cash day are for the people who take payment; the server refuses everyone else.
+  const plan = useKitchenPlan();
+  const role = useSessionStore((s) => s.user?.role);
+  const canBill = plan.canBill(role);
 
   const bills = useMemo<OpenBill[]>(() => {
     const out: OpenBill[] = [];
@@ -75,7 +81,9 @@ export const CounterHomeScreen: React.FC<CounterHomeProps> = ({ onOpenOrder, onO
       <View style={styles.actions}>
         <Button title="New order" onPress={onNewOrder} icon={<Icon name="plus" size={16} color={colors.textInverse} />} style={{ flex: 1 }} />
         <Button title="KOT printer" variant="secondary" onPress={onPrinter} icon={<Icon name="printer" size={16} color={colors.text} />} />
-        <Button title={cashButtonLabel(cashDay?.status)} variant="secondary" onPress={onDayEnd} icon={<Icon name={cashDay?.status === 'open' ? 'moon' : 'sun'} size={16} color={colors.text} />} />
+        {canBill ? (
+          <Button title={cashButtonLabel(cashDay?.status)} variant="secondary" onPress={onDayEnd} icon={<Icon name={cashDay?.status === 'open' ? 'moon' : 'sun'} size={16} color={colors.text} />} />
+        ) : null}
       </View>
 
       <CashDayBanner onPress={onDayEnd} />
@@ -116,7 +124,7 @@ export const CounterHomeScreen: React.FC<CounterHomeProps> = ({ onOpenOrder, onO
                 </Text>
               </View>
               <Text style={styles.amount}>{formatPaiseToRupees(b.amountPaise, { decimals: 0 })}</Text>
-              <Button title="Bill" size="sm" onPress={() => onOpenBill(b.orderId, b.title)} />
+              {canBill ? <Button title="Bill" size="sm" onPress={() => onOpenBill(b.orderId, b.title)} /> : null}
             </Pressable>
           ))}
         </QueryState>
