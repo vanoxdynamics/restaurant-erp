@@ -32,9 +32,11 @@ import { TopBar } from '../components/TopBar';
 import { useDeviceStore } from '../stores/deviceStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { ApparelCartLine, cartSignature, cartTotals, hasDiscount, lineNet, useApparelCartStore } from './apparelCartStore';
-import { stockWarning, VariantPickerSheet } from './VariantPickerSheet';
+import { stockLimitMessage, stockWarning, VariantPickerSheet } from './VariantPickerSheet';
 
 const money = (paise: number) => formatPaiseToRupees(paise);
+/** More than this much off the bill or an item needs a manager or owner (the server checks the same). */
+const APPROVAL_PERCENT = 75;
 
 export interface SaleScreenProps {
   /** Store credit from an exchange, ready to pay for this sale. */
@@ -65,11 +67,11 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
   const createSale = useCreateApparelSale();
   const voidSale = useVoidApparelSale();
   const {
-    lines, billDiscountPaise, discountReason, pendingSale, add, setQuantity, setLineDiscount, setBillDiscount, setDiscountReason, clear,
-    setPendingSale,
+    lines, billDiscountPaise, discountReason, customer, pendingSale, add, setQuantity, setLineDiscount, setBillDiscount, setDiscountReason,
+    setCustomer, clear, setPendingSale,
   } = useApparelCartStore();
   // An invoice made from this cart is waiting for payment; the cart is unchanged since it was made.
-  const unchanged = !!pendingSale && pendingSale.signature === cartSignature({ lines, billDiscountPaise, discountReason });
+  const unchanged = !!pendingSale && pendingSale.signature === cartSignature({ lines, billDiscountPaise, discountReason, customer });
   const wide = useWindowDimensions().width >= 900;
 
   const [search, setSearch] = useState('');
@@ -78,6 +80,7 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
   const [cartOpen, setCartOpen] = useState(false);
   const [discountTarget, setDiscountTarget] = useState<DiscountTarget | null>(null);
   const [discountText, setDiscountText] = useState('');
+  const [discountMode, setDiscountMode] = useState<'amount' | 'percent'>('amount');
   const [pinOpen, setPinOpen] = useState(false);
   const [pin, setPin] = useState('');
   const [message, setMessage] = useState<{ text: string; error?: boolean; warn?: boolean } | null>(null);
@@ -100,8 +103,16 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
     setMessage(null);
   };
 
-  /** Adds one piece; returns the warning when it takes the recorded stock below zero (the sale is still allowed). */
+  /**
+   * Adds one piece; returns the warning when it takes the recorded stock below zero (the sale is still allowed). A piece whose
+   * stock is at the limit is not added and the lock message is shown instead.
+   */
   const addVariant = (product: Pick<ApparelProduct, 'name'>, variant: ApparelVariant): string | null => {
+    const limit = stockLimitMessage(product.name, variant, inCart[variant.id] ?? 0);
+    if (limit) {
+      setMessage({ text: limit, error: true });
+      return null;
+    }
     const warning = stockWarning(product.name, variant, inCart[variant.id] ?? 0);
     add({
       variant_id: variant.id, name: product.name, size: variant.size, colour: variant.colour, mrp_paise: variant.mrp_paise,
@@ -118,9 +129,13 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
     if (/\s/.test(code)) return; // a name, not a code: the list is already showing
     try {
       const found = await apparelApi.lookup(code, device.branchId);
-      const warning = addVariant(found.product, found.variant);
       setSearch('');
       setTerm('');
+      if (stockLimitMessage(found.product.name, found.variant, inCart[found.variant.id] ?? 0)) {
+        addVariant(found.product, found.variant); // shows the lock message, adds nothing
+        return;
+      }
+      const warning = addVariant(found.product, found.variant);
       setMessage(warning ? { text: warning, warn: true } : { text: `Added ${found.product.name}, ${found.variant.size} / ${found.variant.colour}.` });
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
@@ -139,14 +154,39 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
   const openDiscount = (target: DiscountTarget) => {
     setDiscountTarget(target);
     const current = target.kind === 'bill' ? billDiscountPaise : target.line.line_discount_paise;
+    setDiscountMode('amount');
     setDiscountText(current ? toRupees(current) : '');
+  };
+
+  /** What the discount is taken from: the bill after line discounts, or the line's full price. */
+  const discountBase = !discountTarget ? 0
+    : discountTarget.kind === 'bill' ? lines.reduce((n, l) => n + lineNet(l), 0)
+    : discountTarget.line.price_paise * discountTarget.line.quantity;
+  const percentOff = Math.min(100, Math.max(0, Number(discountText) || 0));
+  const discountPaise = discountMode === 'percent' ? Math.round((discountBase * percentOff) / 100) : toPaise(discountText || '0');
+
+  /** Only a number goes in the box (two decimals at most), and never more than 100% or more than what is being discounted. */
+  const typeDiscount = (raw: string) => {
+    let v = raw.replace(/[^0-9.]/g, '');
+    const dot = v.indexOf('.');
+    if (dot >= 0) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '').slice(0, 2);
+    if (v.startsWith('.')) v = `0${v}`;
+    if (discountMode === 'percent' && Number(v) > 100) v = '100';
+    if (discountMode === 'amount' && toPaise(v || '0') > discountBase) v = toRupees(discountBase);
+    setDiscountText(v);
+  };
+
+  const switchDiscountMode = (mode: 'amount' | 'percent') => {
+    if (mode === discountMode) return;
+    setDiscountMode(mode);
+    setDiscountText('');
   };
 
   const applyDiscount = () => {
     if (!discountTarget) return;
-    const paise = toPaise(discountText || '0');
+    const paise = Math.min(discountPaise, discountBase);
     if (discountTarget.kind === 'bill') setBillDiscount(paise);
-    else setLineDiscount(discountTarget.line.variant_id, Math.min(paise, discountTarget.line.price_paise * discountTarget.line.quantity));
+    else setLineDiscount(discountTarget.line.variant_id, paise);
     setDiscountTarget(null);
     changed();
   };
@@ -188,12 +228,13 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
           lines: lines.map((l) => ({ variant_id: l.variant_id, quantity: l.quantity, line_discount_paise: l.line_discount_paise })),
           bill_discount_paise: billDiscountPaise,
           discount_reason: discounted ? discountReason : undefined,
+          customer_id: customer?.id,
           client_sale_id: key,
           approver_pin: approverPin,
         },
       });
       // The cart is kept until this invoice is paid, so cancelling the payment brings the same pieces back.
-      setPendingSale({ id: sale.id, number: sale.number, signature: cartSignature({ lines, billDiscountPaise, discountReason }) });
+      setPendingSale({ id: sale.id, number: sale.number, signature: cartSignature({ lines, billDiscountPaise, discountReason, customer }) });
       setSaleKey(newIdempotencyKey());
       setCartOpen(false);
       setPinOpen(false);
@@ -235,7 +276,15 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
               <View style={styles.stepper}>
                 <StepButton icon="minus" label={`One less ${line.name}`} size={36} onPress={() => { setQuantity(line.variant_id, line.quantity - 1); changed(); }} />
                 <Text style={styles.qty}>{line.quantity}</Text>
-                <StepButton icon="plus" label={`One more ${line.name}`} size={36} onPress={() => { setQuantity(line.variant_id, line.quantity + 1); changed(); }} />
+                <StepButton icon="plus" label={`One more ${line.name}`} size={36} onPress={() => {
+                  const limit = stockLimitMessage(line.name, line, line.quantity);
+                  if (limit) {
+                    setMessage({ text: limit, error: true });
+                    return;
+                  }
+                  setQuantity(line.variant_id, line.quantity + 1);
+                  changed();
+                }} />
               </View>
               <Text style={styles.lineTotal}>{money(lineNet(line))}</Text>
             </View>
@@ -393,8 +442,29 @@ export const SaleScreen: React.FC<SaleScreenProps> = ({ credit, onDropCredit, on
         title={discountTarget?.kind === 'bill' ? 'Discount on the whole bill' : `Discount on ${discountTarget?.kind === 'line' ? discountTarget.line.name : ''}`}
         footer={<Button title="Apply" onPress={applyDiscount} />}
       >
-        <Input label="Amount off (₹)" value={discountText} onChangeText={setDiscountText} keyboardType="decimal-pad" prefix="₹" autoFocus />
-        <Text style={styles.hint}>Enter 0 to remove it. A big discount needs a manager when the invoice is made.</Text>
+        <View style={styles.modeRow}>
+          {(['amount', 'percent'] as const).map((mode) => (
+            <Pressable key={mode} onPress={() => switchDiscountMode(mode)} accessibilityRole="radio" accessibilityState={{ selected: discountMode === mode }}
+              style={[styles.modeChip, discountMode === mode ? styles.modeChipOn : null]}>
+              <Text style={[styles.modeText, discountMode === mode ? styles.modeTextOn : null]}>{mode === 'amount' ? '₹ Amount' : '% Percent'}</Text>
+            </Pressable>
+          ))}
+        </View>
+        {discountMode === 'amount' ? (
+          <Input key="amount" label="Amount off (₹)" value={discountText} onChangeText={typeDiscount} keyboardType="decimal-pad" prefix="₹" autoFocus />
+        ) : (
+          <Input key="percent" label="Percent off (%)" value={discountText} onChangeText={typeDiscount} keyboardType="decimal-pad" prefix="%" autoFocus />
+        )}
+        {discountBase > 0 && discountPaise * 100 > discountBase * APPROVAL_PERCENT ? (
+          <Text style={styles.modeWarn}>Over {APPROVAL_PERCENT}%: a manager or owner must approve this.</Text>
+        ) : null}
+        {discountText && discountPaise > 0 ? (
+          <Text style={styles.modePreview}>
+            {money(Math.min(discountPaise, discountBase))} off {money(discountBase)} · pays {money(discountBase - Math.min(discountPaise, discountBase))}
+          </Text>
+        ) : null}
+        <Text style={styles.hint}>
+          Up to 75% you can give it yourself; more needs a manager or owner when the invoice is made. Enter 0 to remove it.</Text>
       </Modal>
 
       <Modal
@@ -428,6 +498,13 @@ const styles = StyleSheet.create({
   message: { ...typography.caption, color: colors.textSecondary, marginTop: spacing.sm },
   warn: { color: colors.warning, backgroundColor: colors.warningBg, padding: spacing.sm, borderRadius: radii.md },
   hint: { ...typography.caption, color: colors.textMuted, marginTop: spacing.sm },
+  modeRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
+  modeChip: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radii.full, borderWidth: 1, borderColor: colors.surfaceBorder },
+  modeChipOn: { borderColor: colors.primary, backgroundColor: colors.primaryGlow },
+  modeText: { ...typography.caption, color: colors.textSecondary },
+  modeTextOn: { color: colors.primary, fontFamily: fonts.semibold },
+  modeWarn: { ...typography.caption, color: colors.warning, fontFamily: fonts.semibold, marginBottom: spacing.xs },
+  modePreview: { ...typography.bodyBold, color: colors.text },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.md, paddingBottom: spacing.xl },
   tile: {
     flexBasis: 160, flexGrow: 1, maxWidth: 220, minHeight: 104, padding: spacing.md, borderRadius: radii.lg,

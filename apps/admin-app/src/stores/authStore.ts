@@ -49,6 +49,8 @@ interface AuthState {
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   switchBranch: (branchId: string, branchName: string) => Promise<void>;
+  /** Renames a branch on the server and everywhere it shows in the app (the header, the branch list, the saved session). */
+  renameBranch: (branchId: string, name: string) => Promise<void>;
 }
 
 const ADMIN_ROLES = new Set<string>([StaffRole.OWNER, StaffRole.MANAGER]);
@@ -82,7 +84,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         currentUser: user,
         branches,
         activeBranchId: saved.branchId,
-        activeBranchName: saved.branchName,
+        // The name as the server has it now: it may have been renamed on another device.
+        activeBranchName: branches.find((b) => b.id === saved.branchId)?.name ?? saved.branchName,
       });
     } catch (error) {
       // Offline at launch: keep the saved session rather than signing the user out.
@@ -138,6 +141,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const saved = await storage.get();
     if (saved) await storage.set({ ...saved, branchId, branchName });
     set({ activeBranchId: branchId, activeBranchName: branchName });
+  },
+
+  renameBranch: async (branchId, name) => {
+    const renamed = await apiClient.renameBranch(branchId, name);
+    const { activeBranchId, branches } = useAuthStore.getState();
+    const active = activeBranchId === branchId;
+    if (active) {
+      const saved = await storage.get();
+      if (saved) await storage.set({ ...saved, branchName: renamed.name });
+    }
+    set({
+      branches: branches.map((b) => (b.id === branchId ? { ...b, name: renamed.name } : b)),
+      ...(active ? { activeBranchName: renamed.name } : {}),
+    });
   },
 }));
 

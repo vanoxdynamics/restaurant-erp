@@ -570,9 +570,18 @@ export interface ApparelSale {
   total_paise: number;
   paid_paise: number;
   balance_due_paise: number;
+  /** Who the invoice is to, when a customer was put on it: printed on the invoice. */
+  customer?: ApparelSaleCustomer;
   lines: ApparelSaleLine[];
   payments: ApparelSalePayment[];
   created_at: string;
+}
+
+export interface ApparelSaleCustomer {
+  id: string;
+  name: string;
+  phone?: string;
+  gstin?: string;
 }
 
 export interface ApparelSaleLineInput {
@@ -610,6 +619,9 @@ export function adaptApparelSale(raw: Raw): ApparelSale {
     total_paise: toPaise(raw.grand_total),
     paid_paise: toPaise(raw.paid_amount),
     balance_due_paise: toPaise(raw.balance_due),
+    customer: raw.customer
+      ? { id: raw.customer.id, name: raw.customer.name, phone: raw.customer.phone ?? undefined, gstin: raw.customer.gstin ?? undefined }
+      : undefined,
     lines: (raw.lines ?? []).map((l: Raw): ApparelSaleLine => ({
       id: l.id, variant_id: l.variant_id, name: l.name_snapshot, size: l.size_snapshot, colour: l.colour_snapshot,
       barcode: l.barcode_snapshot ?? undefined, quantity: l.quantity, mrp_paise: optPaise(l.mrp_snapshot),
@@ -678,6 +690,10 @@ export const apparelSalesApi = {
   async reverse(paymentId: string, body: { reason: string; approver_pin?: string; details?: object; check_only?: boolean }): Promise<void> {
     await apiClient.request<Raw>('POST', `${P}/payments/${paymentId}/reverse`, { body: { ...body, approver_pin: body.approver_pin || undefined } });
   },
+  /** Puts a customer on the invoice, changes them, or takes them off (`null`). Not on a cancelled sale. */
+  async setCustomer(saleId: string, customerId: string | null): Promise<ApparelSale> {
+    return adaptApparelSale(await apiClient.request<Raw>('PUT', `${P}/sales/${saleId}/customer`, { body: { customer_id: customerId } }));
+  },
   /** Reason and PIN are only needed once a payment was attempted; a sale nobody tried to pay is cancelled on confirmation. */
   async void(saleId: string, reason?: string, approverPin?: string): Promise<ApparelSale> {
     return adaptApparelSale(await apiClient.request<Raw>('POST', `${P}/sales/${saleId}/void`, {
@@ -704,6 +720,18 @@ export function useApparelSale(id: string | undefined) {
 export function useCreateApparelSale() {
   return useApparelMutation(({ input, idempotencyKey }: { input: ApparelSaleInput; idempotencyKey: string }) =>
     apparelSalesApi.create(input, idempotencyKey));
+}
+
+/** Puts a customer on an invoice (or takes them off); their visits and spend change with it. */
+export function useSetApparelSaleCustomer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ saleId, customerId }: { saleId: string; customerId: string | null }) => apparelSalesApi.setCustomer(saleId, customerId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: APPAREL_KEYS.all });
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+    },
+  });
 }
 
 export function useVoidApparelSale() {
@@ -867,6 +895,16 @@ export interface ApparelLabelItem {
   copies: number;
 }
 
+export interface ApparelLabelOptions {
+  paper?: 'a4' | 'roll';
+  /** A4: labels across the sheet. */
+  columns?: number;
+  label_height_mm?: number;
+  /** Label printer: one sticker's width, and how many stickers across the roll. */
+  label_width_mm?: number;
+  across?: number;
+}
+
 export function adaptApparelDayReport(raw: Raw): ApparelDayReport {
   const s = raw.sales;
   return {
@@ -914,8 +952,11 @@ export const apparelReportsApi = {
       })),
     };
   },
-  /** The label sheet as a printable HTML page: open it in a window and print (A4 sticker sheets). */
-  labelsHtml(items: ApparelLabelItem[], options: { columns?: number; label_height_mm?: number } = {}): Promise<string> {
+  /**
+   * The labels as a printable HTML page: open it in a window and print. `paper` "a4" lays them out on an A4 sticker sheet;
+   * "roll" makes each page one row of stickers of the given size, for a label (sticker) printer.
+   */
+  labelsHtml(items: ApparelLabelItem[], options: ApparelLabelOptions = {}): Promise<string> {
     return apiClient.request<string>('POST', `${P}/labels`, { body: { items, ...options }, text: true });
   },
   async customerSales(customerId: string): Promise<ApparelPage<ApparelSale>> {

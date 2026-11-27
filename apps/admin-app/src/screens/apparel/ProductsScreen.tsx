@@ -100,7 +100,16 @@ function priceRange(variants: ApparelVariant[]) {
   return lo === hi ? money(lo) : `${money(lo)} – ${money(hi)}`;
 }
 
-const ProductEditor: React.FC<{ product: ApparelProduct | null; onClose: () => void }> = ({ product, onClose }) => {
+/**
+ * Create or edit a style. `initialName` fills the name of a new one; with `onCreated` a new style is handed back as soon as it is
+ * made (the receive-a-delivery form uses this to carry on with it) instead of staying open for editing.
+ */
+export const ProductEditor: React.FC<{
+  product: ApparelProduct | null;
+  onClose: () => void;
+  initialName?: string;
+  onCreated?: (product: ApparelProduct) => void;
+}> = ({ product, onClose, initialName, onCreated }) => {
   const categories = useApparelCategories();
   const createCategory = useCreateApparelCategory();
   const create = useCreateApparelProduct();
@@ -108,7 +117,7 @@ const ProductEditor: React.FC<{ product: ApparelProduct | null; onClose: () => v
   const addVariants = useAddApparelVariants();
   const [current, setCurrent] = useState<ApparelProduct | null>(product);
   const [form, setForm] = useState({
-    name: product?.name ?? '', brand: product?.brand ?? '', categoryId: product?.category_id ?? '', styleCode: product?.style_code ?? '',
+    name: product?.name ?? initialName ?? '', brand: product?.brand ?? '', categoryId: product?.category_id ?? '', styleCode: product?.style_code ?? '',
     hsn: product?.hsn_code ?? '', taxMode: (product?.tax_mode ?? 'slab') as ApparelTaxMode,
     taxRate: product?.tax_rate_percent !== undefined ? String(product.tax_rate_percent) : '',
     sizes: '', colours: '', price: '', mrp: '', newCategory: '',
@@ -133,7 +142,12 @@ const ProductEditor: React.FC<{ product: ApparelProduct | null; onClose: () => v
     setError(null);
     try {
       if (!current) {
-        setCurrent(await create.mutateAsync({ ...details, ...grid }));
+        const made = await create.mutateAsync({ ...details, ...grid });
+        if (onCreated) {
+          onCreated(made);
+          return;
+        }
+        setCurrent(made);
       } else {
         let saved = await update.mutateAsync({ id: current.id, changes: { ...details, tax_rate_percent: form.taxMode === 'fixed' ? Number(form.taxRate) : null } });
         if (sizes.length) saved = await addVariants.mutateAsync({ productId: current.id, grid });

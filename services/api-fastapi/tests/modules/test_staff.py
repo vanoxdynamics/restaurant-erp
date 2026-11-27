@@ -221,6 +221,21 @@ async def test_roster_needs_a_device_token_and_shows_only_this_branch(
     assert (await client.get(f"{API}/staff/auth/roster", headers={"X-Device-Token": user_token})).status_code == 401
 
 
+async def test_a_linked_device_sees_its_branch_name_after_a_rename(client, branch, manager, owner):
+    token = await _link_device(client, manager, branch)
+    r = await client.get(f"{API}/staff/auth/device", headers={"X-Device-Token": token})
+    assert r.status_code == 200
+    assert r.json() == {"branch_id": str(branch.id), "branch_name": branch.name, "branch_code": branch.code}
+
+    renamed = await client.patch(f"{API}/floor/branches/{branch.id}", json={"name": "Koramangala"}, headers=auth_headers(owner))
+    assert renamed.status_code == 200, renamed.text
+    r = await client.get(f"{API}/staff/auth/device", headers={"X-Device-Token": token})
+    assert r.json()["branch_name"] == "Koramangala"
+
+    assert (await client.get(f"{API}/staff/auth/device")).status_code == 401
+    assert (await client.get(f"{API}/staff/auth/device", headers={"X-Device-Token": "garbage"})).status_code == 401
+
+
 async def test_device_token_is_not_a_user_session(client, branch, manager):
     token = await _link_device(client, manager, branch)
     r = await client.get(f"{API}/staff/me", headers={"Authorization": f"Bearer {token}"})

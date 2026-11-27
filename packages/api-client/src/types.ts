@@ -880,7 +880,8 @@ export interface CustomerInput {
 
 export interface CustomerBill {
   id: string;
-  order_id: string;
+  /** The restaurant order; null for a dress shop invoice. */
+  order_id: string | null;
   bill_number: string;
   business_date: string;
   grand_total_paise: number;

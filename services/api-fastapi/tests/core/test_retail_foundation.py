@@ -1,5 +1,6 @@
 """Stage F of the shop modules: new categories, category guard, extra cash sources, document numbering, shop receipts."""
 
+import re
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -14,6 +15,7 @@ from app.core.entitlements import invalidate_entitlements
 from app.core.enums import BusinessCategory, Role
 from app.core.errors import NotFound
 from app.core.numbering import next_document_number
+from app.main import app
 from app.models import Organization, Shift
 from app.modules.retailkit import receipt as rk
 from tests import factories
@@ -161,3 +163,26 @@ def test_shop_receipt_igst_round_off_and_footer():
     text = rk.render_text(receipt, 80)
     assert "IGST" in text and "CGST" not in text and "Round off" in text and "-0.40" in text
     assert "Valid until 01 Dec 2026" in text and "On account" in text and "You saved" not in text
+
+
+def shop_routes():
+    """Every dress-shop and hardware endpoint, wherever its router lives (Pine Labs adds /apparel routes of its own)."""
+    for path, ops in app.openapi()["paths"].items():
+        if re.match(rf"{API}/(apparel|hardware)(/|$)", path):
+            for method in sorted(ops):
+                if method in {"get", "post", "put", "patch", "delete"}:
+                    yield method.upper(), path
+
+
+async def test_restaurant_cannot_reach_any_shop_module_route(client, cashier):
+    """A restaurant (the fixtures' default category) gets 404 wrong_business_category from every shop route."""
+    routes = list(shop_routes())
+    assert any("/apparel/" in p for _, p in routes) and any("/hardware/" in p for _, p in routes)
+    leaks = []
+    for method, path in routes:
+        url = re.sub(r"\{[^}]+\}", str(uuid.uuid4()), path)
+        r = await client.request(method, url, headers=auth_headers(cashier), json={} if method in {"POST", "PUT", "PATCH"} else None)
+        code = r.json().get("error", {}).get("code") if r.headers.get("content-type", "").startswith("application/json") else None
+        if r.status_code != 404 or code != "wrong_business_category":
+            leaks.append(f"{method} {path} -> {r.status_code} {code}")
+    assert leaks == []

@@ -101,6 +101,11 @@ class BranchCreate(BranchBase):
     pass
 
 
+class BranchUpdate(BaseModel):
+    """What an owner may change on a branch from the admin app: its name (shown in the apps and printed on bills)."""
+    name: Name100
+
+
 class BranchRead(BranchBase):
     id: uuid.UUID
     created_at: datetime

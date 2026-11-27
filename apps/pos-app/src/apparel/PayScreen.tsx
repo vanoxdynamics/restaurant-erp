@@ -3,14 +3,23 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useQueryClient } from '@tanstack/react-query';
 import { Button, colors, Modal, radii, spacing, typography } from '@repo/shared-ui';
 import { formatPaiseToRupees } from '@repo/shared-utils';
-import { ApiError, apparelSalesApi, ApparelSale, TerminalOutcome, useApparelSale, useVoidApparelSale } from '@repo/api-client';
+import {
+  ApiError, apparelSalesApi, ApparelSale, Customer, TerminalOutcome, useApparelSale, useSetApparelSaleCustomer, useVoidApparelSale,
+} from '@repo/api-client';
+import { CustomerSheet } from '../components/CustomerSheet';
 import { QueryState } from '../components/QueryState';
 import { TopBar } from '../components/TopBar';
 import { PayPanel, Row, type TenderApi, type TenderSale } from '../retailkit/PayPanel';
 import { cloudCalls } from '../retailkit/cloudCharge';
+import { cartSignature, useApparelCartStore } from './apparelCartStore';
 import { StoreCreditTender } from './StoreCreditTender';
 
 const money = (paise: number) => formatPaiseToRupees(paise);
+
+/** The invoice's customer as the customer sheet expects one (only the id is used to mark them as current). */
+const asCustomer = (c: NonNullable<ApparelSale['customer']>): Customer => ({
+  id: c.id, name: c.name, phone: c.phone, gstin: c.gstin, is_active: true, visits: 0, total_spent_paise: 0, created_at: '',
+});
 
 export interface PayScreenProps {
   saleId: string;
@@ -41,6 +50,27 @@ export const PayScreen: React.FC<PayScreenProps> = ({ saleId, credit, onBack, on
 
   const [voiding, setVoiding] = useState(false);
   const [voidError, setVoidError] = useState<string | null>(null);
+  const [customerOpen, setCustomerOpen] = useState(false);
+  const [customerError, setCustomerError] = useState<string | null>(null);
+  const setCustomer = useSetApparelSaleCustomer();
+
+  /** Puts the chosen customer on the invoice (or takes them off): printed on it and counted in their visits. */
+  const pickCustomer = async (picked: Customer | null) => {
+    setCustomerError(null);
+    try {
+      await setCustomer.mutateAsync({ saleId, customerId: picked?.id ?? null });
+      // The cart behind this invoice carries the same customer, so going back to it does not count as a change (and an invoice
+      // made again from it keeps the customer).
+      const cart = useApparelCartStore.getState();
+      if (cart.pendingSale?.id === saleId) {
+        cart.setCustomer(picked);
+        cart.setPendingSale({ ...cart.pendingSale, signature: cartSignature({ ...cart, customer: picked }) });
+      }
+      setCustomerOpen(false);
+    } catch (e) {
+      setCustomerError(e instanceof ApiError ? e.message : 'Could not save the customer. Try again.');
+    }
+  };
 
   /** Every tender changes the sale: fetch it again so the panel shows what the server now says. */
   const refreshed = async <T,>(work: Promise<T>): Promise<T> => {
@@ -89,6 +119,25 @@ export const PayScreen: React.FC<PayScreenProps> = ({ saleId, credit, onBack, on
       <QueryState query={query} isEmpty={!sale} emptyText="Sale not found.">
         {sale ? (
           <ScrollView contentContainerStyle={styles.body}>
+            {sale.status !== 'voided' ? (
+              <View style={styles.customer}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.customerTitle} numberOfLines={1}>{sale.customer ? sale.customer.name : 'Customer'}</Text>
+                  <Text style={styles.customerMeta} numberOfLines={1}>
+                    {sale.customer
+                      ? [sale.customer.phone, sale.customer.gstin ? `GSTIN ${sale.customer.gstin}` : null].filter(Boolean).join(' · ') || 'On this invoice'
+                      : 'Add a name or phone to the invoice'}
+                  </Text>
+                  {customerError ? <Text style={styles.error}>{customerError}</Text> : null}
+                </View>
+                <Button
+                  title={sale.customer ? 'Change' : 'Add customer'}
+                  variant="secondary"
+                  size="sm"
+                  onPress={() => { setCustomerError(null); setCustomerOpen(true); }}
+                />
+              </View>
+            ) : null}
             <PayPanel
               sale={asTenderSale(sale)}
               api={api}
@@ -130,6 +179,14 @@ export const PayScreen: React.FC<PayScreenProps> = ({ saleId, credit, onBack, on
         ) : null}
       </QueryState>
 
+      <CustomerSheet
+        visible={customerOpen}
+        current={sale?.customer ? asCustomer(sale.customer) : undefined}
+        onClose={() => setCustomerOpen(false)}
+        onPick={pickCustomer}
+        busy={setCustomer.isPending}
+      />
+
       <Modal
         centered
         visible={voiding}
@@ -154,6 +211,12 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   confirm: { ...typography.body, color: colors.textSecondary },
   body: { padding: spacing.lg, gap: spacing.md, maxWidth: 720, width: '100%', alignSelf: 'center' },
+  customer: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.lg, borderRadius: radii.lg,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.surfaceBorder,
+  },
+  customerTitle: { ...typography.bodyBold, color: colors.text },
+  customerMeta: { ...typography.caption, color: colors.textSecondary },
   summary: { gap: spacing.xs, marginVertical: spacing.sm },
   rule: { height: 1, backgroundColor: colors.surfaceBorder, marginVertical: spacing.xs, borderRadius: radii.full },
   voided: { ...typography.caption, color: colors.danger, textAlign: 'center' },

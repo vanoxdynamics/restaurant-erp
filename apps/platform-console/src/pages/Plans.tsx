@@ -2,13 +2,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, type GlobalModule, type Plan } from '../api';
 import { useCan } from '../auth';
-import { money } from '../format';
+import { label, money } from '../format';
+import { groupByBusinessType } from '../modules';
 import { Badge, ErrorBox, Field, Loading, Modal, PageHead, useToast } from '../ui';
 
 export function PlansPage() {
   const can = useCan();
   const plans = useQuery({ queryKey: ['plans'], queryFn: api.plans });
   const modules = useQuery({ queryKey: ['modules'], queryFn: api.modules });
+  const categories = useQuery({ queryKey: ['business-categories'], queryFn: api.businessCategories, staleTime: Infinity });
+  const typeName = (k: string) => categories.data?.categories.find((c) => c.key === k)?.name ?? label(k);
+  const moduleName = (k: string) => modules.data?.find((m) => m.key === k)?.name ?? k;
   const [editing, setEditing] = useState<Plan | 'new' | null>(null);
   if (plans.isLoading || modules.isLoading) return <Loading />;
 
@@ -29,7 +33,7 @@ export function PlansPage() {
                 <td>{money(p.price_monthly, p.currency)}</td>
                 <td>{money(p.price_yearly, p.currency)}</td>
                 <td>{p.max_branches ?? '∞'} branches · {p.max_staff ?? '∞'} staff</td>
-                <td>{p.module_keys.map((k) => <Badge key={k} value={k} tone="info" />)}</td>
+                <td>{p.module_keys.map((k) => <span key={k} className="badge info" style={{ marginRight: 4 }}>{moduleName(k)}</span>)}</td>
                 <td>{p.subscribers}</td>
                 <td className="right">{can.manageBilling && <button className="btn small" onClick={() => setEditing(p)}>Edit</button>}</td>
               </tr>
@@ -37,12 +41,13 @@ export function PlansPage() {
           </tbody>
         </table>
       </div>
-      {editing && modules.data && <PlanDialog plan={editing === 'new' ? null : editing} modules={modules.data} onClose={() => setEditing(null)} />}
+      <p className="muted">Core modules (Point of sale, the shop counters) are on for every subscriber of their business type and need no plan. A subscriber only gets the modules of its own business type.</p>
+      {editing && modules.data && <PlanDialog plan={editing === 'new' ? null : editing} modules={modules.data} typeName={typeName} onClose={() => setEditing(null)} />}
     </>
   );
 }
 
-function PlanDialog({ plan, modules, onClose }: { plan: Plan | null; modules: GlobalModule[]; onClose: () => void }) {
+function PlanDialog({ plan, modules, typeName, onClose }: { plan: Plan | null; modules: GlobalModule[]; typeName: (key: string) => string; onClose: () => void }) {
   const toast = useToast();
   const qc = useQueryClient();
   const [f, setF] = useState({
@@ -93,11 +98,21 @@ function PlanDialog({ plan, modules, onClose }: { plan: Plan | null; modules: Gl
         </div>
         <div className="field">
           <span className="label">Modules</span>
-          {modules.map((m) => (
-            <label key={m.key} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input type="checkbox" checked={m.is_core || keys.includes(m.key)} disabled={m.is_core} onChange={() => toggle(m.key)} />
-              <span><strong>{m.name}</strong> <span className="muted">— {m.description}{m.is_core ? ' (always included)' : ''}</span></span>
-            </label>
+          <span className="hint">Grouped by business type. A subscriber gets only the ticked modules of its own type.</span>
+          {groupByBusinessType(modules, typeName).map((g) => (
+            <div key={g.label}>
+              <div className="module-group">{g.label}</div>
+              <ul className="module-pick">
+                {g.modules.map((m) => (
+                  <li key={m.key}>
+                    <label>
+                      <input type="checkbox" checked={m.is_core || keys.includes(m.key)} disabled={m.is_core} onChange={() => toggle(m.key)} />
+                      <span><strong>{m.name}</strong>{m.is_core && <> <Badge value="always on" /></>}<span className="muted" style={{ display: 'block' }}>{m.description}</span></span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ))}
         </div>
         {plan && (

@@ -218,3 +218,18 @@ tbody tr.link:hover { background: var(--surface-2); cursor: pointer; }
 .diff-no { color: var(--bad); font-weight: 600; }
 .dim-row td { color: var(--muted); }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } .switch span, .switch span::after { transition: none; } }
+
+/* horizontal bar list (dashboard breakdowns) */
+.bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.bars li { display: grid; grid-template-columns: minmax(0, 11rem) 1fr 2.5rem; align-items: center; gap: 10px; }
+.bars li a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bars li strong { text-align: right; font-variant-numeric: tabular-nums; }
+.bars .bar { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.bars .bar span { display: block; height: 100%; border-radius: 99px; background: var(--info); min-width: 4px; }
+
+/* module checklist (onboarding, plans) */
+.module-pick { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 6px; }
+.module-pick label { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+.module-pick input { margin-top: 3px; }
+.module-pick input:disabled + span { cursor: default; }
+.module-group { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }

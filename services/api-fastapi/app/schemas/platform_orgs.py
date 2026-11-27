@@ -90,6 +90,7 @@ class BusinessCategoryRead(BaseModel):
     key: str
     name: str
     settings: Dict[str, bool]
+    modules: List[str] = []  # the modules a business of this type can have (core ones included)
 
 
 class BusinessCategories(BaseModel):
@@ -110,6 +111,9 @@ class OrganizationCreate(BaseModel):
     start: Literal["trial", "active"] = "trial"
     trial_days: Optional[int] = Field(default=None, ge=1, le=90)
     price_amount: Optional[Price] = None  # custom price for the chosen term; defaults to the plan price
+    # Add-on modules switched on or off for this business, against what the plan gives. Only modules of the business's type;
+    # each choice that differs from the plan is saved as an override.
+    modules: Optional[Dict[ModuleKey, bool]] = None
     owner: OwnerSeed
 
     @field_validator("slug")
@@ -293,6 +297,7 @@ class GlobalModuleRead(BaseModel):
     key: str
     name: str
     description: str
+    business_types: List[str]
     is_core: bool
     depends_on: List[str]
     globally_enabled: bool
@@ -320,8 +325,20 @@ class BulkModuleResult(BaseModel):
 # --- dashboard -------------------------------------------------------------------------------------
 
 
+class PineLabsCloudStatus(BaseModel):
+    configured: bool
+    missing: List[str]  # names of the unset settings, never their values
+    environment: str  # "uat" or "production", from the base URL
+    min_amount: str  # no terminal request below this amount
+
+
+class IntegrationsStatus(BaseModel):
+    pinelabs_cloud: PineLabsCloudStatus
+
+
 class Dashboard(BaseModel):
     organizations_by_status: Dict[str, int]
+    organizations_by_category: Dict[str, int] = {}  # business type -> subscribers that are not cancelled
     subscriptions_by_status: Dict[str, int]
     subscriptions_by_term: Dict[str, int]
     mrr: Dict[str, str]  # currency -> monthly recurring revenue
@@ -332,6 +349,7 @@ class Dashboard(BaseModel):
     outstanding: Dict[str, str] = {}  # unpaid invoice balance per currency
     open_invoices: int = 0
     overdue_invoices: int = 0
+    integrations: Optional[IntegrationsStatus] = None
 
 
 class SubscriptionUpdated(BaseModel):

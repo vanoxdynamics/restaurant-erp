@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.business import CATEGORY_LABELS, PRESETS, SETTING_LABELS
+from app.core.modules import MODULES, modules_for
 from app.core.database import get_db
 from app.core.enums import BillingTerm, BusinessCategory, PlatformRole
 from app.core.idempotency import IdempotencyGuard
@@ -171,7 +172,8 @@ async def bulk_modules(body: BulkModuleBody, request: Request, actor: PlatformPr
 async def business_categories():
     """The categories a subscriber can be, with the workflow settings each one presets."""
     return BusinessCategories(
-        categories=[{"key": c.value, "name": CATEGORY_LABELS[c.value], "settings": PRESETS[c.value]} for c in BusinessCategory],
+        categories=[{"key": c.value, "name": CATEGORY_LABELS[c.value], "settings": PRESETS[c.value],
+                     "modules": [k.value for k in MODULES if k.value in modules_for(c.value)]} for c in BusinessCategory],
         setting_labels=SETTING_LABELS,
     )
 

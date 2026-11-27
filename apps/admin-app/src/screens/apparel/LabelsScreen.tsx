@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, colors, fonts, Input, radii, spacing, typography } from '@repo/shared-ui';
 import { formatPaiseToRupees } from '@repo/shared-utils';
-import { ApiError, apparelReportsApi, useApparelPurchases, useApparelStock } from '@repo/api-client';
+import { ApiError, ApparelLabelOptions, apparelReportsApi, useApparelPurchases, useApparelStock } from '@repo/api-client';
 import { QueryState } from '../../components/QueryState';
 import { useAuthStore } from '../../stores/authStore';
 
@@ -21,8 +21,50 @@ export function openPrintable(html: string): boolean {
   return true;
 }
 
+/** Sticker sizes most label printer rolls come in (width x height, mm). */
+const ROLL_SIZES: [number, number][] = [[50, 25], [38, 25], [50, 30], [50, 38], [75, 50]];
+
+interface PrinterSetup {
+  paper: 'a4' | 'roll';
+  columns: number;
+  width: number;
+  height: number;
+  across: number;
+}
+
+const DEFAULT_SETUP: PrinterSetup = { paper: 'a4', columns: 3, width: 50, height: 25, across: 1 };
+const SETUP_KEY = 'vanox.labelPrinter';
+
+/** The printer set up last time on this computer (web only), so the shop picks its sticker size once. */
+function loadSetup(): PrinterSetup {
+  try {
+    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem(SETUP_KEY);
+      if (saved) return { ...DEFAULT_SETUP, ...JSON.parse(saved) };
+    }
+  } catch {
+    // a broken saved value: start from the default
+  }
+  return DEFAULT_SETUP;
+}
+
+function saveSetup(setup: PrinterSetup) {
+  try {
+    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') localStorage.setItem(SETUP_KEY, JSON.stringify(setup));
+  } catch {
+    // private mode or storage full: the choice just is not remembered
+  }
+}
+
+const Choice: React.FC<{ label: string; on: boolean; onPress: () => void }> = ({ label, on, onPress }) => (
+  <Pressable onPress={onPress} accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={label}
+    style={[styles.colChoice, on ? styles.colChoiceOn : null]}>
+    <Text style={[styles.meta, on ? { color: colors.primary, fontFamily: fonts.semibold } : null]}>{label}</Text>
+  </Pressable>
+);
+
 /**
- * Barcode labels for A4 sticker sheets. Pick the variants and how many labels of each (or take everything from the last
+ * Barcode labels, for A4 sticker sheets or a label (sticker) printer. Pick the variants and how many labels of each (or take everything from the last
  * delivery), then print: the server makes the page, the browser's print dialog prints it. A tag scanned at the counter finds
  * the exact size and colour.
  */
@@ -30,7 +72,12 @@ export const LabelsScreen: React.FC = () => {
   const branchId = useAuthStore((s) => s.activeBranchId) ?? undefined;
   const [search, setSearch] = useState('');
   const [copies, setCopies] = useState<Record<string, number>>({});
-  const [columns, setColumns] = useState(3);
+  const [setup, setSetupState] = useState<PrinterSetup>(loadSetup);
+  const setSetup = (changes: Partial<PrinterSetup>) => setSetupState((s) => {
+    const next = { ...s, ...changes };
+    saveSetup(next);
+    return next;
+  });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
   const stock = useApparelStock({ branch_id: branchId, search: search.trim() || undefined }, !!branchId);
@@ -58,7 +105,10 @@ export const LabelsScreen: React.FC = () => {
     setBusy(true);
     setMessage(null);
     try {
-      const html = await apparelReportsApi.labelsHtml(chosen.map(([variant_id, c]) => ({ variant_id, copies: c })), { columns });
+      const options: ApparelLabelOptions = setup.paper === 'roll'
+        ? { paper: 'roll', label_width_mm: setup.width, label_height_mm: setup.height, across: setup.across }
+        : { paper: 'a4', columns: setup.columns };
+      const html = await apparelReportsApi.labelsHtml(chosen.map(([variant_id, c]) => ({ variant_id, copies: c })), options);
       if (!openPrintable(html)) setMessage({ text: 'Printing works from the web admin. Open this page in a browser.', error: true });
     } catch (e) {
       setMessage({ text: errorText(e), error: true });
@@ -108,14 +158,33 @@ export const LabelsScreen: React.FC = () => {
 
       <View style={styles.foot}>
         <View style={styles.cols}>
-          <Text style={styles.meta}>Labels across</Text>
-          {[2, 3, 4].map((n) => (
-            <Pressable key={n} onPress={() => setColumns(n)} accessibilityRole="radio" accessibilityState={{ selected: columns === n }}
-              accessibilityLabel={`${n} across`} style={[styles.colChoice, columns === n ? styles.colChoiceOn : null]}>
-              <Text style={[styles.meta, columns === n ? { color: colors.primary, fontFamily: fonts.semibold } : null]}>{n}</Text>
-            </Pressable>
-          ))}
+          <Text style={styles.meta}>Print on</Text>
+          <Choice label="A4 sticker sheet" on={setup.paper === 'a4'} onPress={() => setSetup({ paper: 'a4' })} />
+          <Choice label="Label printer" on={setup.paper === 'roll'} onPress={() => setSetup({ paper: 'roll' })} />
         </View>
+        {setup.paper === 'a4' ? (
+          <View style={styles.cols}>
+            <Text style={styles.meta}>Labels across</Text>
+            {[2, 3, 4].map((n) => <Choice key={n} label={String(n)} on={setup.columns === n} onPress={() => setSetup({ columns: n })} />)}
+          </View>
+        ) : (
+          <>
+            <View style={styles.cols}>
+              <Text style={styles.meta}>Sticker size (mm)</Text>
+              {ROLL_SIZES.map(([w, h]) => (
+                <Choice key={`${w}x${h}`} label={`${w} × ${h}`} on={setup.width === w && setup.height === h}
+                  onPress={() => setSetup({ width: w, height: h })} />
+              ))}
+            </View>
+            <View style={styles.cols}>
+              <Text style={styles.meta}>Stickers across the roll</Text>
+              {[1, 2].map((n) => <Choice key={n} label={String(n)} on={setup.across === n} onPress={() => setSetup({ across: n })} />)}
+            </View>
+            <Text style={styles.meta}>
+              In the print window choose your label printer, set margins to None and scale to 100%. The paper size should be {setup.width * setup.across + 2 * (setup.across - 1)} × {setup.height} mm.
+            </Text>
+          </>
+        )}
         {message ? <Text style={[styles.meta, message.error ? { color: colors.danger } : null]}>{message.text}</Text> : null}
         <View style={styles.actions}>
           {total > 0 ? <Button title="Clear" variant="ghost" onPress={() => setCopies({})} /> : null}
@@ -140,7 +209,7 @@ const styles = StyleSheet.create({
   stepText: { ...typography.bodyBold, color: colors.text },
   count: { ...typography.bodyBold, minWidth: 32, textAlign: 'center', color: colors.text },
   foot: { gap: spacing.sm, padding: spacing.lg, borderTopWidth: 1, borderTopColor: colors.surfaceBorder, backgroundColor: colors.surface },
-  cols: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  cols: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
   colChoice: { minWidth: 36, minHeight: 32, paddingHorizontal: spacing.sm, borderRadius: radii.sm, borderWidth: 1, borderColor: colors.surfaceBorder, alignItems: 'center', justifyContent: 'center' },
   colChoiceOn: { borderColor: colors.primary, backgroundColor: colors.primaryGlow },
 });

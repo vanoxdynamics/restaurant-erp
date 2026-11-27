@@ -25,7 +25,7 @@ from app.core.business import effective_settings
 from app.core.config import settings
 from app.core.enums import BillingTerm, OrgStatus, SubscriptionStatus
 from app.core.errors import Forbidden
-from app.core.modules import ALL_MODULES, CORE_MODULES, resolve_dependencies
+from app.core.modules import ALL_MODULES, core_modules_for, modules_for, resolve_dependencies
 from app.models.organization import Organization
 from app.models.subscription import OrganizationModule, Plan, PlanModule, PlatformModule, Subscription
 
@@ -126,7 +126,7 @@ async def compute_entitlements(db: AsyncSession, org_id: uuid.UUID) -> Entitleme
     sub = await db.scalar(select(Subscription).where(Subscription.organization_id == org_id))
     if sub is None:  # no subscription on record: fail closed to core, read-only
         return Entitlements(
-            organization_id=str(org_id), org_status=org.status, access=READ_ONLY, modules=CORE_MODULES, **business,
+            organization_id=str(org_id), org_status=org.status, access=READ_ONLY, modules=core_modules_for(org.category), **business,
         )
 
     plan = await db.get(Plan, sub.plan_id)
@@ -144,8 +144,9 @@ async def compute_entitlements(db: AsyncSession, org_id: uuid.UUID) -> Entitleme
         (enabled.add if override.enabled else enabled.discard)(override.module_key)
     # Platform-wide kill switch beats plans and overrides (but never core modules).
     killed = frozenset((await db.scalars(select(PlatformModule.module_key).where(PlatformModule.enabled.is_(False)))).all())
-    # Core modules cannot be switched off; everything else must have its dependencies on.
-    modules = resolve_dependencies((frozenset(enabled) - killed) | CORE_MODULES)
+    # Core modules cannot be switched off; everything else must have its dependencies on. A business only ever gets the
+    # modules of its own type, whatever its plan or overrides list.
+    modules = resolve_dependencies(((frozenset(enabled) - killed) | core_modules_for(org.category)) & modules_for(org.category))
 
     access, effective_status, grace_until, change_at = _evaluate_subscription(sub, now)
     return Entitlements(

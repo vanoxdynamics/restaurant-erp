@@ -425,3 +425,22 @@ async def test_import_limits(client, shop):
     r = await client.post(f"{A}/import", json={"csv": "name,category,size,price\nA,B,M,1", "branch_id": str(uuid.uuid4())},
                           headers=owner)
     assert r.status_code == 403
+
+
+async def test_a_blank_hsn_means_none_and_a_bad_one_names_the_field(client, shop):
+    """The admin form sends "" for an empty HSN box: that is no HSN code, not an error."""
+    cat = await category(client, shop["owner"])
+    owner = auth_headers(shop["owner"])
+    body = {"category_id": cat["id"], "name": "Plain kurta", "sizes": ["M"], "price": "499.00", "hsn_code": ""}
+    r = await client.post(f"{A}/products", json=body, headers=owner)
+    assert r.status_code == 201, r.text
+    made = r.json()
+    assert made["hsn_code"] is None
+    r = await client.patch(f"{A}/products/{made['id']}", json={"hsn_code": " 6211 "}, headers=owner)
+    assert r.status_code == 200 and r.json()["hsn_code"] == "6211"
+    r = await client.patch(f"{A}/products/{made['id']}", json={"hsn_code": ""}, headers=owner)  # cleared again
+    assert r.status_code == 200 and r.json()["hsn_code"] is None
+    r = await client.post(f"{A}/products", json={**body, "hsn_code": "62"}, headers=owner)
+    assert r.status_code == 422
+    error = r.json()["detail"][0]
+    assert error["loc"][-1] == "hsn_code" and "HSN code must be 4 to 8 digits" in error["msg"]

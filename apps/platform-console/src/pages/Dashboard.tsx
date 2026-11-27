@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { api } from '../api';
+import { api, type Dashboard, type PineLabsCloudStatus } from '../api';
 import { date, label, money, relativeDays } from '../format';
 import { Badge, ErrorBox, Loading, PageHead } from '../ui';
 
 export function DashboardPage() {
   const { data, error, isLoading } = useQuery({ queryKey: ['dashboard'], queryFn: api.dashboard });
+  const categories = useQuery({ queryKey: ['business-categories'], queryFn: api.businessCategories, staleTime: Infinity });
   if (isLoading) return <Loading />;
   if (error || !data) return <ErrorBox error={error} />;
 
@@ -56,6 +57,12 @@ export function DashboardPage() {
       </div>
 
       <div className="grid cols-2" style={{ marginTop: 16 }}>
+        <BusinessTypes counts={data.organizations_by_category ?? {}}
+          name={(k) => categories.data?.categories.find((c) => c.key === k)?.name ?? label(k)} />
+        <PaymentsIntegration status={data.integrations?.pinelabs_cloud} />
+      </div>
+
+      <div className="grid cols-2" style={{ marginTop: 16 }}>
         <section className="card">
           <div className="card-head"><h2>Renewals in the next 30 days</h2></div>
           {data.renewals_next_30_days.length === 0 ? <div className="empty">No renewals due.</div> : (
@@ -98,5 +105,52 @@ export function DashboardPage() {
         </section>
       </div>
     </>
+  );
+}
+
+/** Subscribers per business type (restaurants, cafés, dress and hardware shops…), each linking to the filtered list. */
+function BusinessTypes({ counts, name }: { counts: NonNullable<Dashboard['organizations_by_category']>; name: (key: string) => string }) {
+  const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const max = Math.max(1, ...rows.map(([, n]) => n));
+  return (
+    <section className="card">
+      <div className="card-head"><h2>Business types</h2></div>
+      {rows.length === 0 ? <div className="empty">No subscribers yet.</div> : (
+        <ul className="bars">
+          {rows.map(([key, n]) => (
+            <li key={key}>
+              <Link to={`/subscribers?category=${encodeURIComponent(key)}`}>{name(key)}</Link>
+              <span className="bar" aria-hidden="true"><span style={{ width: `${(n / max) * 100}%` }} /></span>
+              <strong>{n}</strong>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="muted" style={{ marginBottom: 0 }}>Cancelled subscribers are not counted.</p>
+    </section>
+  );
+}
+
+/** Pine Labs cloud (card and UPI on the shop's terminal) is set up once for the platform, in the API server's environment. */
+function PaymentsIntegration({ status }: { status: PineLabsCloudStatus | undefined }) {
+  return (
+    <section className="card">
+      <div className="card-head"><h2>Card &amp; UPI payments</h2></div>
+      {!status ? <div className="empty">Status not reported by this API version.</div> : (
+        <>
+          <p style={{ marginTop: 0 }}>
+            <strong>Pine Labs cloud</strong>{' '}
+            {status.configured ? <Badge value="configured" tone="good" /> : <Badge value="not configured" tone="warn" />}{' '}
+            <Badge value={status.environment === 'uat' ? 'UAT (test)' : 'production'} tone={status.environment === 'uat' ? 'info' : undefined} />
+          </p>
+          {status.configured
+            ? <p className="muted">Counters without a paired terminal send card and UPI payments through the cloud. Requests under {money(status.min_amount)} are taken in cash.</p>
+            : <p className="muted">Card and UPI through the cloud fail until these are set in the API server's environment: {status.missing.map((m) => <code key={m} style={{ marginRight: 6 }}>{m}</code>)}</p>}
+          {status.configured && status.environment === 'uat' && (
+            <div className="alert warn" role="status" style={{ marginBottom: 0 }}>Payments go to the Pine Labs UAT server: no real money moves. Point the base URL at production before going live.</div>
+          )}
+        </>
+      )}
+    </section>
   );
 }

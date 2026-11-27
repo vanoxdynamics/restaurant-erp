@@ -78,8 +78,11 @@ def code128_modules(text: str) -> str:
     return "".join(out)
 
 
-def _svg(modules: str, caption: str, *, quiet: int, height: int = 50) -> str:
-    """Bars as rectangles, one unit per module, with the human-readable text under them."""
+def _svg(modules: str, caption: str, *, quiet: int, height: int = 50, stretch: bool = False) -> str:
+    """
+    Bars as rectangles, one unit per module, with the human-readable text under them. With `stretch` the SVG holds the bars
+    only and may be stretched to any box (bars keep their proportions across, so it still scans); the page prints the digits.
+    """
     width = len(modules) + 2 * quiet
     rects = []
     i = 0
@@ -92,6 +95,12 @@ def _svg(modules: str, caption: str, *, quiet: int, height: int = 50) -> str:
             i = j
         else:
             i += 1
+    if stretch:
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" preserveAspectRatio="none" class="barcode" '
+            f'shape-rendering="crispEdges" role="img" aria-label="{html.escape(caption)}">'
+            f'<rect width="{width}" height="{height}" fill="#fff"/><g fill="#000">{"".join(rects)}</g></svg>'
+        )
     text_y = height + 9
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height + 11}" class="barcode" '
@@ -102,9 +111,9 @@ def _svg(modules: str, caption: str, *, quiet: int, height: int = 50) -> str:
     )
 
 
-def ean13_svg(code: str) -> str:
-    return _svg(ean13_modules(code), code, quiet=11)
+def ean13_svg(code: str, *, stretch: bool = False) -> str:
+    return _svg(ean13_modules(code), code, quiet=11, stretch=stretch)
 
 
-def code128_svg(text: str) -> str:
-    return _svg(code128_modules(text), text, quiet=10)
+def code128_svg(text: str, *, stretch: bool = False) -> str:
+    return _svg(code128_modules(text), text, quiet=10, stretch=stretch)

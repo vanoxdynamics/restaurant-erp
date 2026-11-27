@@ -157,9 +157,25 @@ async def test_a_label_sheet_has_every_label_with_a_barcode_that_scans(client, s
     assert bc.is_ean13(s["barcode"])  # in-store codes carry a valid check digit
     assert page.count(f'aria-label="{s["barcode"]}"') == 3 and page.count('aria-label="ARROW-M-01"') == 2
     # The bars drawn are exactly the symbol of the code: scanning them gives the number printed under them.
-    bars = bc.ean13_svg(s["barcode"])
-    assert bars in page
-    assert bc.code128_svg("ARROW-M-01") in page
+    # The label stretches the bars to fill its free space and prints the digits under them as text.
+    assert f'{bc.ean13_svg(s["barcode"], stretch=True)}<div class="digits">{s["barcode"]}</div>' in page
+    assert f'{bc.code128_svg("ARROW-M-01", stretch=True)}<div class="digits">ARROW-M-01</div>' in page
+    assert 'preserveAspectRatio="none"' in page and "max-width: 50mm" in page
+
+
+async def test_labels_for_a_label_printer_are_one_row_of_stickers_per_page(client, shop):
+    v = (await style(client, shop, sizes=["M"]))["variants"][0]
+    r = await labels(client, shop["manager"], [{"variant_id": v["id"], "copies": 3}], paper="roll", label_width_mm=50, label_height_mm=25)
+    assert r.status_code == 200, r.text
+    page = r.text
+    assert "size: 50mm 25mm; margin: 0" in page and "A4" not in page and "dashed" not in page
+    assert page.count('class="row"') == 3 and page.count('class="label"') == 3
+
+    # Two across: the page is both stickers and the gap between them; 3 labels make 2 rows.
+    r = await labels(client, shop["manager"], [{"variant_id": v["id"], "copies": 3}], paper="roll", label_width_mm=38,
+                     label_height_mm=25, across=2)
+    assert "size: 78mm 25mm" in r.text and r.text.count('class="row"') == 2
+    assert (await labels(client, shop["manager"], [{"variant_id": v["id"]}], paper="tape")).status_code == 422
 
 
 async def test_labels_refuse_what_cannot_be_printed(client, shop, other):
@@ -190,6 +206,39 @@ async def test_a_customers_purchases(client, shop, other):
     assert len(r.json()["items"][0]["lines"]) == 1
     assert (await client.get(f"{A}/customers/{cid}/sales", headers=auth_headers(other["owner"]))).status_code == 404
     assert (await client.get(f"{A}/customers/{uuid.uuid4()}/sales", headers=auth_headers(shop["owner"]))).status_code == 404
+
+
+async def test_shop_invoices_count_in_the_customer_list_and_their_bills(client, shop, other):
+    v = (await style(client, shop, sizes=["M"], price="999.00"))["variants"][0]["id"]
+    made = await client.post(f"{API}/customers", json={"name": "Asha", "phone": "9876543210"}, headers=auth_headers(shop["cashier"]))
+    cid = made.json()["id"]
+    first = await paid_sale(client, shop, [(v, 1)], customer_id=cid)
+    second = await paid_sale(client, shop, [(v, 2)], customer_id=cid)
+    unpaid = await sell(client, shop["cashier"], [(v, 1)], customer_id=cid)
+    voided = await sell(client, shop["cashier"], [(v, 1)], customer_id=cid)
+    r = await client.post(f"{A}/sales/{voided.json()['id']}/void", json={"reason": "Wrong size"}, headers=auth_headers(shop["cashier"]))
+    assert r.status_code == 200, r.text
+    await paid_sale(client, shop, [(v, 1)])  # someone else
+
+    # Visits and spend are the paid invoices only.
+    customer = (await client.get(f"{API}/customers/{cid}", headers=auth_headers(shop["cashier"]))).json()
+    assert (customer["visits"], customer["total_spent"]) == (2, "2997.00")
+    assert customer["last_visit_at"] is not None
+    listed = (await client.get(f"{API}/customers", params={"search": "98765"}, headers=auth_headers(shop["cashier"]))).json()["items"]
+    assert [(c["id"], c["visits"]) for c in listed] == [(cid, 2)]
+
+    # Their bills: every invoice but the voided one, newest first, with the invoice number and no order.
+    r = await client.get(f"{API}/customers/{cid}/bills", headers=auth_headers(shop["owner"]))
+    assert r.status_code == 200, r.text
+    bills = r.json()
+    assert bills["total"] == 3
+    assert [b["id"] for b in bills["items"]] == [unpaid.json()["id"], second["id"], first["id"]]
+    assert [b["status"] for b in bills["items"]] == ["unpaid", "paid", "paid"]
+    top = bills["items"][1]
+    assert top["bill_number"] == second["sale_number"] and top["order_id"] is None and top["grand_total"] == "1998.00"
+    page = (await client.get(f"{API}/customers/{cid}/bills", params={"limit": 1, "offset": 1}, headers=auth_headers(shop["owner"]))).json()
+    assert (page["total"], [b["id"] for b in page["items"]]) == (3, [second["id"]])
+    assert (await client.get(f"{API}/customers/{cid}/bills", headers=auth_headers(other["owner"]))).status_code == 404
 
 
 async def test_the_new_routes_are_for_dress_shops_only(client, db, redis_client, shop):

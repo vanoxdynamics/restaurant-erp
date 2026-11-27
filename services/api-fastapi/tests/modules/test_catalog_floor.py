@@ -90,6 +90,24 @@ async def test_branch_floor_table_setup(client, db, owner, manager, waiter, bran
     assert hidden.status_code == 404
 
 
+async def test_an_owner_renames_a_branch_and_its_code_stays(client, db, owner, manager, branch):
+    url = f"{API}/floor/branches/{branch.id}"
+    r = await client.patch(url, json={"name": "  Koramangala  "}, headers=auth_headers(owner))
+    assert r.status_code == 200, r.text
+    assert (r.json()["name"], r.json()["code"]) == ("Koramangala", "BLR1")
+    listed = await client.get(f"{API}/floor/branches", headers=auth_headers(manager))
+    assert [b["name"] for b in listed.json()] == ["Koramangala"]
+
+    assert (await client.patch(url, json={"name": "Mine"}, headers=auth_headers(manager))).status_code == 403
+    assert (await client.patch(url, json={"name": "   "}, headers=auth_headers(owner))).status_code == 422
+    assert (await client.patch(url, json={"name": "x" * 101}, headers=auth_headers(owner))).status_code == 422
+    assert (await client.patch(f"{API}/floor/branches/{uuid.uuid4()}", json={"name": "Ghost"},
+                               headers=auth_headers(owner))).status_code == 404
+    theirs = await factories.make_branch(db, code="GX1", name="Theirs", org=await factories.make_org(db, slug="globex", name="Globex"))
+    assert (await client.patch(f"{API}/floor/branches/{theirs.id}", json={"name": "Taken"},
+                               headers=auth_headers(owner))).status_code == 404
+
+
 async def test_transfer_table(client, db, waiter, table, table2):
     order = await create_order(client, waiter, table)
     r = await client.post(f"{API}/floor/tables/transfer", headers=auth_headers(waiter),
@@ -139,3 +157,13 @@ async def test_merge_and_unmerge(client, db, captain, waiter, floor, table, tabl
     r = await client.post(f"{API}/floor/tables/{table_id}/unmerge", headers=auth_headers(captain))
     assert r.status_code == 200
     assert (await db.get(DiningTable, table2_id, populate_existing=True)).merged_into_table_id is None
+
+
+async def test_item_update_refuses_null_for_required_fields(client, db, manager):
+    item = await factories.make_menu_item(db, price="100.00")
+    for field in ("base_price", "tax_rate", "name", "station", "category_id"):
+        r = await client.patch(f"{API}/catalog/items/{item.id}", json={field: None}, headers=auth_headers(manager))
+        assert r.status_code == 422, (field, r.text)
+    # Clearing an optional field is still allowed.
+    r = await client.patch(f"{API}/catalog/items/{item.id}", json={"description": None}, headers=auth_headers(manager))
+    assert r.status_code == 200, r.text

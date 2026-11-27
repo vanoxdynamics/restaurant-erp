@@ -1,7 +1,8 @@
+import re
 from decimal import Decimal
 from typing import Annotated, Generic, List, Optional, TypeVar, Union
 
-from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, StringConstraints
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, StringConstraints
 
 Money = Annotated[Decimal, Field(ge=0, max_digits=10, decimal_places=2)]
 PositiveMoney = Annotated[Decimal, Field(gt=0, max_digits=10, decimal_places=2)]
@@ -15,6 +16,22 @@ Pin = Annotated[str, Field(pattern=r"^\d{4,6}$")]
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 Reason = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=500)]
 Notes = Annotated[Optional[str], Field(default=None, max_length=500)]
+
+
+def _hsn(value: str) -> str:
+    if not re.fullmatch(r"\d{4,8}", value):
+        raise ValueError("HSN code must be 4 to 8 digits")
+    return value
+
+
+def _blank_is_none(value):
+    return None if isinstance(value, str) and not value.strip() else value
+
+
+# GST HSN code. Optional everywhere: a blank one (forms send "" for an empty box) means no HSN code.
+OptionalHsn = Annotated[
+    Optional[Annotated[str, StringConstraints(strip_whitespace=True), AfterValidator(_hsn)]], BeforeValidator(_blank_is_none)
+]
 
 T = TypeVar("T")
 

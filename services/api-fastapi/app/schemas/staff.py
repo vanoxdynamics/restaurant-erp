@@ -56,6 +56,13 @@ class DeviceTokenResponse(BaseModel):
     branch_name: str
 
 
+class DeviceBranchRead(BaseModel):
+    """The branch a linked tablet belongs to, as it is now (an owner may have renamed it since the tablet was linked)."""
+    branch_id: uuid.UUID
+    branch_name: str
+    branch_code: str
+
+
 class RosterEntry(BaseModel):
     id: uuid.UUID
     full_name: str

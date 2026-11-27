@@ -8,7 +8,7 @@ is scanned, sold and counted. Every table carries its own tenant column (organiz
 import uuid
 from decimal import Decimal
 from datetime import date, datetime
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import (
     BigInteger,
@@ -39,6 +39,9 @@ from app.core.enums import (
 )
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_check
 from app.models.payment_columns import PaymentColumns
+
+if TYPE_CHECKING:
+    from app.models.customers import Customer
 
 
 class ApparelSettings(Base, TimestampMixin):
@@ -229,6 +232,8 @@ class ApparelSale(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         "ApparelSaleLine", back_populates="sale", cascade="all, delete-orphan", order_by="ApparelSaleLine.created_at", lazy="raise")
     payments: Mapped[List["ApparelPayment"]] = relationship(
         "ApparelPayment", back_populates="sale", order_by="ApparelPayment.created_at", lazy="raise")
+    # Who the invoice is to: read with every sale (lists too), so the counter and the admin app show the name with the number.
+    customer: Mapped[Optional["Customer"]] = relationship("Customer", lazy="selectin", viewonly=True)
 
     @property
     def balance_due(self) -> Decimal:

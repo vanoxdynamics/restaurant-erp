@@ -13,14 +13,13 @@ from typing import Annotated, Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from app.core.enums import HardwareMovementKind, HardwareUnit
-from app.schemas.common import Money, QuantityOut, Reason
+from app.schemas.common import Money, OptionalHsn, QuantityOut, Reason
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
 CategoryName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 Brand = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 SizeSpec = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=60)]
 Code = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64, pattern=r"^[\x21-\x7e]+$")]
-Hsn = Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^\d{4,8}$")]
 StateCode = Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^\d{2}$")]
 Rate = Annotated[Decimal, Field(ge=0, le=40, max_digits=5, decimal_places=2)]
 BasePrice = Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=4)]  # per base unit
@@ -112,7 +111,7 @@ class HardwareProductCreate(BaseModel):
     size_spec: Optional[SizeSpec] = None
     sku: Optional[Code] = None
     barcode: Optional[Code] = None
-    hsn_code: Optional[Hsn] = None
+    hsn_code: OptionalHsn = None
     tax_rate: Optional[Rate] = None  # left out: the settings' default rate
     base_unit: HardwareUnit = HardwareUnit.PCS
     allow_fraction: Optional[bool] = None  # left out: true for measured units (m, kg, l...), false for counted ones
@@ -138,7 +137,7 @@ class HardwareProductUpdate(BaseModel):
     size_spec: Optional[SizeSpec] = None
     sku: Optional[Code] = None
     barcode: Optional[Code] = None
-    hsn_code: Optional[Hsn] = None
+    hsn_code: OptionalHsn = None
     tax_rate: Optional[Rate] = None
     base_unit: Optional[HardwareUnit] = None
     allow_fraction: Optional[bool] = None

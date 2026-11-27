@@ -70,7 +70,8 @@ export type SettingKey = 'table_service' | 'kitchen_tickets' | 'quick_sale' | 'b
 export type BusinessSettings = Record<SettingKey, boolean>;
 
 export interface BusinessCategories {
-  categories: { key: string; name: string; settings: BusinessSettings }[];
+  /** `modules`: the modules a business of this type can have (core ones included). */
+  categories: { key: string; name: string; settings: BusinessSettings; modules?: string[] }[];
   setting_labels: Record<SettingKey, string>;
 }
 
@@ -136,6 +137,8 @@ export interface GlobalModule {
   key: string;
   name: string;
   description: string;
+  /** The business types (categories) this module serves. */
+  business_types: string[];
   is_core: boolean;
   depends_on: string[];
   globally_enabled: boolean;
@@ -157,8 +160,18 @@ export interface ChangePreview {
   new_period_end: string;
 }
 
+export interface PineLabsCloudStatus {
+  configured: boolean;
+  /** Names of the unset server settings, never their values. */
+  missing: string[];
+  environment: 'uat' | 'production';
+  min_amount: string;
+}
+
 export interface Dashboard {
   organizations_by_status: Record<string, number>;
+  /** Business type -> subscribers that are not cancelled. */
+  organizations_by_category?: Record<string, number>;
   subscriptions_by_status: Record<string, number>;
   subscriptions_by_term: Record<string, number>;
   mrr: Record<string, string>;
@@ -169,6 +182,7 @@ export interface Dashboard {
   outstanding: Record<string, string>;
   open_invoices: number;
   overdue_invoices: number;
+  integrations?: { pinelabs_cloud: PineLabsCloudStatus } | null;
 }
 
 export interface Approval {

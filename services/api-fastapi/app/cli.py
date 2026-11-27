@@ -240,6 +240,13 @@ def main(argv: list[str] | None = None) -> None:
         secret, uri, codes = asyncio.run(create_platform_admin(email, args.full_name, password))
         print(f"Platform admin {email} created.", file=sys.stderr)
         print(f"\nAdd to your authenticator app:\n  secret: {secret}\n  uri:    {uri}", file=sys.stderr)
+        try:
+            import segno
+            sys.stderr.reconfigure(encoding="utf-8")
+            print("\nOr scan this QR code:\n", file=sys.stderr)
+            segno.make(uri, error="m").terminal(out=sys.stderr, compact=True)
+        except (ImportError, UnicodeError, OSError):
+            pass
         print("\nRecovery codes (each works once; shown only now):", file=sys.stderr)
         for code in codes:
             print(f"  {code}", file=sys.stderr)

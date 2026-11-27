@@ -3,7 +3,8 @@ Dress shop stock: how many pieces of each variant a branch has, and every change
 
 Stock changes only through `move`, which writes one ledger row per change, so a variant's quantity is always the sum of its
 ledger. A missing stock row means nothing on hand; rows are made lazily and locked in a fixed order (sorted variant id) so two
-sales cannot deadlock. Quantities may go below zero: a sale is never refused because the count is behind the shelf.
+sales cannot deadlock. Quantities may go below zero, so a count a little behind the shelf does not stop the counter, but only
+down to `NEGATIVE_STOCK_LIMIT`: a sale that would take a variant further is refused until the stock is received or counted.
 """
 
 import uuid
@@ -32,6 +33,10 @@ from app.models.apparel import (
 from app.models.floor import Branch
 from app.models.staff import StaffUser
 from app.schemas.apparel import ApparelPurchaseCreate, ApparelStockAdjust, ApparelStockSettings
+
+
+# How far below zero a sale may take a variant. Past it the variant is locked for billing until the inventory is updated.
+NEGATIVE_STOCK_LIMIT = -5
 
 
 def is_low(level: ApparelStock) -> bool:

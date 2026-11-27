@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.entitlements import compute_entitlements
 from app.core.enums import BillingTerm, InvoiceKind, OrgStatus, Role, SubscriptionStatus
 from app.core.errors import Conflict, NotFound, ValidationFailed
-from app.core.modules import MODULES
+from app.core.modules import MODULES, ModuleKey, core_modules_for, modules_for
 from app.core.money import q
 from app.core.security import compute_pin_lookup, create_access_token, get_password_hash, get_pin_hash
 from app.models.floor import Branch
@@ -97,6 +97,31 @@ def _sub_snapshot(sub: Subscription) -> Dict[str, Any]:
 # --- create ----------------------------------------------------------------------------------------
 
 
+def onboarding_overrides(category: str, plan_keys: frozenset, choices: Optional[Dict[Any, bool]]) -> Dict[str, bool]:
+    """
+    Check the add-on modules chosen for a new business and return the overrides to save (only choices that differ from the
+    plan). Every choice must be a non-core module of the business's type, and the result must keep dependencies whole.
+    """
+    available = modules_for(category)
+    chosen = {str(getattr(k, "value", k)): bool(v) for k, v in (choices or {}).items()}
+    foreign = sorted(k for k in chosen if k not in available)
+    if foreign:
+        raise ValidationFailed("Those modules are not for this business type", code="module_not_for_business_type",
+                               details={"modules": foreign, "category": category})
+    core = sorted(k for k in chosen if MODULES[ModuleKey(k)].is_core)
+    if core:
+        raise ValidationFailed("Core modules are always on and cannot be chosen", code="core_module", details={"modules": core})
+    final = set((plan_keys | core_modules_for(category)) & available)
+    for k, on in chosen.items():
+        (final.add if on else final.discard)(k)
+    for k in sorted(final):
+        missing = [d.value for d in MODULES[ModuleKey(k)].depends_on if d.value not in final]
+        if missing:
+            raise ValidationFailed(f"Module {k} requires {', '.join(missing)}", code="module_dependency",
+                                   details={"module": k, "requires": missing})
+    return {k: on for k, on in chosen.items() if on != (k in plan_keys)}
+
+
 async def create_organization(db: AsyncSession, redis_client: aioredis.Redis, actor: PlatformPrincipal,
                               payload: OrganizationCreate, meta: RequestMeta) -> Tuple[Organization, Optional[Invoice]]:
     plan = await _load_plan(db, payload.plan_id)
@@ -104,6 +129,8 @@ async def create_organization(db: AsyncSession, redis_client: aioredis.Redis, ac
     price = payload.price_amount if payload.price_amount is not None else plan_price(plan, term)
     if price is None:
         raise ValidationFailed(f"The plan has no {term} price; set price_amount", code="price_required")
+    plan_keys = frozenset((await db.scalars(select(PlanModule.module_key).where(PlanModule.plan_id == plan.id))).all())
+    module_overrides = onboarding_overrides(payload.category.value, plan_keys, payload.modules)
 
     now = _now()
     trial = payload.start == "trial"
@@ -134,6 +161,8 @@ async def create_organization(db: AsyncSession, redis_client: aioredis.Redis, ac
             role=Role.OWNER.value, hashed_password=get_password_hash(owner.password.get_secret_value()),
             hashed_pin=get_pin_hash(owner.pin), pin_length=len(owner.pin), pin_lookup=compute_pin_lookup(branch.id, owner.pin),
         ))
+        db.add_all(OrganizationModule(organization_id=org.id, module_key=k, enabled=on, reason="Chosen at onboarding",
+                                      set_by=actor.admin.id) for k, on in module_overrides.items())
         await db.flush()
     except IntegrityError as exc:
         await db.rollback()
@@ -153,7 +182,7 @@ async def create_organization(db: AsyncSession, redis_client: aioredis.Redis, ac
     await append_audit(db, action="org.create", admin_id=actor.admin.id, target_type="organization", target_id=org.id,
                        after={"name": org.name, "slug": org.slug, "plan": plan.code, "term": term, "start": payload.start,
                               "owner_username": payload.owner.username, "category": org.category,
-                              "settings": org.settings}, meta=meta)
+                              "settings": org.settings, "modules": module_overrides}, meta=meta)
     await commit_and_notify(db, redis_client, [org.id])
     return org, invoice
 
@@ -203,6 +232,7 @@ async def list_organizations(
 async def module_states(db: AsyncSession, org_id: uuid.UUID, ent=None) -> List[Dict[str, Any]]:
     """Per-module effective state and why: core, plan, override, or switched off (and by whom)."""
     ent = ent or await compute_entitlements(db, org_id)
+    available = modules_for(await db.scalar(select(Organization.category).where(Organization.id == org_id)))
     sub = await db.scalar(select(Subscription).where(Subscription.organization_id == org_id))
     plan_keys = set((await db.scalars(select(PlanModule.module_key).where(PlanModule.plan_id == sub.plan_id))).all()) if sub else set()
     overrides = {o.module_key: o for o in (await db.scalars(
@@ -212,6 +242,8 @@ async def module_states(db: AsyncSession, org_id: uuid.UUID, ent=None) -> List[D
     states = []
     for key, definition in MODULES.items():
         k = key.value
+        if k not in available:  # another business type's module: not this business's concern
+            continue
         ov = overrides.get(k)
         live_ov = ov if ov and (ov.expires_at is None or ov.expires_at > now) else None
         if definition.is_core:

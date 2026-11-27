@@ -10,11 +10,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser, get_current_user, require_branch_access, require_category, require_roles
+from app.core.auth import CurrentUser, get_current_user, require_branch_access, require_category, require_module, require_roles
 from app.core.database import get_db
 from app.core.enums import ApparelMovementKind, ApparelPaymentMode, BillStatus, BusinessCategory, Role
 from app.core.errors import ValidationFailed
 from app.core.idempotency import IdempotencyGuard, idempotent
+from app.core.modules import ModuleKey
 from app.core.pagination import PageParams, page_params
 from app.core.redis import get_redis
 from app.models.apparel import ApparelStoreCredit
@@ -41,6 +42,7 @@ from app.schemas.apparel import (
     ApparelReturnRead,
     ApparelStoreCreditRead,
     ApparelSaleCreate,
+    ApparelSaleCustomerSet,
     ApparelSaleRead,
     ApparelSplitPayment,
     ApparelTerminalComplete,
@@ -68,6 +70,10 @@ router = APIRouter(
     tags=["Dress shops"],
     dependencies=[Depends(require_category(BusinessCategory.APPAREL))],
 )
+
+# Add-on modules a dress shop's plan may leave out (the counter itself is core for dress shops).
+with_returns = [Depends(require_module(ModuleKey.APPAREL_RETURNS))]
+with_labels = [Depends(require_module(ModuleKey.APPAREL_LABELS))]
 
 managers = require_roles(Role.OWNER, Role.MANAGER)
 cashiers = require_roles(Role.OWNER, Role.MANAGER, Role.CASHIER)
@@ -411,6 +417,14 @@ async def reverse_terminal_payment(
     return _result(payment, sale)
 
 
+@router.put("/sales/{sale_id}/customer", response_model=ApparelSaleRead)
+async def set_sale_customer(
+    sale_id: uuid.UUID, payload: ApparelSaleCustomerSet, user: CurrentUser = Depends(cashiers), db: AsyncSession = Depends(get_db),
+):
+    """Put a customer on the invoice, change them, or take them off (`customer_id` null). Not on a cancelled sale."""
+    return await sales.set_customer(db, user, sale_id, payload.customer_id)
+
+
 @router.post("/sales/{sale_id}/void", response_model=ApparelSaleRead)
 async def void_sale(
     sale_id: uuid.UUID, payload: ApparelVoid, background: BackgroundTasks, user: CurrentUser = Depends(cashiers),
@@ -459,7 +473,7 @@ async def _return_read(db: AsyncSession, found) -> ApparelReturnRead:
     return out
 
 
-@router.post("/returns", response_model=ApparelReturnRead, status_code=status.HTTP_201_CREATED)
+@router.post("/returns", response_model=ApparelReturnRead, status_code=status.HTTP_201_CREATED, dependencies=with_returns)
 async def create_return(
     payload: ApparelReturnCreate, background: BackgroundTasks, user: CurrentUser = Depends(cashiers),
     guard: IdempotencyGuard = Depends(idempotent("apparel_returns")), db: AsyncSession = Depends(get_db),
@@ -478,7 +492,7 @@ async def create_return(
     return await guard.complete(status.HTTP_201_CREATED, body)
 
 
-@router.get("/returns", response_model=Page[ApparelReturnRead])
+@router.get("/returns", response_model=Page[ApparelReturnRead], dependencies=with_returns)
 async def list_returns(
     branch_id: Optional[uuid.UUID] = None, sale_id: Optional[uuid.UUID] = None, on_date: Optional[date] = None,
     params: PageParams = Depends(page_params), user: CurrentUser = Depends(cashiers), db: AsyncSession = Depends(get_db),
@@ -487,13 +501,13 @@ async def list_returns(
     return Page(items=[await _return_read(db, r) for r in items], total=total, limit=params.limit, offset=params.offset)
 
 
-@router.get("/returns/{return_id}", response_model=ApparelReturnRead)
+@router.get("/returns/{return_id}", response_model=ApparelReturnRead, dependencies=with_returns)
 async def get_return(return_id: uuid.UUID, user: CurrentUser = Depends(cashiers), db: AsyncSession = Depends(get_db)):
     return await _return_read(db, await returns.get_return(db, user, return_id))
 
 
 @router.get("/returns/{return_id}/receipt", response_model=ApparelReceiptRead,
-            responses={200: {"content": {"text/plain": {}, "text/html": {}}}})
+            responses={200: {"content": {"text/plain": {}, "text/html": {}}}}, dependencies=with_returns)
 async def get_return_receipt(
     return_id: uuid.UUID, format: ReceiptFormat = ReceiptFormat.ROWS, paper_mm: int = Query(80, description="58 or 80"),
     user: CurrentUser = Depends(cashiers), db: AsyncSession = Depends(get_db),
@@ -515,7 +529,7 @@ async def get_return_receipt(
         text=receipts.render_text(receipt, paper_mm))
 
 
-@router.get("/store-credits/{code:path}", response_model=ApparelStoreCreditRead)
+@router.get("/store-credits/{code:path}", response_model=ApparelStoreCreditRead, dependencies=with_returns)
 async def get_store_credit(code: str, user: CurrentUser = Depends(cashiers), db: AsyncSession = Depends(get_db)):
     """The balance of a credit note, at the counter. Codes contain slashes (the credit note number)."""
     return await returns.get_store_credit(db, user, code)
@@ -524,7 +538,7 @@ async def get_store_credit(code: str, user: CurrentUser = Depends(cashiers), db:
 # --- labels and reports --------------------------------------------------------------------------------------------------------
 
 
-@router.post("/labels", response_class=Response, responses={200: {"content": {"text/html": {}}}})
+@router.post("/labels", response_class=Response, responses={200: {"content": {"text/html": {}}}}, dependencies=with_labels)
 async def print_labels(payload: ApparelLabelsRequest, user: CurrentUser = Depends(managers), db: AsyncSession = Depends(get_db)):
     """A printable HTML page of barcode labels for A4 sticker sheets (the admin app opens it in the print dialog)."""
     page = await reports.labels_page(db, user, payload)

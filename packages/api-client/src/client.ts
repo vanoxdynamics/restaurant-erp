@@ -730,7 +730,7 @@ export class RestaurantApiClient {
       if (response.status === 401 && this.token && !options.anonymous) this.onUnauthorized?.();
       const message =
         err?.message ??
-        (Array.isArray(data?.detail) ? data.detail.map((d: Raw) => d.msg).join('; ') : undefined) ??
+        (Array.isArray(data?.detail) ? data.detail.map((d: Raw) => String(d.msg ?? '').replace(/^Value error, /, '')).join('; ') : undefined) ??
         `Request failed (${response.status})`;
       throw new ApiError(response.status, err?.code ?? 'request_failed', message, err?.details ?? {});
     }
@@ -798,6 +798,11 @@ export class RestaurantApiClient {
     };
   }
 
+  /** The linked tablet's branch as it is now: its name changes when an owner renames it in the admin app. */
+  async getDeviceBranch(deviceToken: string): Promise<{ branch_id: string; branch_name: string; branch_code: string }> {
+    return this.request('GET', '/staff/auth/device', { headers: { 'X-Device-Token': deviceToken }, anonymous: true, timeoutMs: 10000 });
+  }
+
   /** Staff who can sign in at this branch's tablets, before anyone is signed in. */
   async getSignInRoster(deviceToken: string): Promise<RosterEntry[]> {
     const rows = await this.request<Raw[]>('GET', '/staff/auth/roster', {
@@ -836,6 +841,12 @@ export class RestaurantApiClient {
   async getBranches(): Promise<BranchSummary[]> {
     const rows = await this.request<Raw[]>('GET', '/floor/branches');
     return rows.map((b) => ({ id: b.id, name: b.name, code: b.code, is_active: b.is_active }));
+  }
+
+  /** Renames a branch (owners only). Its code, used in bill numbers, stays the same. */
+  async renameBranch(branchId: string, name: string): Promise<BranchSummary> {
+    const b = await this.request<Raw>('PATCH', `/floor/branches/${branchId}`, { body: { name: name.trim() } });
+    return { id: b.id, name: b.name, code: b.code, is_active: b.is_active };
   }
 
   // ---- Floor ---------------------------------------------------------------------
@@ -1141,7 +1152,7 @@ export class RestaurantApiClient {
     const page = await this.request<Page<Raw>>('GET', `/customers/${customerId}/bills`, { query: { limit } });
     return page.items.map((b) => ({
       id: b.id,
-      order_id: b.order_id,
+      order_id: b.order_id ?? null,
       bill_number: b.bill_number,
       business_date: b.business_date,
       grand_total_paise: toPaise(b.grand_total),

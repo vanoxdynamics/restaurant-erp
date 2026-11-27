@@ -11,6 +11,7 @@ from app.modules.floor import service
 from app.schemas.floor import (
     BranchCreate,
     BranchRead,
+    BranchUpdate,
     DiningTableCreate,
     DiningTableRead,
     FloorCreate,
@@ -46,6 +47,17 @@ async def create_branch(
 ):
     """Create a new branch in the caller's organization."""
     return await service.create_branch(db, user, payload)
+
+
+@router.patch("/branches/{branch_id}", response_model=BranchRead, dependencies=[Depends(owners)])
+async def rename_branch(
+    branch_id: uuid.UUID,
+    payload: BranchUpdate,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename a branch (owners only). The branch code, used in bill numbers, does not change."""
+    return await service.rename_branch(db, user, branch_id, payload)
 
 
 @router.get("/branches/{branch_id}/floors", response_model=List[FloorRead])

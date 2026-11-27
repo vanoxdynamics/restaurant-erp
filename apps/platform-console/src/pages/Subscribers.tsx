@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { api, newKey, type BillingTerm, type BusinessCategories, type Plan } from '../api';
+import { api, newKey, type BillingTerm, type BusinessCategories, type GlobalModule, type Plan } from '../api';
 import { useCan } from '../auth';
 import { date, label, money, relativeDays } from '../format';
+import { modulesFor, toggleModule } from '../modules';
 import { Badge, ErrorBox, Field, Loading, Modal, PageHead, Pager, Segmented, useDebounced, useToast } from '../ui';
 
 const PAGE = 25;
@@ -25,6 +26,7 @@ export function SubscribersPage() {
 
   const plans = useQuery({ queryKey: ['plans'], queryFn: api.plans });
   const categories = useQuery({ queryKey: ['business-categories'], queryFn: api.businessCategories, staleTime: Infinity });
+  const modules = useQuery({ queryKey: ['modules'], queryFn: api.modules, enabled: creating });
   const categoryName = (key: string) => categories.data?.categories.find((c) => c.key === key)?.name ?? label(key);
   const list = useQuery({
     queryKey: ['organizations', { q, status, term, subStatus, planId, expiring, category, offset }],
@@ -108,14 +110,17 @@ export function SubscribersPage() {
           }} />
         </>
       )}
-      {creating && plans.data && (
-        <CreateSubscriber plans={plans.data.filter((p) => p.is_active)} categories={categories.data?.categories ?? []} onClose={() => setCreating(false)} />
+      {creating && plans.data && modules.data && (
+        <CreateSubscriber plans={plans.data.filter((p) => p.is_active)} categories={categories.data?.categories ?? []} modules={modules.data}
+          onClose={() => setCreating(false)} />
       )}
     </>
   );
 }
 
-function CreateSubscriber({ plans, categories, onClose }: { plans: Plan[]; categories: BusinessCategories['categories']; onClose: () => void }) {
+function CreateSubscriber({ plans, categories, modules, onClose }: {
+  plans: Plan[]; categories: BusinessCategories['categories']; modules: GlobalModule[]; onClose: () => void;
+}) {
   const toast = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -128,12 +133,20 @@ function CreateSubscriber({ plans, categories, onClose }: { plans: Plan[]; categ
   const set = (k: keyof typeof f, v: string) => setF((s) => ({ ...s, [k]: v }));
   const plan = plans.find((p) => p.id === f.plan_id);
   const listPrice = f.billing_term === 'monthly' ? plan?.price_monthly : plan?.price_yearly;
+  // The modules this business type can have; add-ons start as the plan has them and may be switched here.
+  const ofType = modulesFor(f.category, modules);
+  const fromPlan = new Set(ofType.filter((m) => !m.is_core && plan?.module_keys.includes(m.key)).map((m) => m.key));
+  const [picked, setPicked] = useState<{ basis: string; enabled: Set<string> } | null>(null);
+  const basis = `${f.category}|${f.plan_id}`; // a new type or plan starts again from the plan
+  const enabled = picked?.basis === basis ? picked.enabled : fromPlan;
+  const moduleChoices = Object.fromEntries(ofType.filter((m) => !m.is_core && enabled.has(m.key) !== fromPlan.has(m.key)).map((m) => [m.key, enabled.has(m.key)]));
 
   const create = useMutation({
     mutationFn: () => api.createOrganization({
       name: f.name.trim(), slug: f.slug.trim(), category: f.category, legal_name: f.legal_name.trim() || undefined, billing_email: f.billing_email.trim() || undefined,
       country: f.country.trim().toUpperCase() || undefined, plan_id: f.plan_id, billing_term: f.billing_term, start: f.start,
       trial_days: f.start === 'trial' && f.trial_days ? Number(f.trial_days) : undefined, price_amount: f.price_amount || undefined,
+      modules: Object.keys(moduleChoices).length ? moduleChoices : undefined,
       owner: { username: f.username.trim(), full_name: f.full_name.trim(), password: f.password, pin: f.pin,
         branch_code: f.branch_code.trim().toUpperCase(), branch_name: f.branch_name.trim() },
     }, key.current),
@@ -191,6 +204,10 @@ function CreateSubscriber({ plans, categories, onClose }: { plans: Plan[]; categ
           </Field>
         </div>
 
+        <ModulePicker modules={ofType} enabled={enabled} fromPlan={fromPlan} planName={plan?.name}
+          typeName={categories.find((c) => c.key === f.category)?.name ?? label(f.category)}
+          onToggle={(key, on) => setPicked({ basis, enabled: toggleModule(enabled, key, on, ofType) })} />
+
         <h3 style={{ margin: '8px 0 10px' }}>First branch & owner</h3>
         <div className="row">
           <Field label="Branch code" hint="2–6 letters or digits" htmlFor="c-bcode"><input id="c-bcode" className="input" required pattern="[A-Za-z0-9]{2,6}" maxLength={6} value={f.branch_code} onChange={(e) => set('branch_code', e.target.value)} /></Field>
@@ -211,6 +228,44 @@ function CreateSubscriber({ plans, categories, onClose }: { plans: Plan[]; categ
         </div>
       </form>
     </Modal>
+  );
+}
+
+/** The modules of the chosen business type only: core ones are always on, add-ons follow the plan unless switched here. */
+function ModulePicker({ modules, enabled, fromPlan, planName, typeName, onToggle }: {
+  modules: GlobalModule[]; enabled: Set<string>; fromPlan: Set<string>; planName: string | undefined; typeName: string;
+  onToggle: (key: string, on: boolean) => void;
+}) {
+  return (
+    <>
+      <h3 style={{ margin: '8px 0 4px' }}>Modules</h3>
+      <p className="muted" style={{ marginTop: 0 }}>
+        What a {typeName.toLowerCase()} can have. Add-ons follow {planName ? <strong>{planName}</strong> : 'the plan'}; a change here is saved as an override for this subscriber.
+      </p>
+      {modules.length === 0 ? <div className="empty">No modules for this business type.</div> : (
+        <ul className="module-pick">
+          {modules.map((m) => {
+            const on = m.is_core || enabled.has(m.key);
+            const changed = !m.is_core && on !== fromPlan.has(m.key);
+            return (
+              <li key={m.key}>
+                <label>
+                  <input type="checkbox" checked={on} disabled={m.is_core} onChange={(e) => onToggle(m.key, e.target.checked)} />
+                  <span>
+                    <strong>{m.name}</strong>{' '}
+                    {m.is_core ? <Badge value="always on" />
+                      : changed ? <Badge value={on ? 'added' : 'removed'} tone={on ? 'good' : 'warn'} />
+                      : on ? <Badge value="in plan" tone="info" /> : null}
+                    {!m.globally_enabled && <> <Badge value="off platform-wide" tone="bad" /></>}
+                    <span className="muted" style={{ display: 'block' }}>{m.description}</span>
+                  </span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </>
   );
 }
 

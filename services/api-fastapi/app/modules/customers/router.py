@@ -64,6 +64,6 @@ async def list_customer_bills(
     user: CurrentUser = Depends(managers),
     db: AsyncSession = Depends(get_db),
 ):
-    """The customer's bills, newest first, across every branch."""
+    """The customer's bills, newest first, across every branch: restaurant bills and dress shop invoices (no `order_id`)."""
     items, total = await service.list_bills(db, user, customer_id, params)
     return Page(items=items, total=total, limit=params.limit, offset=params.offset)

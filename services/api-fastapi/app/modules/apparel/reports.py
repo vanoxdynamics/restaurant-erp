@@ -40,6 +40,7 @@ from app.modules.retailkit.receipt import money
 from app.schemas.apparel import ApparelLabelsRequest
 
 MAX_LABELS = 1000
+ROLL_GAP_MM = 2  # the gap between stickers side by side on a 2- or 3-across roll
 
 
 def _d(value: object) -> Decimal:
@@ -73,7 +74,8 @@ async def labels_page(db: AsyncSession, user: CurrentUser, payload: ApparelLabel
     for item in payload.items:
         variant, product = found[item.variant_id]
         code = variant.barcode or ""
-        svg = bc.ean13_svg(code) if bc.is_ean13(code) else bc.code128_svg(code)
+        bars = bc.ean13_svg(code, stretch=True) if bc.is_ean13(code) else bc.code128_svg(code, stretch=True)
+        svg = f'<div class="code">{bars}<div class="digits">{html.escape(code)}</div></div>'
         if variant.mrp is not None and variant.mrp > variant.price:
             price = f'<span class="mrp">MRP {money(variant.mrp)}</span> <b>{money(variant.price)}</b>'
         else:
@@ -82,21 +84,42 @@ async def labels_page(db: AsyncSession, user: CurrentUser, payload: ApparelLabel
                 f'<div class="meta">{html.escape(variant.size)} / {html.escape(variant.colour)}</div>'
                 f'<div class="price">{price}</div>{svg}</div>')
         cells.extend([cell] * item.copies)
+
+    height = payload.label_height_mm
+    if payload.paper == "roll":
+        # A label printer: each page is one row of stickers, exactly their size, so the driver neither scales nor splits it.
+        across, width = payload.across, payload.label_width_mm
+        page_width = width * across + ROLL_GAP_MM * (across - 1)
+        rows = ["".join(cells[i:i + across]) for i in range(0, len(cells), across)]
+        body = "".join(f'<div class="row">{r}</div>' for r in rows)
+        layout = f"""@page {{ size: {page_width}mm {height}mm; margin: 0; }}
+html, body {{ width: {page_width}mm; }}
+.row {{ display: flex; gap: {ROLL_GAP_MM}mm; height: {height}mm; overflow: hidden; break-after: page; page-break-after: always; }}
+.row:last-child {{ break-after: auto; page-break-after: auto; }}
+.label {{ width: {width}mm; height: {height}mm; padding: 1.5mm 2mm; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: space-between; }}"""
+    else:
+        body = f'<div class="sheet">{"".join(cells)}</div>'
+        layout = f"""@page {{ size: A4; margin: 8mm; }}
+.sheet {{ display: grid; grid-template-columns: repeat({payload.columns}, 1fr); gap: 2mm; }}
+.label {{ height: {height}mm; padding: 1.5mm 2mm; border: 0.2mm dashed #bbb; overflow: hidden; break-inside: avoid;
+  display: flex; flex-direction: column; justify-content: space-between; }}"""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Labels</title>
 <style>
-@page {{ size: A4; margin: 8mm; }}
+{layout}
 * {{ box-sizing: border-box; }}
-body {{ margin: 0; font-family: Arial, Helvetica, sans-serif; color: #000; }}
-.sheet {{ display: grid; grid-template-columns: repeat({payload.columns}, 1fr); gap: 2mm; }}
-.label {{ height: {payload.label_height_mm}mm; padding: 1.5mm 2mm; border: 0.2mm dashed #bbb; overflow: hidden; break-inside: avoid;
-  display: flex; flex-direction: column; justify-content: space-between; }}
+body {{ margin: 0; font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
 .shop {{ font-size: 7pt; text-transform: uppercase; letter-spacing: 0.3pt; }}
 .name {{ font-size: 9pt; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 .meta {{ font-size: 8pt; }}
 .price {{ font-size: 9pt; }} .mrp {{ text-decoration: line-through; }}
-.barcode {{ width: 100%; height: auto; max-height: 40%; }}
-</style></head><body><div class="sheet">{"".join(cells)}</div></body></html>"""
+/* The barcode takes all the space left under the text, up to 50 mm across. */
+.code {{ flex: 1 1 0; min-height: 0; width: 100%; max-width: 50mm; margin: 1mm auto 0; display: flex; flex-direction: column; }}
+.barcode {{ flex: 1 1 0; min-height: 4mm; width: 100%; display: block; }}
+.digits {{ font-family: monospace; font-size: 8pt; text-align: center; letter-spacing: 1pt; line-height: 1.1; }}
+</style></head><body>{body}</body></html>"""
 
 
 # --- the day report ----------------------------------------------------------------------------------------------------------

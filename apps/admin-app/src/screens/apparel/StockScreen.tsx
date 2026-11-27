@@ -1,14 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, colors, fonts, Input, Modal, radii, spacing, Switch, typography } from '@repo/shared-ui';
-import { formatDateTime, formatPaiseToRupees } from '@repo/shared-utils';
+import { formatPaiseToRupees, NEGATIVE_STOCK_LIMIT, stockState, StockState } from '@repo/shared-utils';
 import {
   ApiError,
+  ApparelProduct,
   ApparelPurchaseInput,
   ApparelStockRow,
   newIdempotencyKey,
   useAdjustApparelStock,
-  useApparelMovements,
+  useApparelProducts,
   useApparelPurchases,
   useApparelStock,
   useReceiveApparelStock,
@@ -16,11 +17,11 @@ import {
 } from '@repo/api-client';
 import { QueryState } from '../../components/QueryState';
 import { useAuthStore } from '../../stores/authStore';
+import { ProductEditor } from './ProductsScreen';
 
 const errorText = (e: unknown) => (e instanceof ApiError ? e.message : 'Something went wrong. Try again.');
 const toPaise = (rupees: string) => Math.round((parseFloat(rupees) || 0) * 100);
 const money = (paise: number) => formatPaiseToRupees(paise);
-const whole = (text: string) => text.replace(/[^\d-]/g, '').replace(/(?!^)-/g, '');
 
 interface ProductStock {
   productId: string;
@@ -56,16 +57,19 @@ export const StockScreen: React.FC = () => {
   const branchId = useAuthStore((s) => s.activeBranchId) ?? undefined;
   const [search, setSearch] = useState('');
   const [lowOnly, setLowOnly] = useState(false);
-  const [selected, setSelected] = useState<ApparelStockRow | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
   const [receiving, setReceiving] = useState(false);
   const stock = useApparelStock({ branch_id: branchId, search: search.trim() || undefined, low_only: lowOnly }, !!branchId);
   const products = useMemo(() => byProduct(stock.data ?? []), [stock.data]);
+  const selectedProduct = products.find((p) => p.productId === selected);
   const totals = useMemo(() => {
     const rows = stock.data ?? [];
     return {
       pieces: rows.reduce((n, r) => n + Math.max(r.quantity, 0), 0),
       value: rows.reduce((n, r) => n + (r.stock_value_paise ?? 0), 0),
-      low: rows.filter((r) => r.is_low || r.is_out).length,
+      low: rows.filter((r) => stockState(r.quantity, r.low_stock_level) === 'low').length,
+      minus: rows.filter((r) => stockState(r.quantity, r.low_stock_level) === 'minus').length,
+      locked: rows.filter((r) => stockState(r.quantity, r.low_stock_level) === 'locked').length,
       costs: rows.some((r) => r.cost_price_paise !== undefined),
     };
   }, [stock.data]);
@@ -79,23 +83,37 @@ export const StockScreen: React.FC = () => {
         <Button title="Receive delivery" onPress={() => setReceiving(true)} />
       </View>
       <View style={styles.summary}>
-        <Text style={styles.hint}>{totals.pieces} pieces{totals.costs ? ` · worth ${money(totals.value)} at cost` : ''} · {totals.low} sizes low or out</Text>
+        <Text style={styles.hint}>{totals.pieces} pieces{totals.costs ? ` · worth ${money(totals.value)} at cost` : ''}</Text>
         <View style={styles.toggle}>
           <Text style={styles.hint}>Low or out only</Text>
           <Switch value={lowOnly} onValueChange={setLowOnly} />
         </View>
       </View>
+      <View style={styles.legend}>
+        <LegendChip state="low" label={`Low stock (${totals.low})`} />
+        <LegendChip state="minus" label={`Below zero (${totals.minus})`} />
+        <LegendChip state="locked" label={`Locked at ${NEGATIVE_STOCK_LIMIT}, cannot bill (${totals.locked})`} />
+      </View>
       <QueryState query={stock} isEmpty={products.length === 0} emptyText={lowOnly ? 'Nothing is low.' : 'No products yet.'}>
         <ScrollView contentContainerStyle={styles.list}>
           {products.map((p) => (
             <View key={p.productId} style={styles.card}>
-              <Text style={styles.cardTitle}>{p.name}</Text>
-              <Text style={styles.hint}>{p.category}</Text>
+              <View style={styles.deliveryRow}>
+                <View>
+                  <Text style={styles.cardTitle}>{p.name}</Text>
+                  <Text style={styles.hint}>{p.category}</Text>
+                </View>
+                <View style={styles.cardActions}>
+                  <Text style={styles.productTotal}>{available(Array.from(p.cells.values()))} in stock</Text>
+                  <Button title="Update stock" size="sm" variant="secondary" onPress={() => setSelected(p.productId)} />
+                </View>
+              </View>
               <ScrollView horizontal>
                 <View>
                   <View style={styles.gridRow}>
                     <Text style={[styles.gridHead, styles.colourCell]} />
                     {p.sizes.map((s) => <Text key={s} style={[styles.gridHead, styles.cell]}>{s}</Text>)}
+                    <Text style={[styles.gridHead, styles.cell]}>Total</Text>
                   </View>
                   {p.colours.map((c) => (
                     <View key={c} style={styles.gridRow}>
@@ -104,13 +122,16 @@ export const StockScreen: React.FC = () => {
                         const row = p.cells.get(`${s}|${c}`);
                         if (!row) return <Text key={s} style={[styles.cell, styles.empty]}>—</Text>;
                         return (
-                          <Pressable key={s} onPress={() => setSelected(row)} accessibilityRole="button"
+                          <Pressable key={s} onPress={() => setSelected(p.productId)} accessibilityRole="button"
                             accessibilityLabel={`${p.name} ${s} ${c}: ${row.quantity}`}
-                            style={[styles.cell, styles.qtyCell, row.is_out ? styles.out : row.is_low ? styles.low : null]}>
-                            <Text style={styles.qty}>{row.quantity}</Text>
+                            style={[styles.cell, styles.qtyCell, STATE_STYLE[stockState(row.quantity, row.low_stock_level)]]}>
+                            <Text style={[styles.qty, stockState(row.quantity, row.low_stock_level) === 'locked' ? styles.qtyLocked : null]}>{row.quantity}</Text>
                           </Pressable>
                         );
                       })}
+                      <Text style={[styles.cell, styles.rowTotal]}>
+                        {available(p.sizes.map((s) => p.cells.get(`${s}|${c}`)).filter((r): r is ApparelStockRow => !!r))}
+                      </Text>
                     </View>
                   ))}
                 </View>
@@ -120,8 +141,8 @@ export const StockScreen: React.FC = () => {
           {branchId ? <Deliveries branchId={branchId} /> : null}
         </ScrollView>
       </QueryState>
-      {selected ? <VariantSheet branchId={branchId} row={selected} onClose={() => setSelected(null)} /> : null}
-      {receiving ? <ReceiveSheet branchId={branchId} rows={stock.data ?? []} onClose={() => setReceiving(false)} /> : null}
+      {selectedProduct ? <ProductStockSheet branchId={branchId} product={selectedProduct} onClose={() => setSelected(null)} /> : null}
+      {receiving ? <ReceiveSheet branchId={branchId} onClose={() => setReceiving(false)} /> : null}
     </View>
   );
 };
@@ -144,86 +165,202 @@ const Deliveries: React.FC<{ branchId: string }> = ({ branchId }) => {
   );
 };
 
-const VariantSheet: React.FC<{ branchId?: string; row: ApparelStockRow; onClose: () => void }> = ({ branchId, row, onClose }) => {
+const ADD_REASONS = ['New delivery', 'Found on the shelf', 'Damaged / missing'];
+const COUNT_REASONS = ['Shelf count', 'Monthly count'];
+
+const STATE_STYLE: Record<StockState, object | null> = {
+  ok: null,
+  low: { backgroundColor: colors.warningBg, borderWidth: 1, borderColor: colors.warning },
+  minus: { backgroundColor: colors.dangerBg, borderWidth: 1, borderColor: colors.danger },
+  locked: { backgroundColor: colors.danger, borderWidth: 1, borderColor: colors.danger },
+};
+
+const NOTE_COLOUR: Record<StockState, object | null> = {
+  ok: null, low: { color: colors.warning }, minus: { color: colors.danger }, locked: { color: colors.danger },
+};
+
+/** Pieces that can be sold: below-zero counts are not stock. */
+const available = (rows: ApparelStockRow[]) => rows.reduce((n, r) => n + Math.max(r.quantity, 0), 0);
+
+const LegendChip: React.FC<{ state: StockState; label: string }> = ({ state, label }) => (
+  <View style={styles.legendItem}>
+    <View style={[styles.legendSwatch, STATE_STYLE[state]]} />
+    <Text style={styles.hint}>{label}</Text>
+  </View>
+);
+
+/**
+ * Update a whole style at once: every size and colour is listed with what is on hand, and the manager types only the ones
+ * that changed, either pieces to add or the exact count on the shelf. One adjustment is saved per size typed.
+ */
+const ProductStockSheet: React.FC<{ branchId?: string; product: ProductStock; onClose: () => void }> = ({ branchId, product, onClose }) => {
   const adjust = useAdjustApparelStock();
   const update = useUpdateApparelStock();
-  const movements = useApparelMovements({ branch_id: branchId, variant_id: row.variant_id });
-  const [current, setCurrent] = useState(row);
-  const [mode, setMode] = useState<'delta' | 'counted'>('delta');
-  const [amount, setAmount] = useState('');
-  const [reason, setReason] = useState('');
-  const [low, setLow] = useState(row.low_stock_level?.toString() ?? '');
-  const [cost, setCost] = useState(row.cost_price_paise !== undefined ? (row.cost_price_paise / 100).toFixed(2) : '');
-  const [key, setKey] = useState(newIdempotencyKey);
+  const rows = Array.from(product.cells.values());
+  const anyMinus = rows.some((r) => r.quantity < 0);
+  const [mode, setMode] = useState<'add' | 'count'>(anyMinus ? 'count' : 'add');
+  const [reason, setReason] = useState((anyMinus ? COUNT_REASONS : ADD_REASONS)[0]);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const lows = new Set(rows.map((r) => r.low_stock_level ?? null));
+  const [low, setLow] = useState(lows.size === 1 && rows[0]?.low_stock_level != null ? String(rows[0].low_stock_level) : '');
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => setKey(newIdempotencyKey()), [mode, amount, reason]);
-  const value = parseInt(amount, 10);
-  const canAdjust = !Number.isNaN(value) && (mode === 'counted' ? value >= 0 : value !== 0) && reason.trim().length >= 3;
+  const [done, setDone] = useState<string | null>(null);
 
+  const removing = mode === 'add' && reason === 'Damaged / missing';
+  const typed = rows.filter((r) => (values[r.variant_id] ?? '') !== '' && (mode === 'count' || parseInt(values[r.variant_id], 10) > 0));
+  const pieces = typed.reduce((n, r) => n + parseInt(values[r.variant_id], 10), 0);
+
+  const switchMode = (m: 'add' | 'count') => {
+    setMode(m);
+    setReason((m === 'add' ? ADD_REASONS : COUNT_REASONS)[0]);
+    setValues({});
+    setDone(null);
+  };
+
+  /** Each typed size is saved on its own; the ones saved are cleared, so pressing again retries only what failed. */
   const save = async () => {
     setError(null);
-    try {
-      setCurrent(await adjust.mutateAsync({ input: { branch_id: branchId, variant_id: row.variant_id, [mode]: value, reason }, idempotencyKey: key }));
-      setAmount('');
-      setReason('');
-    } catch (e) {
-      setError(errorText(e));
+    setDone(null);
+    setSaving(true);
+    let ok = 0;
+    for (const r of typed) {
+      const n = parseInt(values[r.variant_id], 10);
+      const change = mode === 'count' ? { counted: n } : { delta: removing ? -n : n };
+      try {
+        await adjust.mutateAsync({ input: { branch_id: branchId, variant_id: r.variant_id, ...change, reason }, idempotencyKey: newIdempotencyKey() });
+        ok += 1;
+        setValues((v) => ({ ...v, [r.variant_id]: '' }));
+      } catch (e) {
+        setError(`${r.size} / ${r.colour}: ${errorText(e)}`);
+      }
     }
+    setSaving(false);
+    if (ok) setDone(`Updated ${ok} size${ok === 1 ? '' : 's'}.`);
   };
-  const saveSettings = async () => {
+
+  const saveLow = async () => {
     setError(null);
+    setDone(null);
     try {
-      setCurrent(await update.mutateAsync({ variantId: row.variant_id, changes: {
-        branch_id: branchId, low_stock_level: low.trim() ? parseInt(low, 10) : null,
-        ...(row.cost_price_paise !== undefined || cost.trim() ? { cost_price_paise: cost.trim() ? toPaise(cost) : null } : {}),
-      } }));
+      for (const r of rows) {
+        await update.mutateAsync({ variantId: r.variant_id, changes: { branch_id: branchId, low_stock_level: low.trim() ? parseInt(low, 10) : null } });
+      }
+      setDone('Low-stock alert saved for every size.');
     } catch (e) {
       setError(errorText(e));
     }
   };
+
+  const reasons = mode === 'add' ? ADD_REASONS : COUNT_REASONS;
+  const saveTitle = !typed.length ? (mode === 'count' ? 'Type the counts to save' : 'Type pieces to save')
+    : mode === 'count' ? `Save ${typed.length} count${typed.length === 1 ? '' : 's'}`
+      : `${removing ? 'Remove' : 'Add'} ${pieces} piece${pieces === 1 ? '' : 's'}`;
 
   return (
-    <Modal visible onClose={onClose} title={`${row.product_name} · ${row.size} · ${row.colour}`}
-      subtitle={`${current.quantity} on hand${row.barcode ? ` · ${row.barcode}` : ''}`}
-      footer={<Button title="Close" variant="secondary" onPress={onClose} />}>
-      <ScrollView style={{ maxHeight: 520 }} contentContainerStyle={{ gap: spacing.md }}>
+    <Modal visible onClose={onClose} title={`Update stock · ${product.name}`}
+      subtitle={`${available(rows)} in stock · ${product.sizes.length} sizes × ${product.colours.length} colours`}
+      footer={
+        <>
+          <Button title="Close" variant="secondary" onPress={onClose} />
+          <View style={{ flex: 1 }} />
+          <Button title={saveTitle} onPress={save} disabled={!typed.length} loading={saving} />
+        </>
+      }>
+      <ScrollView style={{ maxHeight: 560 }} contentContainerStyle={{ gap: spacing.md }}>
         <View style={styles.wrap}>
-          <Button title="Add or remove" size="sm" variant={mode === 'delta' ? 'primary' : 'secondary'} onPress={() => setMode('delta')} />
-          <Button title="Count" size="sm" variant={mode === 'counted' ? 'primary' : 'secondary'} onPress={() => setMode('counted')} />
+          <Button title="Add pieces" size="sm" variant={mode === 'add' ? 'primary' : 'secondary'} onPress={() => switchMode('add')} />
+          <Button title="Set exact count" size="sm" variant={mode === 'count' ? 'primary' : 'secondary'} onPress={() => switchMode('count')} />
         </View>
-        <Input label={mode === 'delta' ? 'Pieces (+ to add, - to remove)' : 'Pieces counted on the shelf'} value={amount}
-          onChangeText={(v) => setAmount(mode === 'delta' ? whole(v) : v.replace(/\D/g, ''))} keyboardType="numbers-and-punctuation" />
-        <Input label="Reason" value={reason} onChangeText={setReason} placeholder={mode === 'delta' ? 'e.g. damaged in the trial room' : 'e.g. monthly count'} />
-        <Button title={mode === 'delta' ? 'Save adjustment' : 'Save count'} onPress={save} disabled={!canAdjust} loading={adjust.isPending} />
+        <View style={styles.reasonRow}>
+          <Text style={styles.label}>Reason</Text>
+          {reasons.map((r) => (
+            <Pressable key={r} onPress={() => setReason(r)} accessibilityRole="radio" accessibilityState={{ selected: reason === r }}
+              style={[styles.reasonChip, reason === r ? styles.reasonChipOn : null]}>
+              <Text style={[styles.reasonText, reason === r ? styles.reasonTextOn : null]}>{r}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={styles.hint}>
+          {mode === 'count' ? 'Type what is on the shelf for the sizes you counted. Leave the rest blank.'
+            : removing ? 'Type how many to take off for each size. Leave the rest blank.'
+              : 'Type how many arrived for each size. Leave the rest blank.'}
+        </Text>
 
-        <View style={styles.pair}>
-          <View style={styles.field}><Input style={styles.fill} label="Low at or below" value={low} onChangeText={(v) => setLow(v.replace(/\D/g, ''))} keyboardType="number-pad" /></View>
-          {row.cost_price_paise !== undefined || current.cost_price_paise !== undefined || !!cost ? (
-            <View style={styles.field}><Input style={styles.fill} label="Cost per piece (₹)" value={cost} onChangeText={setCost} keyboardType="decimal-pad" /></View>
-          ) : null}
-          <Button title="Save" size="sm" variant="secondary" onPress={saveSettings} loading={update.isPending} />
-        </View>
+        <ScrollView horizontal>
+          <View>
+            <View style={styles.gridRow}>
+              <Text style={[styles.gridHead, styles.colourCell]} />
+              {product.sizes.map((s) => <Text key={s} style={[styles.gridHead, styles.inputCell]}>{s}</Text>)}
+            </View>
+            {product.colours.map((c) => (
+              <View key={c} style={[styles.gridRow, { alignItems: 'flex-start' }]}>
+                <Text style={[styles.colourName, styles.colourCell, { marginTop: 12 }]} numberOfLines={1}>{c}</Text>
+                {product.sizes.map((s) => {
+                  const r = product.cells.get(`${s}|${c}`);
+                  if (!r) return <Text key={s} style={[styles.inputCell, styles.empty, { textAlign: 'center' }]}>—</Text>;
+                  const state = stockState(r.quantity, r.low_stock_level);
+                  const n = parseInt(values[r.variant_id] ?? '', 10);
+                  const after = Number.isNaN(n) ? null : mode === 'count' ? n : removing ? r.quantity - n : r.quantity + n;
+                  return (
+                    <View key={s} style={styles.inputCell}>
+                      <Input style={styles.fill}
+                        value={values[r.variant_id] ?? ''} placeholder={String(r.quantity)} keyboardType="number-pad"
+                        accessibilityLabel={`${s} ${c}, ${r.quantity} now`}
+                        onChangeText={(v) => setValues({ ...values, [r.variant_id]: v.replace(/\D/g, '') })} />
+                      <Text style={[styles.cellNote, NOTE_COLOUR[after === null ? state : stockState(after, r.low_stock_level)]]}>
+                        {after === null ? `now ${r.quantity}` : `→ ${after}`}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+        {done ? <Text style={styles.done}>{done}</Text> : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        <Text style={styles.label}>History</Text>
-        {movements.isError ? <Text style={styles.hint}>Only owners and managers see the history.</Text> : null}
-        {(movements.data?.items ?? []).slice(0, 15).map((m) => (
-          <View key={m.id} style={styles.deliveryRow}>
-            <Text style={styles.body}>{m.kind.replace('_', ' ')} {m.quantity > 0 ? `+${m.quantity}` : m.quantity} → {m.balance_after}</Text>
-            <Text style={styles.hint}>{formatDateTime(m.created_at)}{m.created_by ? ` · ${m.created_by}` : ''}{m.reason ? ` · ${m.reason}` : ''}</Text>
+        <View style={{ gap: spacing.xs }}>
+          <Text style={styles.label}>Warn me when any size is at or below</Text>
+          <View style={[styles.pair, { alignItems: 'center' }]}>
+            <View style={styles.field}>
+              <Input style={styles.fill} containerStyle={{ marginBottom: 0 }} value={low} placeholder={lows.size > 1 ? 'differs by size' : 'e.g. 2'}
+                accessibilityLabel="Warn me when any size is at or below"
+                onChangeText={(v) => setLow(v.replace(/\D/g, ''))} keyboardType="number-pad" />
+            </View>
+            <Button title="Save" variant="secondary" onPress={saveLow} loading={update.isPending} />
           </View>
-        ))}
+        </View>
       </ScrollView>
     </Modal>
   );
 };
 
-/** A delivery: pick a style, type pieces per size and colour (and the cost per piece), add more styles, then receive it all. */
-const ReceiveSheet: React.FC<{ branchId?: string; rows: ApparelStockRow[]; onClose: () => void }> = ({ branchId, rows, onClose }) => {
+/** A catalogue style -> its size x colour grid of active variants, in the order the server sends them. */
+function gridOf(p: ApparelProduct) {
+  const variants = p.variants.filter((v) => v.is_active);
+  return {
+    name: p.name,
+    sizes: Array.from(new Set(variants.map((v) => v.size))),
+    colours: Array.from(new Set(variants.map((v) => v.colour))),
+    cells: new Map(variants.map((v) => [`${v.size}|${v.colour}`, { variant_id: v.id, size: v.size, colour: v.colour }])),
+  };
+}
+
+/**
+ * A delivery: pick a style from the dropdown (or make a new one), type pieces per size and colour (and the cost per piece), add
+ * more styles, then receive it all. The dropdown lists the catalogue, so styles with no stock yet can be received too.
+ */
+const ReceiveSheet: React.FC<{ branchId?: string; onClose: () => void }> = ({ branchId, onClose }) => {
   const receive = useReceiveApparelStock();
-  const products = useMemo(() => byProduct(rows), [rows]);
   const [find, setFind] = useState('');
-  const [productId, setProductId] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [picked, setPicked] = useState<ApparelProduct | null>(null);
+  const catalogue = useApparelProducts({ search: find.trim() || undefined });
+  const styles_ = catalogue.data?.items ?? [];
+  const product = useMemo(() => (picked ? gridOf(picked) : null), [picked]);
   const [cells, setCells] = useState<Record<string, string>>({});
   const [cost, setCost] = useState('');
   const [lines, setLines] = useState<(ApparelPurchaseInput['lines'][number] & { label: string })[]>([]);
@@ -234,8 +371,12 @@ const ReceiveSheet: React.FC<{ branchId?: string; rows: ApparelStockRow[]; onClo
   const [done, setDone] = useState<string | null>(null);
   useEffect(() => setKey(newIdempotencyKey()), [lines, supplier, invoice]);
 
-  const product = products.find((p) => p.productId === productId);
-  const matches = find.trim() ? products.filter((p) => p.name.toLowerCase().includes(find.trim().toLowerCase())).slice(0, 8) : [];
+  const pick = (p: ApparelProduct) => {
+    setPicked(p);
+    setCells({});
+    setCost('');
+    setOpen(false);
+  };
 
   const addProduct = () => {
     if (!product) return;
@@ -245,7 +386,7 @@ const ReceiveSheet: React.FC<{ branchId?: string; rows: ApparelStockRow[]; onClo
         label: `${product.name} ${r.size} ${r.colour}` }] : [];
     });
     setLines((ls) => [...ls.filter((l) => !added.some((a) => a.variant_id === l.variant_id)), ...added]);
-    setProductId(null);
+    setPicked(null);
     setCells({});
     setCost('');
     setFind('');
@@ -280,7 +421,10 @@ const ReceiveSheet: React.FC<{ branchId?: string; rows: ApparelStockRow[]; onClo
         </View>
         {product ? (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>{product.name}</Text>
+            <View style={styles.deliveryRow}>
+              <Text style={styles.cardTitle}>{product.name}</Text>
+              <Button title="Change style" size="sm" variant="ghost" onPress={() => setPicked(null)} />
+            </View>
             {product.colours.map((c) => (
               <View key={c} style={styles.gridRow}>
                 <Text style={[styles.colourName, styles.colourCell]} numberOfLines={1}>{c}</Text>
@@ -301,15 +445,41 @@ const ReceiveSheet: React.FC<{ branchId?: string; rows: ApparelStockRow[]; onClo
             </View>
           </View>
         ) : (
-          <>
-            <Input label="Add a style" value={find} onChangeText={setFind} placeholder="Type a name" />
-            {matches.map((p) => (
-              <Pressable key={p.productId} onPress={() => setProductId(p.productId)} style={styles.match}>
-                <Text style={styles.body}>{p.name}</Text>
-                <Text style={styles.hint}>{p.sizes.join(' · ')} — {p.colours.join(', ')}</Text>
-              </Pressable>
-            ))}
-          </>
+          <View>
+            <Text style={styles.label}>Add a style</Text>
+            <View style={[styles.pair, { marginTop: 4, alignItems: 'center' }]}>
+              <View style={{ flex: 1 }}>
+                <Input style={styles.fill} value={find} placeholder="Search or pick from the list"
+                  onChangeText={(v) => { setFind(v); setOpen(true); }} onFocus={() => setOpen(true)} />
+              </View>
+              <Button title={open ? 'Hide ▴' : 'All styles ▾'} variant="secondary" size="sm" onPress={() => setOpen(!open)} />
+            </View>
+            {open ? (
+              <View style={styles.dropdown}>
+                <ScrollView style={{ maxHeight: 240 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                  {catalogue.isLoading ? <Text style={[styles.hint, styles.option]}>Loading styles…</Text> : null}
+                  {!catalogue.isLoading && !styles_.length ? (
+                    <Text style={[styles.hint, styles.option]}>{find.trim() ? `No style matches "${find.trim()}".` : 'No styles yet.'}</Text>
+                  ) : null}
+                  {styles_.map((p) => {
+                    const g = gridOf(p);
+                    return (
+                      <Pressable key={p.id} onPress={() => pick(p)} style={styles.option} accessibilityRole="button">
+                        <Text style={styles.body}>{p.name}</Text>
+                        <Text style={styles.hint}>
+                          {[p.style_code, p.category_name].filter(Boolean).join(' · ')}{p.style_code || p.category_name ? ' — ' : ''}
+                          {g.sizes.join(' · ')} — {g.colours.join(', ')}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+                <Pressable onPress={() => setCreating(true)} style={[styles.option, styles.newOption]} accessibilityRole="button">
+                  <Text style={styles.newOptionText}>+ New style{find.trim() ? ` "${find.trim()}"` : ''}</Text>
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
         )}
         {lines.length ? <Text style={styles.label}>In this delivery</Text> : null}
         {lines.map((l) => (
@@ -320,6 +490,10 @@ const ReceiveSheet: React.FC<{ branchId?: string; rows: ApparelStockRow[]; onClo
         ))}
         {error ? <Text style={styles.error}>{error}</Text> : null}
       </ScrollView>
+      {creating ? (
+        <ProductEditor product={null} initialName={find.trim()} onClose={() => setCreating(false)}
+          onCreated={(p) => { setCreating(false); setFind(''); pick(p); }} />
+      ) : null}
     </Modal>
   );
 };
@@ -342,8 +516,6 @@ const styles = StyleSheet.create({
   cell: { width: 52, height: 34, textAlign: 'center' },
   qtyCell: { alignItems: 'center', justifyContent: 'center', borderRadius: radii.sm, backgroundColor: colors.surfaceLight },
   qty: { ...typography.bodyBold, color: colors.text },
-  low: { backgroundColor: colors.warningBg ?? colors.surfaceLight, borderWidth: 1, borderColor: colors.warning },
-  out: { backgroundColor: colors.dangerBg, borderWidth: 1, borderColor: colors.danger },
   empty: { color: colors.textMuted, lineHeight: 34 },
   inputCell: { width: 64 },
   deliveryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap', paddingVertical: 4 },
@@ -351,7 +523,25 @@ const styles = StyleSheet.create({
   pair: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, alignItems: 'flex-end' },
   field: { flexGrow: 1, flexBasis: 140, minWidth: 0 },
   fill: { width: '100%' as const, minWidth: 0 },
-  match: { padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceLight, gap: 2 },
+  reasonRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  reasonChip: { paddingVertical: 3, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: colors.surfaceBorder },
+  reasonChipOn: { borderColor: colors.primary, backgroundColor: colors.primaryGlow },
+  reasonText: { ...typography.caption, color: colors.textSecondary },
+  reasonTextOn: { color: colors.primary, fontFamily: fonts.semibold },
+  cardActions: { alignItems: 'flex-end', gap: spacing.xs },
+  cellNote: { ...typography.caption, color: colors.textMuted, textAlign: 'center', marginTop: 2 },
+  legend: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, paddingHorizontal: spacing.xl, paddingBottom: spacing.sm },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  legendSwatch: { width: 14, height: 14, borderRadius: 4 },
+  productTotal: { ...typography.bodyBold, color: colors.text },
+  rowTotal: { ...typography.bodyBold, color: colors.text, textAlign: 'center', lineHeight: 34 },
+  qtyLocked: { color: colors.textInverse },
+  stockBox: { alignItems: 'center', paddingVertical: spacing.md, borderRadius: radii.lg, backgroundColor: colors.surfaceLight, gap: 2 },
+  stockNumber: { fontSize: 36, fontFamily: fonts.bold, color: colors.text },
+  dropdown: { marginTop: spacing.xs, borderWidth: 1, borderColor: colors.surfaceBorder, borderRadius: radii.md, backgroundColor: colors.surface, overflow: 'hidden' },
+  option: { paddingVertical: spacing.sm, paddingHorizontal: spacing.md, gap: 2, borderBottomWidth: 1, borderBottomColor: colors.surfaceBorder },
+  newOption: { borderBottomWidth: 0, backgroundColor: colors.surfaceLight },
+  newOptionText: { ...typography.bodyBold, color: colors.primary },
   error: { ...typography.caption, color: colors.danger },
   done: { ...typography.caption, color: colors.success, fontFamily: fonts.semibold },
 });

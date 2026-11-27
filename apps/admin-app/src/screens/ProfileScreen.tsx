@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Button, Card, colors, fonts, RoleBadge, spacing, typography } from '@repo/shared-ui';
+import { Button, Card, colors, fonts, Input, Modal, RoleBadge, spacing, typography } from '@repo/shared-ui';
 import { StaffRole, catalogLabel, roleLabel } from '@repo/shared-utils';
-import { useEntitlements } from '@repo/api-client';
+import { ApiError, useEntitlements } from '@repo/api-client';
 import { BranchPicker } from '../components/BranchPicker';
 import { Icon } from '../components/Icon';
 import { useAuthStore } from '../stores/authStore';
@@ -24,8 +24,37 @@ const CAN_DO: Partial<Record<StaffRole, string[]>> = {
 
 /** You: who is signed in, what you can do, which branch you are looking at, and signing out. */
 export const ProfileScreen: React.FC = () => {
-  const { currentUser, activeBranchName, branches, logout } = useAuthStore();
+  const { currentUser, activeBranchId, activeBranchName, branches, logout, renameBranch } = useAuthStore();
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const canRename = currentUser?.role === StaffRole.OWNER && !!activeBranchId;
+  const trimmed = newName.trim();
+
+  const openRename = () => {
+    setNewName(activeBranchName);
+    setRenameError(null);
+    setRenaming(true);
+  };
+
+  const saveName = async () => {
+    if (!trimmed || trimmed === activeBranchName) {
+      setRenaming(false);
+      return;
+    }
+    setSaving(true);
+    setRenameError(null);
+    try {
+      await renameBranch(activeBranchId, trimmed);
+      setRenaming(false);
+    } catch (e) {
+      setRenameError(e instanceof ApiError ? e.message : 'Could not rename the branch. Try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
   const canSwitch = branches.length > 1;
   const initials = (currentUser?.full_name ?? '?').split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase();
   const category = useEntitlements().data?.category;
@@ -58,12 +87,13 @@ export const ProfileScreen: React.FC = () => {
 
       <Text style={styles.sectionTitle}>Branch</Text>
       <Card style={styles.card} padded={false}>
+        <View style={styles.branchRow}>
         <Pressable
           onPress={() => canSwitch && setPickerOpen(true)}
           disabled={!canSwitch}
           accessibilityRole="button"
           accessibilityLabel={canSwitch ? `Branch ${activeBranchName}. Change branch` : `Branch ${activeBranchName}`}
-          style={({ pressed }) => [styles.row, pressed ? { opacity: 0.7 } : null]}
+          style={({ pressed }) => [styles.row, { flex: 1 }, pressed ? { opacity: 0.7 } : null]}
         >
           <View style={{ flex: 1 }}>
             <Text style={styles.label}>{activeBranchName}</Text>
@@ -71,10 +101,41 @@ export const ProfileScreen: React.FC = () => {
           </View>
           {canSwitch ? <Icon name="chevron-right" size={20} color={colors.textMuted} /> : null}
         </Pressable>
+        {canRename ? (
+          <View style={styles.rename}>
+            <Button title="Rename" variant="secondary" size="sm" onPress={openRename} accessibilityLabel={`Rename ${activeBranchName}`} />
+          </View>
+        ) : null}
+        </View>
       </Card>
 
       <Button title="Sign out" variant="outline" onPress={() => void logout()} />
       <BranchPicker visible={pickerOpen} onClose={() => setPickerOpen(false)} />
+      <Modal
+        centered
+        visible={renaming}
+        onClose={() => setRenaming(false)}
+        title="Rename branch"
+        subtitle="Shown in the apps and printed on bills. Bill numbers keep the branch code."
+        footer={
+          <>
+            <Button title="Cancel" variant="secondary" onPress={() => setRenaming(false)} />
+            <Button title="Save" onPress={saveName} loading={saving} disabled={!trimmed || trimmed.length > 100} />
+          </>
+        }
+      >
+        <Input
+          label="Branch name"
+          value={newName}
+          onChangeText={setNewName}
+          autoCapitalize="words"
+          autoFocus
+          maxLength={100}
+          onSubmitEditing={saveName}
+          returnKeyType="done"
+          error={renameError ?? undefined}
+        />
+      </Modal>
     </ScrollView>
   );
 };
@@ -95,5 +156,7 @@ const styles = StyleSheet.create({
   abilityText: { ...typography.body, color: colors.text, flex: 1 },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 56, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   label: { ...typography.bodyBold, color: colors.text },
+  branchRow: { flexDirection: 'row', alignItems: 'center' },
+  rename: { paddingRight: spacing.lg },
   sub: { ...typography.caption, color: colors.textMuted },
 });

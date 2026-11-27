@@ -108,12 +108,24 @@ async def test_discounts_need_a_reason_and_big_ones_a_manager(client, db, shop):
     r = await sell(client, shop["cashier"], [(v, 1)], bill_discount="50.00")
     assert r.status_code == 422
     r = await sell(client, shop["cashier"], [(v, 1)], bill_discount="50.00", discount_reason="Loyal customer")
-    assert r.status_code == 201  # 5%: under the threshold
-    r = await sell(client, shop["cashier"], [(v, 1)], bill_discount="300.00", discount_reason="Damaged")
+    assert r.status_code == 201  # 5%: under the limit
+    r = await sell(client, shop["cashier"], [(v, 1)], bill_discount="750.00", discount_reason="Clearance")
+    assert r.status_code == 201  # exactly 75%: the counter may still give it
+    r = await sell(client, shop["cashier"], [(v, 1)], bill_discount="800.00", discount_reason="Damaged")
     assert r.status_code == 403 and r.json()["error"]["code"] == "approval_required"
-    r = await sell(client, shop["cashier"], [(v, 1)], bill_discount="300.00", discount_reason="Damaged", approver_pin="7001")
-    assert r.status_code == 201 and r.json()["discount_amount"] == "300.00"
-    r = await sell(client, shop["manager"], [(v, 1)], bill_discount="300.00", discount_reason="Damaged")
+    r = await sell(client, shop["cashier"], [(v, 1)], bill_discount="800.00", discount_reason="Damaged", approver_pin="7001")
+    assert r.status_code == 201 and r.json()["discount_amount"] == "800.00"
+    r = await sell(client, shop["manager"], [(v, 1)], bill_discount="800.00", discount_reason="Damaged")
+    assert r.status_code == 201
+
+
+async def test_over_75_percent_off_one_item_needs_a_manager_even_when_the_bill_is_under(client, shop):
+    made = await style(client, shop, sizes=["M", "L"], price="1000.00", mrp=None)
+    m, l = (v["id"] for v in made["variants"])
+    lines = [{"variant_id": m, "quantity": 1, "line_discount": "800.00"}, {"variant_id": l, "quantity": 1}]
+    r = await sell(client, shop["cashier"], lines, discount_reason="Damaged piece")  # 40% of the bill, 80% of one item
+    assert r.status_code == 403 and r.json()["error"]["code"] == "approval_required"
+    r = await sell(client, shop["cashier"], lines, discount_reason="Damaged piece", approver_pin="7001")
     assert r.status_code == 201
 
 
@@ -163,6 +175,31 @@ async def test_concurrent_sales_of_the_same_variant_keep_the_ledger_consistent(c
     moves = (await db.scalars(select(ApparelStockMovement).where(ApparelStockMovement.kind == "sale")
                               .order_by(ApparelStockMovement.created_at))).all()
     assert [m.balance_after for m in moves] == [9, 8, 7, 6, 5]
+
+
+async def test_stock_may_go_below_zero_only_down_to_the_limit(client, db, shop):
+    v = (await style(client, shop, sizes=["M"], stock=1))["variants"][0]["id"]
+    assert (await sell(client, shop["cashier"], [(v, 6)])).status_code == 201  # 1 -> -5: allowed, the limit itself
+    assert await on_hand(client, shop["owner"], v) == -5
+
+    r = await sell(client, shop["cashier"], [(v, 1)])  # -5 -> -6: locked
+    assert r.status_code == 409 and r.json()["error"]["code"] == "stock_limit_reached", r.text
+    assert r.json()["error"]["details"]["variants"][0]["on_hand"] == -5
+    assert await on_hand(client, shop["owner"], v) == -5
+    assert await db.scalar(select(func.count()).select_from(ApparelSale)) == 1  # the refused sale left nothing behind
+
+    # Counting the shelf unlocks it.
+    r = await client.post(f"{A}/adjustments", json={"variant_id": v, "counted": 3, "reason": "Shelf count"}, headers=idem(shop["owner"]))
+    assert r.status_code == 200, r.text
+    assert (await sell(client, shop["cashier"], [(v, 2)])).status_code == 201
+
+
+async def test_a_sale_past_the_limit_is_refused_whole(client, shop):
+    made = await style(client, shop, sizes=["M", "L"], stock=1)
+    ok, short = (v["id"] for v in made["variants"])
+    r = await sell(client, shop["cashier"], [(ok, 1), (short, 7)])
+    assert r.status_code == 409 and r.json()["error"]["code"] == "stock_limit_reached"
+    assert await on_hand(client, shop["owner"], ok) == 1 and await on_hand(client, shop["owner"], short) == 1
 
 
 # --- paying ------------------------------------------------------------------------------------------------------------------
@@ -310,6 +347,41 @@ async def test_closing_the_cash_day_counts_the_dress_shops_cash(client, db, shop
 
 
 # --- who may, and whose --------------------------------------------------------------------------------------------------------
+
+
+async def test_a_customer_can_be_put_on_an_invoice_at_payment_and_shows_with_its_number(client, shop, other):
+    v = (await style(client, shop, sizes=["M"], price="999.00"))["variants"][0]["id"]
+    sale = (await sell(client, shop["cashier"], [(v, 1)])).json()
+    assert sale["customer"] is None
+    cust = (await client.post(f"{API}/customers", json={"name": "Asha", "phone": "9876543210", "gstin": "29ABCDE1234F1Z5"},
+                              headers=auth_headers(shop["cashier"]))).json()
+
+    url = f"{A}/sales/{sale['id']}/customer"
+    r = await client.put(url, json={"customer_id": cust["id"]}, headers=auth_headers(shop["cashier"]))
+    assert r.status_code == 200, r.text
+    assert r.json()["customer"] == {"id": cust["id"], "name": "Asha", "phone": "9876543210", "gstin": "29ABCDE1234F1Z5"}
+    assert (await client.get(f"{A}/sales/{sale['id']}", headers=auth_headers(shop["cashier"]))).json()["customer"]["name"] == "Asha"
+    receipt = (await client.get(f"{A}/sales/{sale['id']}/receipt", params={"format": "text"}, headers=auth_headers(shop["cashier"]))).text
+    assert "Asha" in receipt and "29ABCDE1234F1Z5" in receipt
+
+    # Paid: the invoice counts in the customer's visits and spend and is listed under its invoice number in the admin app.
+    await pay(client, shop["cashier"], sale["id"], "999.00")
+    found = (await client.get(f"{API}/customers/{cust['id']}", headers=auth_headers(shop["owner"]))).json()
+    assert (found["visits"], found["total_spent"]) == (1, "999.00")
+    bills = (await client.get(f"{API}/customers/{cust['id']}/bills", headers=auth_headers(shop["owner"]))).json()["items"]
+    assert [(b["bill_number"], b["order_id"], b["status"]) for b in bills] == [(sale["sale_number"], None, "paid")]
+
+    # Taken off again; a customer of another business, or a cancelled sale, is refused.
+    r = await client.put(url, json={"customer_id": None}, headers=auth_headers(shop["cashier"]))
+    assert r.status_code == 200 and r.json()["customer"] is None and r.json()["customer_id"] is None
+    theirs = (await client.post(f"{API}/customers", json={"name": "Ravi"}, headers=auth_headers(other["owner"]))).json()
+    r = await client.put(url, json={"customer_id": theirs["id"]}, headers=auth_headers(shop["cashier"]))
+    assert r.status_code == 422 and r.json()["error"]["code"] == "customer_not_found"
+    assert (await client.put(url, json={"customer_id": cust["id"]}, headers=auth_headers(other["owner"]))).status_code == 404
+    gone = (await sell(client, shop["cashier"], [(v, 1)])).json()
+    await client.post(f"{A}/sales/{gone['id']}/void", json={}, headers=auth_headers(shop["cashier"]))
+    r = await client.put(f"{A}/sales/{gone['id']}/customer", json={"customer_id": cust["id"]}, headers=auth_headers(shop["cashier"]))
+    assert r.status_code == 409 and r.json()["error"]["code"] == "sale_voided"
 
 
 async def test_sales_belong_to_their_business_and_category(client, db, redis_client, shop, other):

@@ -17,7 +17,7 @@ from app.core.enums import (
     StoreCreditStatus,
 )
 from app.schemas.billing import PaymentReverse, PrintRowRead, TerminalPaymentComplete
-from app.schemas.common import Money, Pin, PositiveMoney, Reason
+from app.schemas.common import Money, OptionalHsn, Pin, PositiveMoney, Reason
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
 CategoryName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
@@ -25,7 +25,6 @@ Brand = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, ma
 Size = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20)]
 Colour = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
 Code = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64, pattern=r"^[\x21-\x7e]+$")]
-Hsn = Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^\d{4,8}$")]
 Rate = Annotated[Decimal, Field(ge=0, le=40, max_digits=5, decimal_places=2)]
 
 MAX_VARIANTS = 400  # sizes x colours of one style
@@ -132,7 +131,7 @@ class ProductCreate(VariantGrid):
     name: Name
     brand: Optional[Brand] = None
     style_code: Optional[Code] = None
-    hsn_code: Optional[Hsn] = None
+    hsn_code: OptionalHsn = None
     tax_mode: ApparelTaxMode = ApparelTaxMode.SLAB
     tax_rate: Optional[Rate] = None
     description: Optional[str] = Field(default=None, max_length=2000)
@@ -152,7 +151,7 @@ class ProductUpdate(BaseModel):
     name: Optional[Name] = None
     brand: Optional[Brand] = None
     style_code: Optional[Code] = None
-    hsn_code: Optional[Hsn] = None
+    hsn_code: OptionalHsn = None
     tax_mode: Optional[ApparelTaxMode] = None
     tax_rate: Optional[Rate] = None
     description: Optional[str] = Field(default=None, max_length=2000)
@@ -440,12 +439,26 @@ class ApparelPaymentRead(ORM):
     created_at: datetime
 
 
+class ApparelSaleCustomerRead(ORM):
+    """The customer on an invoice: enough to show and print it."""
+    id: uuid.UUID
+    name: str
+    phone: Optional[str] = None
+    gstin: Optional[str] = None
+
+
+class ApparelSaleCustomerSet(BaseModel):
+    """Put a customer on an invoice, or take them off it (`customer_id` null)."""
+    customer_id: Optional[uuid.UUID] = None
+
+
 class ApparelSaleRead(ORM):
     id: uuid.UUID
     branch_id: uuid.UUID
     sale_number: str
     business_date: date
     customer_id: Optional[uuid.UUID] = None
+    customer: Optional[ApparelSaleCustomerRead] = None
     salesperson_id: Optional[uuid.UUID] = None
     created_by_id: Optional[uuid.UUID] = None
     subtotal: Decimal
@@ -550,9 +563,16 @@ class ApparelLabelItem(BaseModel):
 
 
 class ApparelLabelsRequest(BaseModel):
+    """
+    `paper` "a4": an A4 sticker sheet, `columns` across. "roll": a label (sticker) printer: every page is one row of
+    `across` stickers of `label_width_mm` x `label_height_mm`, with no margin, so the printer's own driver prints it as is.
+    """
     items: List[ApparelLabelItem] = Field(min_length=1, max_length=200)
+    paper: Literal["a4", "roll"] = "a4"
     columns: int = Field(default=3, ge=1, le=6)
     label_height_mm: int = Field(default=30, ge=15, le=80)
+    label_width_mm: int = Field(default=50, ge=20, le=110)
+    across: int = Field(default=1, ge=1, le=3)
 
 
 class ReportSales(BaseModel):

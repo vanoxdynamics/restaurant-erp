@@ -3,26 +3,39 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, isApproval, type GlobalModule } from '../api';
 import { useCan } from '../auth';
+import { label } from '../format';
+import { modulesFor } from '../modules';
 import { Badge, ErrorBox, Field, Loading, PageHead, ReasonDialog, Segmented, Switch, useToast } from '../ui';
 
 export function ModulesPage() {
   const can = useCan();
   const modules = useQuery({ queryKey: ['modules'], queryFn: api.modules });
+  const categories = useQuery({ queryKey: ['business-categories'], queryFn: api.businessCategories, staleTime: Infinity });
+  const typeName = (k: string) => categories.data?.categories.find((c) => c.key === k)?.name ?? label(k);
+  const [type, setType] = useState('');
   const [switching, setSwitching] = useState<{ module: GlobalModule; enable: boolean } | null>(null);
   if (modules.isLoading) return <Loading />;
+  const shown = type ? modulesFor(type, modules.data ?? []) : modules.data ?? [];
 
   return (
     <>
       <PageHead title="Modules" sub="Switch a module off for every subscriber at once, or apply a change to many subscribers in bulk." />
       <ErrorBox error={modules.error} />
+      <div className="filters">
+        <select aria-label="Business type" value={type} onChange={(e) => setType(e.target.value)}>
+          <option value="">Every business type</option>
+          {categories.data?.categories.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
+        </select>
+      </div>
       <div className="table-wrap">
         <table>
-          <thead><tr><th>Module</th><th>Needs</th><th>Subscribers with access</th><th>Platform-wide</th><th className="right">Enabled</th></tr></thead>
+          <thead><tr><th>Module</th><th>Business types</th><th>Needs</th><th>Subscribers with access</th><th>Platform-wide</th><th className="right">Enabled</th></tr></thead>
           <tbody>
-            {modules.data?.map((m) => (
+            {shown.map((m) => (
               <tr key={m.key}>
                 <td><strong>{m.name}</strong><div className="muted">{m.description}</div></td>
-                <td>{m.depends_on.length ? m.depends_on.map((d) => <Badge key={d} value={d} tone="info" />) : <span className="muted">—</span>}</td>
+                <td>{m.business_types.map(typeName).join(', ')}</td>
+                <td>{m.depends_on.length ? m.depends_on.map((d) => <span key={d} className="badge info">{modules.data?.find((x) => x.key === d)?.name ?? d}</span>) : <span className="muted">—</span>}</td>
                 <td>{m.organizations_with_access}</td>
                 <td>{m.is_core ? <Badge value="always on" /> : m.globally_enabled ? <Badge value="on" tone="good" /> : <><Badge value="off" tone="bad" /><div className="muted">{m.reason}</div></>}</td>
                 <td className="right">
@@ -98,7 +111,7 @@ function BulkCard({ modules }: { modules: GlobalModule[] }) {
       <ErrorBox error={dry.error ?? apply.error} />
       <div className="row">
         <Field label="Module" htmlFor="bk-mod">
-          <select id="bk-mod" value={moduleKey} onChange={(e) => { setModuleKey(e.target.value); dry.reset(); }}>{modules.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}</select>
+          <select id="bk-mod" value={moduleKey} onChange={(e) => { setModuleKey(e.target.value); dry.reset(); }}>{modules.map((m) => <option key={m.key} value={m.key}>{m.name} ({m.business_types.map(label).join(', ')})</option>)}</select>
         </Field>
         <div className="field"><span className="label">Set to</span>
           <Segmented name="Set to" value={enabled} onChange={(v) => { setEnabled(v); dry.reset(); }} options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]} /></div>
@@ -115,7 +128,9 @@ function BulkCard({ modules }: { modules: GlobalModule[] }) {
       {dry.data && (
         <div style={{ marginTop: 14 }}>
           <div className="alert info" role="status">
-            <strong>{dry.data.changed.length}</strong> would change · {dry.data.unchanged} already {enabled === 'on' ? 'have' : 'lack'} it · {dry.data.blocked.length} blocked by dependencies
+            <strong>{dry.data.changed.length}</strong> would change · {dry.data.unchanged} already {enabled === 'on' ? 'have' : 'lack'} it
+            {' · '}{dry.data.blocked.filter((b) => b.reason !== 'not_for_business_type').length} blocked by dependencies
+            {' · '}{dry.data.blocked.filter((b) => b.reason === 'not_for_business_type').length} skipped (another business type)
           </div>
           {dry.data.changed.length > 0 && (
             <ul>{dry.data.changed.map((c) => (

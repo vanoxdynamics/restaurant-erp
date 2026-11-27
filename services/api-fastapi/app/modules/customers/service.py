@@ -2,8 +2,9 @@
 Customers: the people and businesses a shop sells to.
 
 A customer belongs to the business (not a branch) and is found by phone number or name. Putting a customer on an order is what
-links them to its bill: the bill prints their name, phone and GSTIN, and their visits and spend are the paid bills of their
-orders. Nothing here changes money; a sale never needs a customer.
+links them to its bill: the bill prints their name, phone and GSTIN. A dress shop puts the customer on the invoice itself. Their
+visits and spend are their paid restaurant bills and paid shop invoices together. Nothing here changes money; a sale never needs
+a customer.
 """
 
 import re
@@ -11,13 +12,15 @@ import uuid
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import cast, func, null, or_, select, union_all
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser
 from app.core.enums import BillStatus
 from app.core.errors import Conflict, Forbidden, NotFound
 from app.core.pagination import PageParams, paginate
+from app.models.apparel import ApparelSale
 from app.models.billing import Bill
 from app.models.customers import Customer
 from app.models.orders import Order
@@ -26,18 +29,31 @@ from app.schemas.customers import CustomerCreate, CustomerUpdate
 FIELDS = ("id", "name", "phone", "email", "gstin", "address", "notes", "is_active", "created_at", "updated_at")
 
 
-def _stats():
-    """Paid bills per customer: how often they came, what they spent and when they were last in."""
-    return (
-        select(
-            Order.customer_id.label("customer_id"),
-            func.count(Bill.id).label("visits"),
-            func.coalesce(func.sum(Bill.grand_total), 0).label("total_spent"),
-            func.max(Bill.created_at).label("last_visit_at"),
-        )
+def _paid():
+    """Every paid sale with a customer on it: restaurant bills (through their order) and dress shop invoices."""
+    restaurant = (
+        select(Order.customer_id.label("customer_id"), Bill.grand_total.label("amount"), Bill.created_at.label("at"))
         .join(Bill, Bill.order_id == Order.id)
         .where(Order.customer_id.is_not(None), Bill.status == BillStatus.PAID.value)
-        .group_by(Order.customer_id)
+    )
+    shop = (
+        select(ApparelSale.customer_id.label("customer_id"), ApparelSale.grand_total.label("amount"), ApparelSale.created_at.label("at"))
+        .where(ApparelSale.customer_id.is_not(None), ApparelSale.status == BillStatus.PAID.value)
+    )
+    return union_all(restaurant, shop).subquery()
+
+
+def _stats():
+    """Paid sales per customer: how often they came, what they spent and when they were last in."""
+    paid = _paid()
+    return (
+        select(
+            paid.c.customer_id,
+            func.count().label("visits"),
+            func.coalesce(func.sum(paid.c.amount), 0).label("total_spent"),
+            func.max(paid.c.at).label("last_visit_at"),
+        )
+        .group_by(paid.c.customer_id)
         .subquery()
     )
 
@@ -140,12 +156,27 @@ async def update(db: AsyncSession, user: CurrentUser, customer_id: uuid.UUID, pa
     return await read(db, user, customer.id)
 
 
-async def list_bills(db: AsyncSession, user: CurrentUser, customer_id: uuid.UUID, params: PageParams) -> Tuple[List[Bill], int]:
-    """The customer's bills, newest first, across every branch of the business."""
+async def list_bills(db: AsyncSession, user: CurrentUser, customer_id: uuid.UUID, params: PageParams) -> Tuple[List[Dict[str, Any]], int]:
+    """
+    The customer's bills, newest first, across every branch of the business: restaurant bills and dress shop invoices together.
+    A shop invoice has no order (`order_id` is null) and its invoice number is the bill number. Voided ones are left out.
+    """
     customer = await find(db, user, customer_id)
-    stmt = (
-        select(Bill).join(Order, Order.id == Bill.order_id)
+    restaurant = (
+        select(Bill.id, Bill.order_id, Bill.branch_id, Bill.bill_number, Bill.business_date, Bill.grand_total, Bill.status,
+               Bill.created_at)
+        .join(Order, Order.id == Bill.order_id)
         .where(Order.customer_id == customer.id, Bill.status != BillStatus.VOIDED.value)
-        .order_by(Bill.created_at.desc())
     )
-    return await paginate(db, stmt, params)
+    shop = (
+        select(ApparelSale.id, cast(null(), UUID(as_uuid=True)).label("order_id"), ApparelSale.branch_id,
+               ApparelSale.sale_number.label("bill_number"), ApparelSale.business_date, ApparelSale.grand_total,
+               ApparelSale.status, ApparelSale.created_at)
+        .where(ApparelSale.customer_id == customer.id, ApparelSale.status != BillStatus.VOIDED.value)
+    )
+    bills = union_all(restaurant, shop).subquery()
+    total = await db.scalar(select(func.count()).select_from(bills))
+    rows = (await db.execute(
+        select(bills).order_by(bills.c.created_at.desc(), bills.c.id).limit(params.limit).offset(params.offset)
+    )).mappings().all()
+    return [dict(r) for r in rows], int(total or 0)

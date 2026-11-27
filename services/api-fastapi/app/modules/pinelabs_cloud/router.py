@@ -10,8 +10,9 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser, get_current_user
+from app.core.auth import CurrentUser, get_current_user, require_category
 from app.core.database import get_db
+from app.core.enums import BusinessCategory
 from app.modules.apparel import sales as apparel_sales
 from app.modules.apparel.router import cashiers as apparel_cashiers, _result as apparel_result
 from app.modules.billing.router import _result as bill_result, cashier_roles
@@ -21,6 +22,9 @@ from app.schemas.apparel import ApparelPaymentResult
 from app.schemas.billing import PaymentResult, TerminalPaymentComplete
 
 router = APIRouter(tags=["Pine Labs cloud"], dependencies=[Depends(get_current_user)])
+
+# The dress-shop calls live here, outside the apparel router, so they repeat its business-type guard.
+dress_shop_only = [Depends(require_category(BusinessCategory.APPAREL))]
 
 
 class CloudConfigRead(BaseModel):
@@ -104,16 +108,16 @@ def _sale_result(outcome) -> CloudApparelPaymentResult:
     return CloudApparelPaymentResult(payment=base.payment, sale=base.sale, state=state, message=message)
 
 
-@router.post("/apparel/payments/{payment_id}/cloud/send", response_model=CloudApparelPaymentResult)
+@router.post("/apparel/payments/{payment_id}/cloud/send", response_model=CloudApparelPaymentResult, dependencies=dress_shop_only)
 async def send_sale_payment(payment_id: uuid.UUID, user: CurrentUser = Depends(apparel_cashiers), db: AsyncSession = Depends(get_db)):
     return _sale_result(await service.send(db, _sale_adapter(db, user, payment_id)))
 
 
-@router.post("/apparel/payments/{payment_id}/cloud/check", response_model=CloudApparelPaymentResult)
+@router.post("/apparel/payments/{payment_id}/cloud/check", response_model=CloudApparelPaymentResult, dependencies=dress_shop_only)
 async def check_sale_payment(payment_id: uuid.UUID, user: CurrentUser = Depends(apparel_cashiers), db: AsyncSession = Depends(get_db)):
     return _sale_result(await service.check(db, _sale_adapter(db, user, payment_id)))
 
 
-@router.post("/apparel/payments/{payment_id}/cloud/cancel", response_model=CloudApparelPaymentResult)
+@router.post("/apparel/payments/{payment_id}/cloud/cancel", response_model=CloudApparelPaymentResult, dependencies=dress_shop_only)
 async def cancel_sale_payment(payment_id: uuid.UUID, user: CurrentUser = Depends(apparel_cashiers), db: AsyncSession = Depends(get_db)):
     return _sale_result(await service.cancel(db, _sale_adapter(db, user, payment_id)))

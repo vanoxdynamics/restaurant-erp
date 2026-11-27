@@ -15,7 +15,7 @@ from app.core.events import commit, queue_event
 from app.core.lookups import get_or_404
 from app.models.floor import Branch, DiningTable, Floor
 from app.models.orders import Order
-from app.schemas.floor import BranchCreate, DiningTableCreate, FloorCreate, TableMergeRequest, TableTransferRequest
+from app.schemas.floor import BranchCreate, BranchUpdate, DiningTableCreate, FloorCreate, TableMergeRequest, TableTransferRequest
 
 
 async def list_branches(db: AsyncSession, user: CurrentUser) -> Sequence[Branch]:
@@ -38,6 +38,16 @@ async def create_branch(db: AsyncSession, user: CurrentUser, payload: BranchCrea
     except IntegrityError as exc:
         await db.rollback()
         raise Conflict("Branch code already exists", code="branch_code_taken") from exc
+    await commit(db)
+    return branch
+
+
+async def rename_branch(db: AsyncSession, user: CurrentUser, branch_id: uuid.UUID, payload: BranchUpdate) -> Branch:
+    """Rename one of the business's branches. Its code (on every bill number) stays as it was."""
+    branch = await get_or_404(db, Branch, branch_id, for_update=True)
+    if branch.organization_id != user.organization_id:
+        raise NotFound("Branch not found")
+    branch.name = payload.name
     await commit(db)
     return branch
 

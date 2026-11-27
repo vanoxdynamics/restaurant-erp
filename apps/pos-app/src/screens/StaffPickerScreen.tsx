@@ -28,6 +28,7 @@ export const StaffPickerScreen: React.FC<StaffPickerScreenProps> = ({ onSelect }
   const business = useBusiness();
   const device = useDeviceStore((s) => s.device)!;
   const unregister = useDeviceStore((s) => s.unregister);
+  const refreshBranch = useDeviceStore((s) => s.refreshBranch);
   const roster = useSignInRoster(device.deviceToken);
   // Before anyone signs in, the roster is the only place that knows what kind of business this is.
   const category = roster.data?.[0]?.category ?? business.category;
@@ -39,6 +40,11 @@ export const StaffPickerScreen: React.FC<StaffPickerScreenProps> = ({ onSelect }
   useEffect(() => {
     void storage.get<RosterEntry[]>(cacheKey(device.branchId)).then(setCached);
   }, [device.branchId]);
+
+  // Each time the list is loaded (this screen opens, or after a sign-out), pick up a branch rename made in the admin app.
+  useEffect(() => {
+    if (roster.dataUpdatedAt) void refreshBranch();
+  }, [roster.dataUpdatedAt, refreshBranch]);
 
   useEffect(() => {
     if (roster.data) void storage.trySet(cacheKey(device.branchId), roster.data);

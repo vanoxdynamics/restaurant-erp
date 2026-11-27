@@ -6,13 +6,12 @@ from typing import Annotated, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from app.core.enums import ItemUnit, Station
-from app.schemas.common import Money, TaxRate
+from app.schemas.common import Money, OptionalHsn, TaxRate
 
 ItemName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
 Name100 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 # Printable codes only: barcodes and SKUs are typed by scanners and people, compared exactly.
 Code = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64, pattern=r"^[!-~]+$")]
-HSN = Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^\d{4,8}$")]
 
 
 class ModifierItemBase(BaseModel):
@@ -83,7 +82,7 @@ class MenuItemBase(BaseModel):
     sort_order: int = 0
     barcode: Optional[Code] = None
     sku: Optional[Code] = None
-    hsn_code: Optional[HSN] = None
+    hsn_code: OptionalHsn = None
     unit: ItemUnit = ItemUnit.PIECE
     sold_by_weight: bool = False
 
@@ -108,9 +107,21 @@ class MenuItemUpdate(BaseModel):
     modifier_group_ids: Optional[List[uuid.UUID]] = Field(default=None, max_length=20)
     barcode: Optional[Code] = None
     sku: Optional[Code] = None
-    hsn_code: Optional[HSN] = None
+    hsn_code: OptionalHsn = None
     unit: Optional[ItemUnit] = None
     sold_by_weight: Optional[bool] = None
+
+    # Fields left out are not changed. These columns can never be empty, so an explicit null (for example
+    # `"base_price": null`) is refused here instead of reaching the database as a 500.
+    _NOT_NULL = ("name", "base_price", "tax_rate", "station", "category_id", "is_active", "is_available_86", "sort_order",
+                 "unit", "sold_by_weight")
+
+    @model_validator(mode="after")
+    def _no_null_required_fields(self) -> "MenuItemUpdate":
+        empty = [f for f in self._NOT_NULL if f in self.model_fields_set and getattr(self, f) is None]
+        if empty:
+            raise ValueError(f"{', '.join(empty)} cannot be empty")
+        return self
 
 
 class Toggle86Request(BaseModel):

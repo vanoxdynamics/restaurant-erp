@@ -165,6 +165,7 @@ export function SignIn() {
     <main className="signin">
       <div className="card">
         <h1>Platform Console</h1>
+        <p className="muted" style={{ margin: '-6px 0 4px' }}>Vanox ERP</p>
         <p className="muted" style={{ marginTop: 0 }}>{step === 'password' ? 'Sign in to manage subscribers and modules.' : 'Enter the code from your authenticator app.'}</p>
         <ErrorBox error={error} />
         {step === 'password' ? (

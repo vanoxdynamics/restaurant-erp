@@ -18,7 +18,6 @@ from sqlalchemy.orm import selectinload
 from app.core.audit import record_audit
 from app.core.auth import CurrentUser, require_branch_access, resolve_approver, resolve_branch_id
 from app.core.clock import business_date, utcnow
-from app.core.config import settings as app_settings
 from app.core.enums import ApparelMovementKind, AuditAction, BillStatus, PaymentStatus, Topic
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.events import commit, queue_event
@@ -39,6 +38,9 @@ from app.modules.retailkit.tax import compute_invoice
 from app.modules.retailkit.tenders import Tenders
 from app.schemas.apparel import ApparelSaleCreate, ApparelVoid
 from app.worker.tasks import send_manager_push_alert
+
+# A dress shop clears old stock at deep discounts, so the counter may give up to this much without a manager.
+DISCOUNT_APPROVAL_PERCENT = Decimal("75")
 
 ENTITY = "apparel_sale"
 SALE_LOADERS = (selectinload(ApparelSale.payments), selectinload(ApparelSale.lines))
@@ -167,7 +169,10 @@ async def create_sale(
     out = compute_invoice(tax_lines, payload.bill_discount, inclusive=settings.prices_include_tax, interstate=False,
                           round_to_rupee=settings.round_to_rupee)
 
-    high_discount = out.subtotal > ZERO and out.discount / out.subtotal * 100 > app_settings.DISCOUNT_APPROVAL_THRESHOLD_PERCENT
+    # Up to DISCOUNT_APPROVAL_PERCENT off the bill, or off any one item, the counter gives on its own; past it a manager or owner must approve.
+    high_discount = (out.subtotal > ZERO and out.discount / out.subtotal * 100 > DISCOUNT_APPROVAL_PERCENT) or any(
+        line.line_discount * 100 > price * line.quantity * DISCOUNT_APPROVAL_PERCENT
+        for line, price in zip(payload.lines, prices, strict=True))
     approver_id = None
     if overrides or high_discount:
         approver_id = await resolve_approver(db, user, branch_id, payload.approver_pin, redis_client)
@@ -210,6 +215,18 @@ async def create_sale(
     for line in payload.lines:
         sold[line.variant_id] = sold.get(line.variant_id, 0) + line.quantity
     levels = await stocks.lock_levels(db, branch_id, sold)
+    blocked = [(variant_id, levels[variant_id].quantity) for variant_id, pieces in sold.items()
+               if levels[variant_id].quantity - pieces < stocks.NEGATIVE_STOCK_LIMIT]
+    if blocked:
+        names = [f"{found[v][1].name} {found[v][0].size} {found[v][0].colour}".strip() for v, _ in blocked]  # before the rollback expires them
+        await db.rollback()
+        raise Conflict(
+            f"Not enough stock: {', '.join(names)}. Stock may not go below {stocks.NEGATIVE_STOCK_LIMIT}; "
+            "receive or count it in the admin app first.",
+            code="stock_limit_reached",
+            details={"limit": stocks.NEGATIVE_STOCK_LIMIT,
+                     "variants": [{"variant_id": str(v), "on_hand": on_hand, "name": n} for (v, on_hand), n in zip(blocked, names)]},
+        )
     for variant_id, pieces in sold.items():
         stocks.move(db, levels[variant_id], ApparelMovementKind.SALE, -pieces, user_id=user.staff_id, sale_id=sale.id)
 
@@ -276,6 +293,22 @@ async def void_sale(
     if background is not None:
         background.add_task(send_manager_push_alert, sale.branch_id, "Sale voided",
                             f"{sale.sale_number} voided by {user.full_name}: {reason}", {"sale_id": str(sale.id)})
+    return await load_sale(db, sale.id)
+
+
+async def set_customer(db: AsyncSession, user: CurrentUser, sale_id: uuid.UUID, customer_id: Optional[uuid.UUID]) -> ApparelSale:
+    """
+    Put a customer on an invoice, change them, or take them off (null). Done at the payment screen, before or after paying: the
+    reprinted invoice carries their name, phone and GSTIN, and the sale counts in their visits and spend. A cancelled invoice
+    cannot be changed.
+    """
+    sale = await load_sale(db, sale_id, for_update=True)
+    require_branch_access(user, sale.branch_id)
+    if sale.status == BillStatus.VOIDED.value:
+        raise Conflict("This sale was cancelled", code="sale_voided", details={"status": sale.status})
+    customer = await _customer(db, user, customer_id)
+    sale.customer_id = customer.id if customer else None
+    await commit(db)
     return await load_sale(db, sale.id)
 
 

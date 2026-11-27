@@ -90,7 +90,7 @@ class CustomerRead(BaseModel):
 
 class CustomerBillRead(BaseModel):
     id: uuid.UUID
-    order_id: uuid.UUID
+    order_id: Optional[uuid.UUID] = Field(default=None, description="The restaurant order; null for a dress shop invoice.")
     branch_id: uuid.UUID
     bill_number: str
     business_date: date

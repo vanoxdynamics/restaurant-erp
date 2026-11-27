@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useApparelCartStore } from './apparelCartStore';
+import { useSessionStore } from '../stores/sessionStore';
 import { DayEndScreen } from '../screens/DayEndScreen';
 import { KotPrinterScreen } from '../screens/KotPrinterScreen';
 import { DayScreen } from './DayScreen';
@@ -33,10 +34,11 @@ export function ApparelApp(): React.JSX.Element {
   const [credit, setCredit] = useState<PendingCredit | null>(null);
   const sale = () => setRoute({ name: 'sale' });
 
-  // The cart (and any invoice waiting for payment) is kept on the device; bring it back after a reload or restart.
+  // Each staff member has their own cart (and invoice waiting for payment) on the device: show the one signed in theirs.
+  const staffId = useSessionStore((s) => s.user?.id);
   useEffect(() => {
-    void useApparelCartStore.getState().load();
-  }, []);
+    if (staffId) void useApparelCartStore.getState().openFor(staffId);
+  }, [staffId]);
 
   switch (route.name) {
     case 'pay':

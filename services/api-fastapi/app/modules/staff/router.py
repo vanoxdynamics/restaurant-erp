@@ -24,6 +24,7 @@ from app.schemas.staff import (
     CashDayClose,
     CashDayOpen,
     CashDayRead,
+    DeviceBranchRead,
     DeviceLinkRequest,
     DeviceSetupCode,
     DeviceSetupCodeCreate,
@@ -69,6 +70,13 @@ async def login_with_pin(
 ):
     """Fast PIN-based authentication for captain handhelds and POS terminals."""
     return await service.login_with_pin(db, redis_client, payload, _client_ip(request))
+
+
+@router.get("/auth/device", response_model=DeviceBranchRead)
+async def device_branch(device: Device = Depends(require_device), db: AsyncSession = Depends(get_db)):
+    """The linked tablet's branch with its current name, so a rename in the admin app reaches the POS. Needs X-Device-Token."""
+    branch = await db.get(Branch, device.branch_id)
+    return DeviceBranchRead(branch_id=branch.id, branch_name=branch.name, branch_code=branch.code)
 
 
 @router.get("/auth/roster", response_model=List[RosterEntry])

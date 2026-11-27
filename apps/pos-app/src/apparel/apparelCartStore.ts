@@ -1,7 +1,9 @@
 import { create } from 'zustand';
+import type { Customer } from '@repo/api-client';
 import { storage } from '../stores/storage';
 
-const CART_KEY = 'apparel.cart';
+/** Each staff member's cart is kept under their own key, so one person's bill never shows up for the next. */
+const cartKey = (staffId: string) => `apparel.cart.${staffId}`;
 /** The most pieces of one size and colour a line may hold (the server refuses more). */
 export const MAX_LINE_QUANTITY = 999;
 /** The most lines one invoice may hold (the server refuses more). */
@@ -17,7 +19,6 @@ const fitDiscount = (l: ApparelCartLine): ApparelCartLine => ({
 const fitBillDiscount = (lines: ApparelCartLine[], paise: number) =>
   Math.min(Math.max(0, paise || 0), lines.reduce((n, l) => n + lineNet(l), 0));
 
-let loaded = false;
 
 /** One size and colour in the dress shop cart, with what the shelf said when it was added. */
 export interface ApparelCartLine {
@@ -45,9 +46,15 @@ interface ApparelCartState {
   lines: ApparelCartLine[];
   billDiscountPaise: number;
   discountReason: string;
+  /** Who the sale is to, when the customer gave a name or phone: printed on the invoice and counted in their visits. */
+  customer: Customer | null;
   pendingSale: PendingApparelSale | null;
-  /** Reads the cart kept on this device (after a reload or restart). */
-  load: () => Promise<void>;
+  /** Whose cart this is: the staff member signed in. */
+  owner: string | null;
+  /** True while the owner's saved cart is being read; nothing is written meanwhile. */
+  loading: boolean;
+  /** Shows this staff member's own cart (as they left it on this device), putting the previous person's away. */
+  openFor: (staffId: string) => Promise<void>;
   setPendingSale: (sale: PendingApparelSale | null) => void;
   /** Adds one piece, or bumps the quantity when the variant is already in the cart. */
   add: (line: Omit<ApparelCartLine, 'quantity' | 'line_discount_paise'>, quantity?: number) => void;
@@ -55,38 +62,49 @@ interface ApparelCartState {
   setLineDiscount: (variantId: string, paise: number) => void;
   setBillDiscount: (paise: number) => void;
   setDiscountReason: (reason: string) => void;
+  setCustomer: (customer: Customer | null) => void;
   clear: () => void;
 }
 
-/** What identifies the cart's contents: pieces, discounts and reason. */
-export const cartSignature = (s: Pick<ApparelCartState, 'lines' | 'billDiscountPaise' | 'discountReason'>) =>
-  JSON.stringify([s.lines.map((l) => [l.variant_id, l.quantity, l.line_discount_paise]), s.billDiscountPaise, s.discountReason.trim()]);
+/** What identifies the cart's contents: pieces, discounts, reason and customer. The customer is left out when there is none, so a
+ * cart without one keeps the signature it had before customers could be added. */
+export const cartSignature = (
+  s: Pick<ApparelCartState, 'lines' | 'billDiscountPaise' | 'discountReason'> & { customer?: Pick<Customer, 'id'> | null },
+) =>
+  JSON.stringify([
+    s.lines.map((l) => [l.variant_id, l.quantity, l.line_discount_paise]), s.billDiscountPaise, s.discountReason.trim(),
+    ...(s.customer ? [s.customer.id] : []),
+  ]);
 
 /**
  * The sale being rung up. It is kept on the device and is only emptied when its invoice is paid (or the cashier clears a cart
  * that has no invoice), so cancelling the payment, going back, locking or reloading never loses it.
  */
-export const useApparelCartStore = create<ApparelCartState>((set) => ({
+export const useApparelCartStore = create<ApparelCartState>((set, get) => ({
   lines: [],
   billDiscountPaise: 0,
   discountReason: '',
+  customer: null,
   pendingSale: null,
+  owner: null,
+  loading: false,
 
-  load: async () => {
-    // Read once per app run: after that the cart in memory is the newest one. Reading again (the counter screen remounting
-    // after a lock, say) could bring back an older copy whose write had not finished and drop pieces added since.
-    if (loaded) return;
-    loaded = true;
-    let saved: Pick<ApparelCartState, 'lines' | 'billDiscountPaise' | 'discountReason' | 'pendingSale'> | null = null;
+  openFor: async (staffId) => {
+    // The same person back (after a lock, say): the cart in memory is the newest one. Reading again could bring back an older
+    // copy whose write had not finished and drop pieces added since.
+    if (get().owner === staffId) return;
+    // The previous person's cart is already saved under their key (every change is). Start this person empty and read theirs.
+    set({ owner: staffId, loading: true, lines: [], billDiscountPaise: 0, discountReason: '', customer: null, pendingSale: null });
+    let saved: Pick<ApparelCartState, 'lines' | 'billDiscountPaise' | 'discountReason' | 'customer' | 'pendingSale'> | null = null;
     try {
-      saved = await storage.get(CART_KEY);
+      saved = await storage.get(cartKey(staffId));
     } catch {
-      return; // nothing readable kept: start with an empty cart
+      saved = null; // nothing readable kept: start with an empty cart
     }
-    if (!saved || !Array.isArray(saved.lines)) return;
     set((state) => {
+      if (state.owner !== staffId) return state; // someone else signed in while this was read
       // Pieces scanned while the saved cart was being read are kept, not overwritten.
-      if (state.lines.length || state.pendingSale) return state;
+      if (!saved || !Array.isArray(saved.lines) || state.lines.length || state.pendingSale) return { loading: false };
       const lines = saved.lines
         .filter((l) => l && typeof l.variant_id === 'string' && l.quantity > 0)
         .map((l) => fitDiscount({ ...l, quantity: clampQuantity(l.quantity) }));
@@ -94,7 +112,9 @@ export const useApparelCartStore = create<ApparelCartState>((set) => ({
         lines,
         billDiscountPaise: fitBillDiscount(lines, saved.billDiscountPaise ?? 0),
         discountReason: saved.discountReason ?? '',
+        customer: saved.customer && typeof saved.customer.id === 'string' ? saved.customer : null,
         pendingSale: saved.pendingSale ?? null,
+        loading: false,
       };
     });
   },
@@ -130,12 +150,16 @@ export const useApparelCartStore = create<ApparelCartState>((set) => ({
 
   setBillDiscount: (paise) => set((state) => ({ billDiscountPaise: fitBillDiscount(state.lines, paise) })),
   setDiscountReason: (reason) => set({ discountReason: reason }),
-  clear: () => set({ lines: [], billDiscountPaise: 0, discountReason: '', pendingSale: null }),
+  setCustomer: (customer) => set({ customer }),
+  clear: () => set({ lines: [], billDiscountPaise: 0, discountReason: '', customer: null, pendingSale: null }),
 }));
 
-// Every change is written to the device, so the cart survives a reload or restart.
+// Every change is written to the device under its owner, so the cart survives a reload or restart.
 useApparelCartStore.subscribe((s) => {
-  void storage.trySet(CART_KEY, { lines: s.lines, billDiscountPaise: s.billDiscountPaise, discountReason: s.discountReason, pendingSale: s.pendingSale });
+  if (!s.owner || s.loading) return; // nobody signed in yet, or their saved cart is still being read
+  void storage.trySet(cartKey(s.owner), {
+    lines: s.lines, billDiscountPaise: s.billDiscountPaise, discountReason: s.discountReason, customer: s.customer, pendingSale: s.pendingSale,
+  });
 });
 
 /** What a line comes to after its own discount. Display only: the server's invoice is the truth. */

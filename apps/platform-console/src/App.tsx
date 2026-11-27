@@ -22,7 +22,7 @@ function Layout() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <div className="brand">Platform Console<small>Restaurant ERP</small></div>
+        <div className="brand">Platform Console<small>Vanox ERP</small></div>
         <nav className="nav" aria-label="Main">
           <NavLink to="/" end>Dashboard</NavLink>
           <NavLink to="/subscribers">Subscribers</NavLink>

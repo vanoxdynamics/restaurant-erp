@@ -5,15 +5,17 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import redis.asyncio as aioredis
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.entitlements import compute_entitlements
 from app.core.errors import Conflict, NotFound, ValidationFailed
-from app.core.modules import ALL_MODULES, MODULES, ModuleKey
+from app.core.modules import ALL_MODULES, MODULES, ModuleKey, modules_for
 from app.core.money import ZERO, q
 from app.models.invoicing import Invoice
 from app.models.organization import Organization
@@ -60,7 +62,10 @@ async def set_module_override(db: AsyncSession, redis_client: aioredis.Redis, ac
         raise ValidationFailed("Core modules cannot be switched off or overridden", code="core_module")
     if body.expires_at is not None and body.expires_at <= _now():
         raise ValidationFailed("expires_at must be in the future", code="expiry_in_past")
-    await load_org(db, org_id, lock=True)
+    org = await load_org(db, org_id, lock=True)
+    if key not in modules_for(org.category):
+        raise ValidationFailed("That module is not for this business type", code="module_not_for_business_type",
+                               details={"module": key, "category": org.category})
     ent = await compute_entitlements(db, org_id)
     problem = _dependency_problem(key, body.enabled, ent.modules)
     if problem:
@@ -104,7 +109,7 @@ async def clear_module_override(db: AsyncSession, redis_client: aioredis.Redis, 
 
 async def list_global_modules(db: AsyncSession) -> List[Dict[str, Any]]:
     killed = {m.module_key: m for m in (await db.scalars(select(PlatformModule).where(PlatformModule.enabled.is_(False)))).all()}
-    org_count = await db.scalar(select(func.count()).select_from(Organization)) or 0
+    category_of = dict((await db.execute(select(Organization.id, Organization.category))).all())
     now = _now()
     overrides = defaultdict(list)
     for o in (await db.scalars(select(OrganizationModule))).all():
@@ -112,8 +117,9 @@ async def list_global_modules(db: AsyncSession) -> List[Dict[str, Any]]:
     result = []
     for key, d in MODULES.items():
         k = key.value
+        of_type = {org_id for org_id, category in category_of.items() if category in d.business_types}
         if d.is_core:
-            with_access = org_count
+            with_access = len(of_type)
         elif k in killed:
             with_access = 0
         else:
@@ -124,8 +130,9 @@ async def list_global_modules(db: AsyncSession) -> List[Dict[str, Any]]:
                 if o.expires_at is not None and o.expires_at <= now:
                     continue
                 (orgs.add if o.enabled else orgs.discard)(o.organization_id)
-            with_access = len(orgs)
-        result.append({"key": k, "name": d.name, "description": d.description, "is_core": d.is_core,
+            with_access = len(orgs & of_type)
+        result.append({"key": k, "name": d.name, "description": d.description, "business_types": sorted(d.business_types),
+                       "is_core": d.is_core,
                        "depends_on": [x.value for x in d.depends_on], "globally_enabled": k not in killed,
                        "reason": killed[k].reason if k in killed else None, "organizations_with_access": with_access})
     return result
@@ -168,7 +175,12 @@ async def bulk_module_change(db: AsyncSession, redis_client: aioredis.Redis, act
             raise NotFound("One or more organizations were not found")
 
     changed, blocked, unchanged = [], [], 0
+    of_type = set((await db.scalars(select(Organization.id).where(
+        Organization.id.in_(org_ids), Organization.category.in_(MODULES[ModuleKey(key)].business_types)))).all())
     for org_id in org_ids:
+        if org_id not in of_type:  # another business type: the module means nothing there
+            blocked.append({"organization_id": str(org_id), "reason": "not_for_business_type", "modules": [key]})
+            continue
         ent = await compute_entitlements(db, org_id)
         now_on = key in ent.modules
         if now_on == body.enabled:
@@ -210,7 +222,8 @@ async def _plan_view(db: AsyncSession, plan: Plan) -> Dict[str, Any]:
 
 def _full_module_set(keys: List[ModuleKey]) -> set:
     chosen = {k.value for k in keys}
-    chosen |= {m.key.value for m in MODULES.values() if m.is_core}
+    # Core modules are on for every business of their type anyway; keep only the ones a chosen module builds on.
+    chosen |= {d.value for k in list(chosen) for d in MODULES[ModuleKey(k)].depends_on if MODULES[d].is_core}
     for k in list(chosen):
         missing = [d.value for d in MODULES[ModuleKey(k)].depends_on if d.value not in chosen]
         if missing:
@@ -273,6 +286,9 @@ async def update_plan(db: AsyncSession, redis_client: aioredis.Redis, actor: Pla
 async def dashboard(db: AsyncSession) -> Dict[str, Any]:
     now = _now()
     by_org = Counter(dict((await db.execute(select(Organization.status, func.count()).group_by(Organization.status))).all()))
+    by_category = dict((await db.execute(
+        select(Organization.category, func.count()).where(Organization.status != "cancelled").group_by(Organization.category)
+    )).all())
     rows = (await db.execute(
         select(Subscription, Organization.name, Organization.slug).join(Organization, Organization.id == Subscription.organization_id)
     )).all()
@@ -303,9 +319,24 @@ async def dashboard(db: AsyncSession) -> Dict[str, Any]:
     renewals.sort(key=lambda r: r["renews_at"])
     trials.sort(key=lambda r: r["trial_ends_at"])
     return {
-        "organizations_by_status": dict(by_org), "subscriptions_by_status": dict(by_status),
+        "organizations_by_status": dict(by_org), "organizations_by_category": by_category,
+        "subscriptions_by_status": dict(by_status),
         "subscriptions_by_term": dict(by_term),
         "mrr": {c: str(q(v)) for c, v in mrr.items()}, "arr": {c: str(q(v * 12)) for c, v in mrr.items()},
         "renewals_next_30_days": renewals[:50], "trials_ending_next_7_days": trials[:50], "past_due": past_due,
         "outstanding": {c: str(q(v)) for c, v in outstanding.items()}, "open_invoices": open_count, "overdue_invoices": overdue_count,
+        "integrations": integrations_status(),
     }
+
+
+def integrations_status() -> Dict[str, Any]:
+    """Whether platform-wide payment integrations are set up. Names of missing settings only, never their values."""
+    needed = {"PINELABS_MERCHANT_ID": settings.PINELABS_MERCHANT_ID, "PINELABS_SECURITY_TOKEN": settings.PINELABS_SECURITY_TOKEN,
+              "PINELABS_STORE_ID": settings.PINELABS_STORE_ID, "PINELABS_CLIENT_ID": settings.PINELABS_CLIENT_ID}
+    missing = [name for name, value in needed.items() if not value]
+    host = urlparse(settings.PINELABS_CLOUD_BASE_URL).hostname or ""
+    return {"pinelabs_cloud": {
+        "configured": not missing, "missing": missing,
+        "environment": "uat" if "uat" in host.lower() else "production",
+        "min_amount": str(settings.PINELABS_MIN_AMOUNT),
+    }}

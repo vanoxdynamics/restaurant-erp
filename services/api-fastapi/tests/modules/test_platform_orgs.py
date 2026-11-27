@@ -608,6 +608,10 @@ async def test_dashboard_counts_and_recurring_revenue(client, db, ops, pro):
     assert d["arr"]["INR"] == str(((D("1000") + D("10000") / 12) * 12).quantize(D("0.01")))
     assert [r["slug"] for r in d["renewals_next_30_days"]][0] == "bravo-bar"
     assert d["trials_ending_next_7_days"] == [] and d["past_due"] == 0
+    assert d["organizations_by_category"] == {"restaurant": 3}
+    pl = d["integrations"]["pinelabs_cloud"]
+    assert set(pl) == {"configured", "missing", "environment", "min_amount"}
+    assert pl["environment"] in {"uat", "production"} and all(m.startswith("PINELABS_") for m in pl["missing"])
 
 
 class FakeSocket:
@@ -676,3 +680,70 @@ async def test_category_on_create_override_and_filter(client, db, redis_client, 
     assert bad.status_code == 422
     bad = await client.patch(f"{P}/organizations/{org['id']}", json={"category": "pharmacy", "reason": "nope"}, headers=ops)
     assert bad.status_code == 422
+
+
+# --- modules per business type ---------------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def everything(db):
+    """A plan listing every module of every business type."""
+    return await make_plan(db, "everything", modules=tuple(m.value for m in ModuleKey))
+
+
+async def test_business_categories_list_their_own_modules(client, ops):
+    cats = {c["key"]: c["modules"] for c in (await client.get(f"{P}/business-categories", headers=ops)).json()["categories"]}
+    assert cats["restaurant"] == ["pos", "kds", "analytics", "inventory", "offline_billing"]
+    assert cats["grocery"] == ["pos", "analytics", "inventory", "offline_billing"]  # no kitchen
+    assert cats["apparel"] == ["apparel", "apparel_returns", "apparel_labels"]
+    assert cats["hardware"] == ["hardware"]
+    types = {m["key"]: m["business_types"] for m in (await client.get(f"{P}/modules", headers=ops)).json()}
+    assert types["apparel_returns"] == ["apparel"] and types["kds"] == ["cafe", "restaurant"]
+
+
+async def test_a_business_only_gets_the_modules_of_its_type(client, ops, everything):
+    restaurant = await create_org(client, ops, everything, slug="tasty-diner", key="bt-000001")
+    assert {m["key"] for m in restaurant["modules"]} == {"pos", "kds", "analytics", "inventory", "offline_billing"}
+
+    body = org_body(everything, slug="silk-dresses", category="apparel")
+    r = await client.post(f"{P}/organizations", json=body, headers={**ops, **idem("bt-000002")})
+    assert r.status_code == 201, r.text
+    shop = r.json()["organization"]
+    assert {m["key"]: m["source"] for m in shop["modules"]} == {"apparel": "core", "apparel_returns": "plan", "apparel_labels": "plan"}
+    ent = (await client.get(f"{API}/me/entitlements", headers=await tenant_login(client, body))).json()
+    assert sorted(ent["modules"]) == ["apparel", "apparel_labels", "apparel_returns"]  # no pos, kds or hardware
+
+
+async def test_onboarding_chooses_add_ons_of_the_business_type(client, db, ops, basic):
+    body = org_body(basic, slug="bolt-hardware", category="apparel", modules={"apparel_returns": True})
+    r = await client.post(f"{P}/organizations", json=body, headers={**ops, **idem("bt-000003")})
+    assert r.status_code == 201, r.text
+    states = {m["key"]: m for m in r.json()["organization"]["modules"]}
+    assert states["apparel_returns"]["enabled"] and states["apparel_returns"]["source"] == "override"
+    assert states["apparel_returns"]["override"]["reason"] == "Chosen at onboarding"
+    assert not states["apparel_labels"]["enabled"]  # not in the plan, not chosen
+    rows = (await db.scalars(select(OrganizationModule).where(OrganizationModule.organization_id == uuid.UUID(r.json()["organization"]["id"])))).all()
+    assert [(o.module_key, o.enabled) for o in rows] == [("apparel_returns", True)]  # only what differs from the plan
+
+    for modules, code in (({"kds": True}, "module_not_for_business_type"), ({"apparel": False}, "core_module")):
+        bad = org_body(basic, slug="other-shop", category="apparel", modules=modules)
+        r = await client.post(f"{P}/organizations", json=bad, headers={**ops, **idem(f"bt-bad-{code[:6]}")})
+        assert r.status_code == 422 and r.json()["error"]["code"] == code, r.text
+    bad = org_body(basic, slug="other-diner", modules={"kds": True, "pos": True})
+    r = await client.post(f"{P}/organizations", json=bad, headers={**ops, **idem("bt-bad-core2")})
+    assert r.json()["error"]["code"] == "core_module"
+
+
+async def test_a_module_of_another_type_cannot_be_switched_on(client, ops, pro):
+    org = await create_org(client, ops, pro, slug="spice-diner", key="bt-000004")
+    r = await client.put(f"{P}/organizations/{org['id']}/modules/apparel_labels",
+                         json={"enabled": True, "reason": "wrong shop"}, headers=ops)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "module_not_for_business_type"
+
+
+async def test_dress_shop_add_ons_are_enforced(client, ops, basic):
+    body = org_body(basic, slug="lace-boutique", category="apparel", start="active")
+    await client.post(f"{P}/organizations", json=body, headers={**ops, **idem("bt-000005")})
+    tenant = await tenant_login(client, body)
+    assert (await client.get(f"{API}/apparel/returns", headers=tenant)).json()["error"]["code"] == "module_disabled"
+    assert (await client.get(f"{API}/apparel/categories", headers=tenant)).status_code == 200  # the counter is core
