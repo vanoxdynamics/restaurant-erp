@@ -1,0 +1,689 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vanox ERP — Billing that lives on the card machine</title>
+<meta name="description" content="GST billing, card, UPI and cash payments, KOTs, stock and day-end reports for restaurants, cafés, grocery, dress and hardware shops — running on the Pine Labs terminal the shop already has." />
+<link rel="icon" type="image/png" href="data:image/png;base64,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" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink: #16120e;
+    --ink-2: #2a231c;
+    --paper: #f7f1e5;
+    --paper-2: #efe6d4;
+    --line: #ddd0b8;
+    --muted: #6f6253;
+    --marigold: #f0a13a;
+    --marigold-deep: #d9801a;
+    --chili: #d9462b;
+    --leaf: #2f8f5b;
+    --sky: #3d6fd6;
+    --radius: 18px;
+    --display: "Bricolage Grotesque", system-ui, sans-serif;
+    --body: "Instrument Sans", system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: var(--body);
+    color: var(--ink);
+    background: var(--paper);
+    line-height: 1.55;
+    overflow-x: clip;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+  h1, h2, h3 { font-family: var(--display); line-height: 1.02; margin: 0; letter-spacing: -0.02em; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--marigold-deep); display: inline-flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: currentColor; }
+
+  /* ---------- nav ---------- */
+  nav.top {
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--paper) 86%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  }
+  nav.top .wrap { display: flex; align-items: center; justify-content: space-between; height: 66px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 800; font-size: 21px; text-decoration: none; }
+  .brand-mark {
+    width: 36px; height: 36px; flex: none; border-radius: 10px;
+    background: #1f7a4c url("data:image/png;base64,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") center / 70% no-repeat;
+  }
+  .nav-links { display: flex; gap: 28px; font-size: 15px; }
+  .nav-links a { text-decoration: none; color: var(--muted); transition: color .2s; }
+  .nav-links a:hover { color: var(--ink); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 999px;
+    font-weight: 600; font-size: 15px; text-decoration: none; border: 1.5px solid var(--ink); transition: transform .15s, background .2s, color .2s;
+  }
+  .btn:hover { transform: translateY(-2px); }
+  .btn-solid { background: var(--ink); color: var(--paper); }
+  .btn-solid:hover { background: var(--ink-2); }
+  .btn-ghost { background: transparent; }
+  .btn-ghost:hover { background: var(--ink); color: var(--paper); }
+
+  /* ---------- hero ---------- */
+  .hero { position: relative; overflow: hidden; padding: 80px 0 110px; }
+  .hero::before {
+    content: ""; position: absolute; width: 760px; height: 760px; right: -220px; top: -180px; border-radius: 50%;
+    background: radial-gradient(circle at 40% 40%, #f7c56f 0%, var(--marigold) 38%, transparent 70%);
+    opacity: .55; filter: blur(10px);
+  }
+  .hero .wrap { position: relative; display: grid; grid-template-columns: 1.15fr 1fr; gap: 56px; align-items: center; }
+  .hero h1 { font-size: clamp(46px, 6.6vw, 88px); font-weight: 800; margin: 22px 0 24px; }
+  .hero h1 em { font-style: normal; position: relative; white-space: nowrap; }
+  .hero h1 em::after {
+    content: ""; position: absolute; left: -4px; right: -4px; bottom: 6px; height: 18px; z-index: -1;
+    background: var(--marigold); border-radius: 4px; transform: rotate(-1.2deg);
+  }
+  .hero p.lead { font-size: 20px; color: var(--ink-2); max-width: 540px; margin: 0 0 34px; }
+  .hero-ctas { display: flex; gap: 14px; flex-wrap: wrap; }
+  .hero-chips { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 38px; }
+  .chip {
+    font-family: var(--mono); font-size: 12.5px; padding: 7px 12px; border-radius: 8px;
+    background: var(--paper-2); border: 1px solid var(--line); color: var(--ink-2);
+  }
+
+  /* terminal mockup */
+  .device-stage { position: relative; display: flex; justify-content: center; padding-top: 30px; }
+  .device {
+    width: 300px; background: linear-gradient(160deg, #2c2620, #14110d); border-radius: 34px; padding: 18px 18px 26px;
+    box-shadow: 0 50px 80px -30px rgba(40, 25, 5, .55), inset 0 1px 0 rgba(255,255,255,.08);
+    position: relative; z-index: 2; transform: rotate(-4deg);
+  }
+  .device .slot { height: 10px; width: 70%; margin: 0 auto 14px; background: #0a0806; border-radius: 6px; }
+  .screen { background: #fbf8f2; border-radius: 16px; padding: 16px; min-height: 330px; display: flex; flex-direction: column; }
+  .screen .s-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  .screen .s-title { font-family: var(--display); font-weight: 600; font-size: 18px; margin: 10px 0 12px; }
+  .s-line { display: flex; justify-content: space-between; font-size: 13.5px; padding: 7px 0; border-bottom: 1px dashed var(--line); }
+  .s-line span:last-child { font-family: var(--mono); }
+  .s-total { margin-top: auto; display: flex; justify-content: space-between; align-items: baseline; padding-top: 12px; }
+  .s-total b { font-family: var(--display); font-size: 28px; }
+  .s-pay { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 12px; }
+  .s-pay span { text-align: center; font-size: 12px; font-weight: 600; padding: 9px 0; border-radius: 9px; background: var(--paper-2); }
+  .s-pay span.on { background: var(--leaf); color: #fff; animation: pulse 2.4s infinite; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(47,143,91,.45);} 50% { box-shadow: 0 0 0 7px rgba(47,143,91,0);} }
+  .keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 16px; }
+  .keys i { height: 18px; border-radius: 6px; background: #3a3229; }
+  .keys i:nth-child(10) { background: var(--chili); } .keys i:nth-child(12) { background: var(--leaf); }
+
+  .receipt {
+    position: absolute; z-index: 1; right: 0; top: 0; width: 210px; background: #fffdf8;
+    padding: 18px 16px 26px; font-family: var(--mono); font-size: 11px; color: #3b342c;
+    box-shadow: 0 25px 40px -20px rgba(40,25,5,.45); transform: rotate(7deg) translate(40px, 0);
+    animation: print 5s ease-in-out infinite alternate;
+    -webkit-mask: linear-gradient(#000 calc(100% - 10px), transparent 0), conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) 50% / 14px 100%;
+            mask: linear-gradient(#000 calc(100% - 10px), transparent 0), conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) 50% / 14px 100%;
+  }
+  @keyframes print { from { transform: rotate(7deg) translate(40px, 30px); } to { transform: rotate(7deg) translate(60px, -10px); } }
+  .receipt .c { text-align: center; } .receipt hr { border: 0; border-top: 1px dashed #b9ac96; margin: 8px 0; }
+  .receipt .r { display: flex; justify-content: space-between; }
+  .receipt .big { font-size: 14px; font-weight: 600; }
+  .stamp {
+    position: absolute; z-index: 3; left: 0; bottom: 20px; background: var(--leaf); color: #fff; border-radius: 14px;
+    padding: 12px 16px; font-weight: 600; font-size: 14px; display: flex; gap: 10px; align-items: center;
+    box-shadow: 0 18px 30px -14px rgba(20,70,40,.6); transform: rotate(-3deg);
+  }
+  .stamp small { display: block; font-weight: 400; opacity: .85; font-size: 12px; }
+
+  /* ---------- marquee ---------- */
+  .marquee { background: var(--ink); color: var(--paper); overflow: hidden; padding: 18px 0; transform: rotate(-1deg); margin: -20px 0 0; }
+  .marquee-track { display: flex; gap: 48px; width: max-content; animation: slide 38s linear infinite; font-family: var(--display); font-size: 26px; font-weight: 600; }
+  .marquee-track span { display: inline-flex; align-items: center; gap: 48px; white-space: nowrap; }
+  .marquee-track span::after { content: "✺"; color: var(--marigold); }
+  @keyframes slide { to { transform: translateX(-50%); } }
+
+  section { padding: 110px 0; }
+  .sec-head { max-width: 720px; margin-bottom: 56px; }
+  .sec-head h2 { font-size: clamp(36px, 4.6vw, 58px); font-weight: 800; margin-top: 16px; }
+  .sec-head p { font-size: 18px; color: var(--muted); margin: 18px 0 0; }
+
+  /* ---------- problem / flow ---------- */
+  .flow { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; }
+  .flow-card { border-radius: var(--radius); padding: 34px; border: 1px solid var(--line); }
+  .flow-card.before { background: var(--paper-2); }
+  .flow-card.after { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .flow-card h3 { font-size: 26px; margin-bottom: 22px; display: flex; align-items: center; gap: 12px; }
+  .tag { font-family: var(--mono); font-size: 11px; padding: 4px 9px; border-radius: 6px; letter-spacing: .06em; text-transform: uppercase; }
+  .before .tag { background: #f3d2c8; color: var(--chili); }
+  .after .tag { background: var(--marigold); color: var(--ink); }
+  .steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+  .steps li { display: flex; gap: 14px; align-items: flex-start; font-size: 16px; }
+  .steps li b { font-family: var(--mono); font-size: 12px; flex: 0 0 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; }
+  .before .steps li b { background: #fff; border: 1px solid var(--line); }
+  .after .steps li b { background: var(--marigold); color: var(--ink); }
+  .before .steps li.bad { color: var(--chili); }
+
+  /* ---------- business types ---------- */
+  #types { background: var(--paper-2); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .tabs { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 30px; }
+  .tab {
+    font: 600 15px var(--body); padding: 12px 18px; border-radius: 999px; border: 1.5px solid var(--line);
+    background: var(--paper); cursor: pointer; display: inline-flex; align-items: center; gap: 9px; color: var(--ink);
+    transition: all .2s;
+  }
+  .tab:hover { border-color: var(--ink); }
+  .tab[aria-selected="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .tab .em { font-size: 18px; }
+  .panel { display: none; grid-template-columns: 1fr 1.1fr; gap: 40px; background: var(--paper); border-radius: 26px; padding: 44px; border: 1px solid var(--line); animation: rise .45s ease; }
+  .panel.active { display: grid; }
+  @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+  .panel h3 { font-size: 40px; margin-bottom: 14px; }
+  .panel p { color: var(--muted); font-size: 17px; margin: 0 0 22px; }
+  .panel .keeps { font-family: var(--mono); font-size: 13px; background: #fdf3df; border: 1px solid #f3dcb0; padding: 12px 14px; border-radius: 10px; color: #7a4d0c; }
+  .feat-list { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-content: start; }
+  .feat-list div { background: var(--paper-2); border-radius: 14px; padding: 16px 18px; font-size: 15px; }
+  .feat-list div b { display: block; font-family: var(--display); font-size: 17px; margin-bottom: 4px; }
+
+  /* ---------- feature bento ---------- */
+  .bento { display: grid; grid-template-columns: repeat(6, 1fr); gap: 18px; }
+  .tile {
+    border-radius: 22px; padding: 30px; border: 1px solid var(--line); background: #fbf7ef; position: relative; overflow: hidden;
+    transition: transform .25s, box-shadow .25s;
+  }
+  .tile:hover { transform: translateY(-4px); box-shadow: 0 24px 40px -28px rgba(40,25,5,.45); }
+  .tile h3 { font-size: 24px; margin: 18px 0 10px; }
+  .tile p { color: var(--muted); margin: 0; font-size: 15.5px; }
+  .ico { width: 46px; height: 46px; border-radius: 13px; display: grid; place-items: center; }
+  .ico svg { width: 24px; height: 24px; }
+  .span-3 { grid-column: span 3; } .span-2 { grid-column: span 2; } .span-4 { grid-column: span 4; }
+  .tile.dark { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .tile.dark p { color: #bfb19c; }
+  .tile.gold { background: var(--marigold); border-color: var(--marigold-deep); }
+  .tile.gold p { color: #4a3210; }
+  .mini-bars { display: flex; align-items: flex-end; gap: 8px; height: 110px; margin-top: 26px; }
+  .mini-bars i { flex: 1; border-radius: 6px 6px 2px 2px; background: #4a3f33; }
+  .mini-bars i.hl { background: var(--marigold); }
+  .split { display: flex; height: 14px; border-radius: 8px; overflow: hidden; margin-top: 24px; }
+  .split span { display: block; }
+  .legend { display: flex; gap: 16px; margin-top: 12px; font-family: var(--mono); font-size: 12px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; }
+
+  /* ---------- apps ---------- */
+  #apps { background: var(--ink); color: var(--paper); }
+  #apps .sec-head p { color: #b8aa95; }
+  .apps-grid { display: grid; grid-template-columns: 1fr 1.25fr 1fr; gap: 26px; align-items: center; }
+  .app-col { display: grid; gap: 16px; }
+  .app-card { border: 1px solid #3c332a; border-radius: 18px; padding: 20px 22px; background: #1f1a15; transition: border-color .2s; }
+  .app-card:hover { border-color: var(--marigold); }
+  .app-card b { font-family: var(--display); font-size: 19px; display: block; }
+  .app-card span { color: #b8aa95; font-size: 14.5px; }
+  .app-card .who { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--marigold); margin-bottom: 6px; display: block; }
+  .core {
+    aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center; text-align: center; position: relative;
+    background: radial-gradient(circle, #2b241d 0%, #1a1511 60%); border: 1px dashed #4b4035;
+  }
+  .core::before, .core::after { content: ""; position: absolute; border-radius: 50%; border: 1px dashed #3a3027; }
+  .core::before { inset: 12%; } .core::after { inset: 26%; border-style: solid; border-color: #5a4a37; animation: spin 30s linear infinite; border-top-color: var(--marigold); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .core-inner { position: relative; z-index: 1; }
+  .core-inner b { font-family: var(--display); font-size: 30px; display: block; }
+  .core-inner small { font-family: var(--mono); font-size: 12px; color: #b8aa95; }
+  .core-inner .stack { display: flex; gap: 6px; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
+  .core-inner .stack span { font-family: var(--mono); font-size: 11px; border: 1px solid #4b4035; border-radius: 6px; padding: 3px 7px; color: #d8cbb6; }
+
+  /* ---------- day end ---------- */
+  .dayend { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center; }
+  .report {
+    background: #fffdf8; border: 1px solid var(--line); border-radius: 22px; padding: 30px; font-family: var(--mono); font-size: 14px;
+    box-shadow: 0 40px 60px -40px rgba(40,25,5,.4);
+  }
+  .report h4 { font-family: var(--display); font-size: 22px; margin: 0 0 4px; }
+  .report .sub { color: var(--muted); font-size: 12px; margin-bottom: 18px; }
+  .report .r { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px dashed var(--line); }
+  .report .r.t { border: 0; font-weight: 600; font-size: 18px; padding-top: 16px; }
+  .report .ok { color: var(--leaf); }
+  .checks { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 14px; }
+  .checks li { display: flex; gap: 12px; font-size: 17px; }
+  .checks li::before { content: "✓"; flex: 0 0 26px; height: 26px; border-radius: 8px; background: var(--leaf); color: #fff; display: grid; place-items: center; font-size: 14px; font-weight: 700; }
+
+  /* ---------- modules ---------- */
+  #modules { background: var(--paper-2); border-top: 1px solid var(--line); }
+  .mods { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .mod { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; padding: 22px; display: flex; flex-direction: column; gap: 10px; }
+  .mod-top { display: flex; justify-content: space-between; align-items: center; }
+  .mod b { font-family: var(--display); font-size: 18px; }
+  .mod p { margin: 0; color: var(--muted); font-size: 14.5px; }
+  .toggle { width: 42px; height: 24px; border-radius: 999px; background: var(--leaf); position: relative; flex: none; }
+  .toggle::after { content: ""; position: absolute; width: 18px; height: 18px; border-radius: 50%; background: #fff; top: 3px; right: 3px; }
+  .toggle.off { background: #cbbfa9; } .toggle.off::after { right: auto; left: 3px; }
+  .soon { font-family: var(--mono); font-size: 11px; color: var(--marigold-deep); text-transform: uppercase; letter-spacing: .08em; }
+
+  /* ---------- cta ---------- */
+  .cta { padding: 0 0 110px; }
+  .cta-box {
+    background: var(--marigold); border-radius: 34px; padding: 72px 60px; position: relative; overflow: hidden;
+    display: grid; grid-template-columns: 1.4fr 1fr; gap: 40px; align-items: center;
+  }
+  .cta-box::after {
+    content: "₹"; position: absolute; right: -30px; bottom: -150px; font-family: var(--display); font-weight: 800;
+    font-size: 460px; color: rgba(22,18,14,.08); line-height: 1;
+  }
+  .cta-box h2 { font-size: clamp(36px, 4.6vw, 60px); font-weight: 800; }
+  .cta-box p { font-size: 18px; color: #4a3210; margin: 16px 0 0; }
+  .cta-actions { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; position: relative; z-index: 1; }
+
+  footer { border-top: 1px solid var(--line); padding: 34px 0; color: var(--muted); font-size: 14px; }
+  footer .wrap { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; align-items: center; }
+
+  .reveal { opacity: 0; transform: translateY(24px); transition: opacity .7s ease, transform .7s ease; }
+  .reveal.in { opacity: 1; transform: none; }
+
+  @media (max-width: 960px) {
+    .hero .wrap, .flow, .panel.active, .apps-grid, .dayend, .cta-box { grid-template-columns: 1fr; }
+    .nav-links { display: none; }
+    .bento { grid-template-columns: 1fr 1fr; }
+    .span-3, .span-2, .span-4 { grid-column: span 2; }
+    .mods { grid-template-columns: 1fr 1fr; }
+    .core { max-width: 320px; margin: 0 auto; }
+    .device-stage { margin-top: 20px; }
+    .panel { padding: 28px; }
+    .cta-box { padding: 48px 30px; }
+  }
+  @media (max-width: 560px) {
+    .feat-list, .mods { grid-template-columns: 1fr; }
+    .receipt { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .reveal { opacity: 1; transform: none; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap">
+    <a class="brand" href="#"><span class="brand-mark" role="img" aria-label="Vanox logo"></span>Vanox ERP</a>
+    <div class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#types">Businesses</a>
+      <a href="#features">Features</a>
+      <a href="#apps">Apps</a>
+      <a href="#modules">Modules</a>
+    </div>
+    <a class="btn btn-solid" href="#start">Book a demo</a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="wrap">
+    <div>
+      <span class="eyebrow">Billing &amp; point of sale for India</span>
+      <h1>Bill, pay and print on <em>one machine.</em></h1>
+      <p class="lead">Vanox ERP runs on the Pine Labs card terminal your shop already rents. Make the GST bill, take card, UPI or cash, and print, without typing the amount twice.</p>
+      <div class="hero-ctas">
+        <a class="btn btn-solid" href="#start">Book a demo →</a>
+        <a class="btn btn-ghost" href="#types">See your business type</a>
+      </div>
+      <div class="hero-chips">
+        <span class="chip">GST invoices</span>
+        <span class="chip">Card · UPI · Cash · Split</span>
+        <span class="chip">KOT &amp; kitchen display</span>
+        <span class="chip">Barcodes &amp; weighed items</span>
+      </div>
+    </div>
+
+    <div class="device-stage" aria-hidden="true">
+      <div class="receipt">
+        <div class="c big">SPICE ROUTE</div>
+        <div class="c">Indiranagar · GSTIN 29XXXXX</div>
+        <hr />
+        <div class="r"><span>Table 7 · Bill #1042</span></div>
+        <hr />
+        <div class="r"><span>2 Paneer Tikka</span><span>520.00</span></div>
+        <div class="r"><span>1 Dal Makhani</span><span>280.00</span></div>
+        <div class="r"><span>3 Butter Naan</span><span>180.00</span></div>
+        <div class="r"><span>2 Masala Chai</span><span>120.00</span></div>
+        <hr />
+        <div class="r"><span>CGST 2.5%</span><span>27.50</span></div>
+        <div class="r"><span>SGST 2.5%</span><span>27.50</span></div>
+        <hr />
+        <div class="r big"><span>TOTAL</span><span>₹1,155</span></div>
+        <div class="c" style="margin-top:8px">PAID · UPI</div>
+        <div class="c">Thank you!</div>
+      </div>
+
+      <div class="device">
+        <div class="slot"></div>
+        <div class="screen">
+          <div class="s-head"><span>Counter · BLR1</span><span>12:48</span></div>
+          <div class="s-title">Table 7 — Bill</div>
+          <div class="s-line"><span>Paneer Tikka × 2</span><span>520</span></div>
+          <div class="s-line"><span>Dal Makhani</span><span>280</span></div>
+          <div class="s-line"><span>Butter Naan × 3</span><span>180</span></div>
+          <div class="s-line"><span>Masala Chai × 2</span><span>120</span></div>
+          <div class="s-line"><span>GST 5%</span><span>55</span></div>
+          <div class="s-total"><span>Total</span><b>₹1,155</b></div>
+          <div class="s-pay"><span>Card</span><span class="on">UPI</span><span>Cash</span></div>
+        </div>
+        <div class="keys"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      </div>
+
+      <div class="stamp">✓ <div>Payment received<small>₹1,155 · bill printed</small></div></div>
+    </div>
+  </div>
+</header>
+
+<div class="marquee" aria-hidden="true">
+  <div class="marquee-track">
+    <span>Restaurants</span><span>Cafés &amp; QSR</span><span>Bakeries</span><span>Grocery &amp; kirana</span><span>Dress shops</span><span>Hardware stores</span><span>General retail</span>
+    <span>Restaurants</span><span>Cafés &amp; QSR</span><span>Bakeries</span><span>Grocery &amp; kirana</span><span>Dress shops</span><span>Hardware stores</span><span>General retail</span>
+  </div>
+</div>
+
+<!-- HOW -->
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">The problem we fix</span>
+      <h2>Two machines, two totals, one tired cashier.</h2>
+      <p>Most shops bill on paper, a laptop or a phone, then key the same amount into a separate card machine. The numbers drift, and the owner only sees the day after closing.</p>
+    </div>
+    <div class="flow">
+      <div class="flow-card before reveal">
+        <h3><span class="tag">Today</span> The usual way</h3>
+        <ol class="steps">
+          <li><b>1</b>Write or type the bill on a separate system</li>
+          <li class="bad"><b>2</b>Retype the total into the card machine</li>
+          <li><b>3</b>Print the bill from yet another printer</li>
+          <li class="bad"><b>4</b>Match card slips against bills at closing</li>
+          <li class="bad"><b>5</b>Owner sees sales tomorrow, if at all</li>
+        </ol>
+      </div>
+      <div class="flow-card after reveal">
+        <h3><span class="tag">Vanox</span> One flow</h3>
+        <ol class="steps">
+          <li><b>1</b>Add items on the terminal: tap, scan or weigh</li>
+          <li><b>2</b>GST bill is calculated for you</li>
+          <li><b>3</b>Guest pays by card, UPI or cash on the same device</li>
+          <li><b>4</b>Bill prints from the terminal's own printer</li>
+          <li><b>5</b>Owner sees it live on their phone</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- BUSINESS TYPES -->
+<section id="types">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">One app, every counter</span>
+      <h2>Pick your business. We switch on what it needs.</h2>
+      <p>Every shop gets the same fast billing core. Your category adds only the steps your counter actually uses, with no clutter from anyone else's.</p>
+    </div>
+
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" aria-selected="true" data-t="rest"><span class="em">🍛</span>Restaurant</button>
+      <button class="tab" role="tab" aria-selected="false" data-t="cafe"><span class="em">☕</span>Café · QSR · Bakery</button>
+      <button class="tab" role="tab" aria-selected="false" data-t="groc"><span class="em">🛒</span>Grocery · Kirana</button>
+      <button class="tab" role="tab" aria-selected="false" data-t="dress"><span class="em">👗</span>Dress shop</button>
+      <button class="tab" role="tab" aria-selected="false" data-t="hw"><span class="em">🔩</span>Hardware</button>
+    </div>
+
+    <div class="panel active" id="p-rest">
+      <div>
+        <h3>Restaurants</h3>
+        <p>Tables, waiters and the kitchen all in one loop. Waiters order from their phones, KOTs reach the kitchen on a screen or printed slip, and the counter settles the bill on the terminal.</p>
+        <div class="keeps">Why it sticks → the kitchen flow runs on it every service</div>
+      </div>
+      <div class="feat-list">
+        <div><b>Table map</b>Open, running and billed tables at a glance</div>
+        <div><b>Waiter app</b>Orders from any phone, sent straight to the counter</div>
+        <div><b>KOTs</b>Kitchen display or printed slips, your choice</div>
+        <div><b>Floor alerts</b>Managers see what needs attention</div>
+      </div>
+    </div>
+
+    <div class="panel" id="p-cafe">
+      <div>
+        <h3>Cafés, QSR &amp; bakeries</h3>
+        <p>A quick-sale screen built for queues. Tap items, take payment, hand over a token. The kitchen gets a KOT the moment the bill is paid.</p>
+        <div class="keeps">Why it sticks → speed at the counter during rush hour</div>
+      </div>
+      <div class="feat-list">
+        <div><b>Quick sale</b>No tables, just tap and charge</div>
+        <div><b>Token numbers</b>Printed on every bill</div>
+        <div><b>KOT on pay</b>Kitchen starts the moment it's paid</div>
+        <div><b>Favourites</b>Your best sellers one tap away</div>
+      </div>
+    </div>
+
+    <div class="panel" id="p-groc">
+      <div>
+        <h3>Grocery &amp; kirana</h3>
+        <p>Scan packaged goods, weigh loose ones, and import your item list from a spreadsheet in minutes. Stock stays in step with every sale.</p>
+        <div class="keeps">Why it sticks → simple stock and customer credit in one place</div>
+      </div>
+      <div class="feat-list">
+        <div><b>Barcode scan</b>Scan to add, scan again to count</div>
+        <div><b>Sold by weight</b>Kg and grams priced correctly</div>
+        <div><b>CSV import</b>Bring your item list across fast</div>
+        <div><b>Stock</b>Know what's running low</div>
+      </div>
+    </div>
+
+    <div class="panel" id="p-dress">
+      <div>
+        <h3>Dress shops</h3>
+        <p>Every style in every size and colour, each with its own barcode. Print price labels, take returns and exchanges, and give store credit that works at every branch.</p>
+        <div class="keeps">Why it sticks → stock by size, returns and exchanges</div>
+      </div>
+      <div class="feat-list">
+        <div><b>Size × colour grid</b>Stock per cell, picked in one tap</div>
+        <div><b>Label printing</b>A4 sticker sheets with EAN-13 barcodes, MRP and price</div>
+        <div><b>Returns &amp; exchanges</b>Credit notes, cash refunds, store credit</div>
+        <div><b>Day report</b>GST by rate, payments by mode, top sizes</div>
+      </div>
+    </div>
+
+    <div class="panel" id="p-hw">
+      <div>
+        <h3>Hardware &amp; electrical</h3>
+        <p>Sell cable by the coil or the metre, screws by the box or the piece. Quote an estimate, convert it to an invoice, and let trusted buyers pay later.</p>
+        <div class="keeps">Why it sticks → units, estimates and khata for regulars</div>
+      </div>
+      <div class="feat-list">
+        <div><b>Alternate units</b>1 coil = 90 m, 1 box = 100 pcs</div>
+        <div><b>Retail &amp; wholesale</b>Price tiers per customer</div>
+        <div><b>Estimates</b>Quotes that become invoices</div>
+        <div><b>Credit accounts</b>Limits, balances and a full ledger</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">What every shop gets</span>
+      <h2>Everything from the first bill to the last cash count.</h2>
+    </div>
+
+    <div class="bento">
+      <div class="tile span-4 dark reveal">
+        <div class="ico" style="background:var(--marigold)"><svg viewBox="0 0 24 24" fill="none" stroke="#16120e" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg></div>
+        <h3>Owner insights, live on your phone</h3>
+        <p>Today's sales, cash vs card vs UPI, top products and staff activity. Open the admin app anywhere and see the counter as it happens.</p>
+        <div class="mini-bars" aria-hidden="true">
+          <i style="height:35%"></i><i style="height:52%"></i><i style="height:44%"></i><i style="height:70%"></i><i style="height:58%"></i><i style="height:82%"></i><i class="hl" style="height:100%"></i><i style="height:64%"></i><i style="height:48%"></i>
+        </div>
+      </div>
+      <div class="tile span-2 gold reveal">
+        <div class="ico" style="background:var(--ink)"><svg viewBox="0 0 24 24" fill="none" stroke="#f0a13a" stroke-width="2" stroke-linecap="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/></svg></div>
+        <h3>Card, UPI, cash or split</h3>
+        <p>Payments go through the Pine Labs terminal, with reversals handled cleanly.</p>
+        <div class="split" aria-hidden="true"><span style="width:46%;background:var(--ink)"></span><span style="width:34%;background:#fff"></span><span style="width:20%;background:var(--chili)"></span></div>
+        <div class="legend"><span><i style="background:var(--ink)"></i>UPI</span><span><i style="background:#fff"></i>Card</span><span><i style="background:var(--chili)"></i>Cash</span></div>
+      </div>
+
+      <div class="tile span-2 reveal">
+        <div class="ico" style="background:#fde3c2"><svg viewBox="0 0 24 24" fill="none" stroke="#d9801a" stroke-width="2" stroke-linecap="round"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><path d="M9 7h6M9 11h6M9 15h3"/></svg></div>
+        <h3>GST-ready invoices</h3>
+        <p>CGST/SGST split, tax by rate, invoice numbering and 58 or 80 mm receipts.</p>
+      </div>
+      <div class="tile span-2 reveal">
+        <div class="ico" style="background:#dbeadf"><svg viewBox="0 0 24 24" fill="none" stroke="#2f8f5b" stroke-width="2" stroke-linecap="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
+        <h3>Staff PINs &amp; approvals</h3>
+        <p>Each person signs in with a PIN. Big discounts and voids need a manager.</p>
+      </div>
+      <div class="tile span-2 reveal">
+        <div class="ico" style="background:#dfe6f8"><svg viewBox="0 0 24 24" fill="none" stroke="#3d6fd6" stroke-width="2" stroke-linecap="round"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg></div>
+        <h3>Audit trail</h3>
+        <p>Every void, reprint and discount is recorded with who did it and when.</p>
+      </div>
+
+      <div class="tile span-3 reveal">
+        <div class="ico" style="background:#f6d6cd"><svg viewBox="0 0 24 24" fill="none" stroke="#d9462b" stroke-width="2" stroke-linecap="round"><path d="M3 7h18M3 12h18M3 17h12"/></svg></div>
+        <h3>Kitchen display or printed KOTs</h3>
+        <p>Send orders to a kitchen screen, or print slips at the counter for kitchens that prefer paper.</p>
+      </div>
+      <div class="tile span-3 reveal">
+        <div class="ico" style="background:#efe6d4"><svg viewBox="0 0 24 24" fill="none" stroke="#16120e" stroke-width="2" stroke-linecap="round"><path d="M4 7l8-4 8 4-8 4z"/><path d="M4 12l8 4 8-4M4 17l8 4 8-4"/></svg></div>
+        <h3>Stock that moves with each sale</h3>
+        <p>Receive deliveries, adjust and count with a reason, and keep an append-only stock ledger. Cost prices stay hidden from cashiers.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- APPS -->
+<section id="apps">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">One server, many screens</span>
+      <h2>An app for every person in the shop.</h2>
+      <p>Counter, floor, back office and head office all read from the same live data. Link a new device with a one-time code from the admin app.</p>
+    </div>
+    <div class="apps-grid">
+      <div class="app-col">
+        <div class="app-card reveal"><span class="who">Cashier</span><b>Counter app</b><span>Runs on the Pine Labs terminal. Bills, card and UPI, prints every KOT and bill.</span></div>
+        <div class="app-card reveal"><span class="who">Waiters</span><b>Waiter app</b><span>On their own phones. Tables, orders and KOTs, printed at the counter.</span></div>
+        <div class="app-card reveal"><span class="who">Kitchen</span><b>Kitchen display</b><span>Live KOT queue for the cooks, as an add-on module.</span></div>
+      </div>
+      <div class="core reveal" aria-hidden="true">
+        <div class="core-inner">
+          <b>Vanox Cloud</b>
+          <small>live data · every branch</small>
+          <div class="stack"><span>Secure</span><span>Backed up</span><span>Multi-branch</span></div>
+        </div>
+      </div>
+      <div class="app-col">
+        <div class="app-card reveal"><span class="who">Shops &amp; cafés</span><b>Retail app</b><span>Quick sale, barcodes, weighed items, bill and pay.</span></div>
+        <div class="app-card reveal"><span class="who">Owner &amp; manager</span><b>Admin app</b><span>Menu and items, staff, devices, stock, labels and reports.</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DAY END -->
+<section id="dayend">
+  <div class="wrap dayend">
+    <div class="reveal">
+      <span class="eyebrow">Closing time</span>
+      <div class="sec-head" style="margin-bottom:0">
+        <h2>Day end in two taps.</h2>
+        <p>Settle the card batch, count the drawer, and you're done. The report already knows what the cash should be.</p>
+      </div>
+      <ul class="checks">
+        <li>Shifts with opening float and cash counts</li>
+        <li>Expected vs counted cash, refunds included</li>
+        <li>Sales, GST by rate and payments by mode</li>
+        <li>Returns, top products and best-selling sizes</li>
+      </ul>
+    </div>
+    <div class="report reveal" aria-label="Sample day-end report">
+      <h4>Day end · Fresh Mart FM1</h4>
+      <div class="sub">Sample report · demo data</div>
+      <div class="r"><span>Bills</span><span>214</span></div>
+      <div class="r"><span>Gross sales</span><span>₹68,420.00</span></div>
+      <div class="r"><span>GST collected</span><span>₹4,118.60</span></div>
+      <div class="r"><span>UPI</span><span>₹31,905.00</span></div>
+      <div class="r"><span>Card (settled)</span><span>₹21,340.00</span></div>
+      <div class="r"><span>Cash expected</span><span>₹15,175.00</span></div>
+      <div class="r"><span>Cash counted</span><span>₹15,175.00</span></div>
+      <div class="r t"><span>Difference</span><span class="ok">₹0.00 ✓</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- MODULES -->
+<section id="modules">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">Plans &amp; modules</span>
+      <h2>Start simple. Switch on more when you grow.</h2>
+      <p>A monthly or yearly subscription per business, with add-on modules switched on for your account whenever you need them. No new app to install, no reinstall on the terminal.</p>
+    </div>
+    <div class="mods">
+      <div class="mod reveal"><div class="mod-top"><b>Core billing</b><span class="toggle"></span></div><p>GST bills, payments, printing, staff and day end.</p></div>
+      <div class="mod reveal"><div class="mod-top"><b>Kitchen display</b><span class="toggle"></span></div><p>Live KOT screen for restaurant kitchens.</p></div>
+      <div class="mod reveal"><div class="mod-top"><b>Inventory</b><span class="toggle"></span></div><p>Deliveries, counts and a full stock ledger.</p></div>
+      <div class="mod reveal"><div class="mod-top"><b>Insights</b><span class="toggle"></span></div><p>Deeper sales reports and product trends.</p></div>
+      <div class="mod reveal"><div class="mod-top"><b>Offline billing</b><span class="toggle off"></span></div><p>Keep billing when the internet drops.</p><span class="soon">Coming soon</span></div>
+      <div class="mod reveal"><div class="mod-top"><b>Swiggy &amp; Zomato</b><span class="toggle off"></span></div><p>Online orders in the same system.</p><span class="soon">Planned</span></div>
+      <div class="mod reveal"><div class="mod-top"><b>Accountant export</b><span class="toggle off"></span></div><p>GSTR and Tally-ready exports.</p><span class="soon">Planned</span></div>
+      <div class="mod reveal"><div class="mod-top"><b>Customer khata</b><span class="toggle"></span></div><p>Credit accounts with limits and a ledger.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta" id="start" style="padding-top:110px">
+  <div class="wrap">
+    <div class="cta-box reveal">
+      <div>
+        <h2>Your counter, minus the second machine.</h2>
+        <p>See Vanox ERP running on a terminal with your own menu or items. Setup takes an afternoon.</p>
+      </div>
+      <div class="cta-actions">
+        <a class="btn btn-solid" href="mailto:hello@vanox.example">Book a demo →</a>
+        <a class="btn btn-ghost" href="#types">Explore business types</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <a class="brand" href="#"><span class="brand-mark" role="img" aria-label="Vanox logo"></span>Vanox ERP</a>
+    <span>Billing and point of sale for restaurants, cafés and shops across India.</span>
+    <span>© 2026 Vanox Dynamics</span>
+  </div>
+</footer>
+
+<script>
+  // business-type tabs
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', 'false'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      tab.setAttribute('aria-selected', 'true');
+      document.getElementById('p-' + tab.dataset.t).classList.add('active');
+    });
+  });
+  // reveal on scroll
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.reveal').forEach((el, i) => {
+    el.style.transitionDelay = (i % 4) * 70 + 'ms';
+    io.observe(el);
+  });
+</script>
+</body>
+</html>
